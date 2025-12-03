@@ -1,18 +1,37 @@
 [general]
 name=satellite_derived_bathymetry_for_qgis
 qgisMinimumVersion=3.22
-version=1.0
+version=2.1
 author=Nasef M.Aly
-email=Nasef.M.Aly@alexu.edu.eg
-description=A comprehensive and automated toolkit for Satellite-Derived Bathymetry (SDB) using machine learning.
+email=Eng.m.nasef2017@gmail.com 
+description=A comprehensive and automated toolkit for Satellite-Derived Bathymetry (SDB) using machine learning, featuring integrated ICESat-2 data retrieval.
 
-about=<h3>SDB Master Workflow</h3> <p>The SDB Master Workflow is a powerful QGIS tool that automates Satellite-Derived Bathymetry (SDB) processing. It combines preprocessing, algorithm testing, objective ranking of models, and automated reporting. The tool is designed for both scientific research and practical applications in hydrography and coastal engineering. It follows international recommendations (IHO) and supports reproducible and efficient workflows.</p> <p><b>Workflow Stages:</b><br> 1. Pre-processing and smart water masking (MNDWI/NDWI + morphological cleaning).<br> 2. Algorithm comparison with hyperparameter tuning (Bayesian Optimization).<br> 3. Optional median filtering to reduce noise.<br> 4. Evaluation using test points with weighted scoring (70%% R², 30%% RMSE).</p> <p><b>References:</b><br> - IHO Publication B-13: Cookbook for Satellite-Derived Bathymetry (<a href="https://iho.int/">IHO website</a>)<br> - Stumpf et al. (2003). Band Ratio Model in Limnology and Oceanography.<br> - Caballero & Stumpf (2019). Machine Learning vs Band Ratio in Remote Sensing.</p> <p><b>Acknowledgements:</b><br> Development and refinement of this plugin leveraged AI-assisted tools: Google Gemini Pro (workflow design, debugging, optimization), OpenAI ChatGPT (initial scaffolding, troubleshooting).</p>
+about=<h3>SDB Master Workflow</h3>
+    <p>The SDB Master Workflow is a powerful QGIS tool that automates Satellite-Derived Bathymetry (SDB) processing. It combines preprocessing, algorithm testing, objective ranking of models, and automated reporting. The tool is designed for scientific research and hydrography, following IHO recommendations.</p>
+    
+    <p><b>New Feature: ICESat-2 Integration</b><br>
+    The toolkit now includes a dedicated module to download and filter ICESat-2 photon data (ATL03/ATL24) via the SlideRule API. This allows users to easily obtain high-precision bathymetry control points for model training and validation.</p>
+
+    <p><b>Workflow Stages:</b><br>
+    1. <b>Data Retrieval:</b> Automated download of ICESat-2 bathymetry (SlideRule).<br>
+    2. <b>Pre-processing:</b> Smart water masking (MNDWI/NDWI) and morphological cleaning.<br>
+    3. <b>Model Training:</b> Algorithm comparison with hyperparameter tuning (Bayesian Optimization).<br>
+    4. <b>Refinement:</b> Optional median filtering to reduce noise.<br>
+    5. <b>Evaluation:</b> Statistical scoring (70% R², 30% RMSE) and reporting.</p>
+
+    <p><b>References:</b><br>
+    - IHO Publication B-13: Cookbook for Satellite-Derived Bathymetry (<a href="https://iho.int/">IHO website</a>)<br>
+    - Stumpf et al. (2003). Band Ratio Model in Limnology and Oceanography.<br>
+    - SlideRule Earth: Processing of ICESat-2 data (<a href="https://slideruleearth.io/">slideruleearth.io</a>)</p>
+
+    <p><b>Acknowledgements:</b><br>
+    Development leveraged AI-assisted tools: Google Gemini Pro & OpenAI ChatGPT for workflow optimization and SlideRule integration.</p>
 
 homepage=https://github.com/Nasef2017/Satellite-Derived-Bathymetry-for-QGIS
 repository=https://github.com/Nasef2017/Satellite-Derived-Bathymetry-for-QGIS
 tracker=https://github.com/Nasef2017/Satellite-Derived-Bathymetry-for-QGIS/issues
 
-tags=sdb,bathymetry,satellite,remote sensing,machine learning,regression,coastal,water,RandomForest,automation,hydrography
+tags=sdb,bathymetry,satellite,remote sensing,machine learning,icesat-2,sliderule,lidar,coastal,RandomForest,automation,hydrography
 category=Raster
-changelog=Initial release of the SDB Tools suite, featuring the Master Workflow for automated model comparison and prediction.
-plugin_dependencies=scikit-learn,rasterio,scikit-optimize,scipy,pandas,numpy,matplotlib
+changelog=v2.1:Added SlideRule Data Downloader tool to fetch ICESat-2 (ATL03/ATL24) data.
+plugin_dependencies=scikit-learn,rasterio,scikit-optimize,scipy,pandas,numpy,matplotlib,sliderule,icepyx,geopandas
