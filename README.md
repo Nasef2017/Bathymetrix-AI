@@ -21,7 +21,7 @@ IHO Publication B-13: Cookbook for Satellite-Derived Bathymetry: The essential g
 Stumpf, R. P., et al. (2003). The original paper for the Band Ratio model. *Limnology and Oceanography*.
 Caballero, I., & Stumpf, R. P. (2019). A great paper comparing machine learning (like RandomForest) to the Band Ratio model. *Remote Sensing*.
 
-Citation
+6. Citation
 Nasef M.Aly. (2025). Nasef2017/satellite_derived_bathymetry_for_qgis: satellite_derived_bathymetry_for_qgis-v2.1 (v2.1). Zenodo. 
 https://doi.org/10.5281/zenodo.17770894
 
