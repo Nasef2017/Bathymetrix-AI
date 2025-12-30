@@ -31,7 +31,7 @@ class SdbProvider(QgsProcessingProvider):
         return 'sdb_tools'
 
     def name(self):
-        return 'SDB Tools'
+        return 'Bathymetrix-AI'
 
     def longName(self):
         return self.name()
