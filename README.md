@@ -1,36 +1,115 @@
-SDB Master Workflow: The Ultimate User Guide
+\[🛰️ SDB 🌊] Bathymetrix-AI
+
+Bathymetrix-AI is a specialized QGIS research toolkit designed to derive high-precision Satellite-Derived Bathymetry (SDB). It integrates corrected multispectral imagery (Sentinel-2\_SR) with photon-counting LiDAR data (ICESat-2-ALTS24) using an advanced Machine Learning pipeline.
+
+Unlike traditional regression methods, this tool employs a 5-stage adaptive workflow that combines physics-based preprocessing with "Super-Learner" modeling to overcome common challenges like sun-glint, and local depth bias.
+
+🔬 Scientific Methodology \& Workflow
+
+The toolkit operates as a sequential pipeline (The 5-Module System), designed to maximize depth retrieval accuracy:
+
+1\. Advanced Pre-processing (Physics-Based)
+
+Before modeling, the tool prepares the optical environment:
+
+Sun-Glint Correction: Implements the Hedley et al. (2005) algorithm, enhanced to support the Coastal/Aerosol band alongside visible bands using the NIR channel.
+
+Water Masking: Uses a robust, histogram-based Otsu Thresholding to automatically separate water from land/clouds without manual intervention.
+
+Feature Engineering: Generates the Log-Ratio features (Stumpf et al., 2003) required for the inversion models.
+
+2\. Data Filtering (Linear RANSAC)
+
+ICESat-2 data often contains noise and surface photons.
+
+The tool applies Linear RANSAC (Random Sample Consensus) to fit a robust trend line through the photon data.
+
+Outliers are automatically rejected based on a dynamic residual threshold, ensuring only high-confidence bathymetric points are used for training.
+
+3\. Global Auto-ML Modeling
+
+Instead of relying on a single algorithm, the tool performs Competitive Benchmarking:
+
+It trains 11 Machine Learning Algorithms simultaneously (including Random Forest, ExtraTrees, XGBoost, SVR, and MLPs).
+
+It utilizes Hyperparameter Optimization to find the best-performing global model for the specific water conditions.
+
+4\. Spatial Refinement (The Adaptive Phase)
+
+Global models often miss local underwater geography.
+
+This module applies Universal Spatial Residual Correction (Regression-Kriging).
+
+It calculates the error residuals of the global model, maps them spatially, and "stacks" them back into the prediction. This effectively forces the model to learn local biases, significantly reducing the RMSE.
+
+5\. Rigorous Validation
+
+The tool calculates Stratified wMAPE (Weighted Mean Absolute Percentage Error).
+
+It produces automated validation reports and scatter plots comparing the "Global" vs. "Refined" output against unseen test data.
+
+🛠️ Dependencies
+
+This plugin requires specific scientific libraries.
+
+Open OSGeo4W Shell (as Administrator) and run:
+
+code
+
+Bash
+
+pip install scikit-learn,rasterio,scikit-optimize,scipy,pandas,numpy,matplotlib,sliderule,icepyx,geopandas
+
+💻 Usage
+
+Use the "SDB Master Workflow" script to run the entire pipeline end-to-end:
+
+Input: Sentinel-2\_SR Raster \& ICESat-2 Shapefile.
+
+Configuration: Select bands and target algorithms.
+
+Execution: The tool handles CRS reprojection, training, and export automatically.
+
+Output: Returns the final Refined\_Depth\_Map.tif and a statistical report.
+
+📧 Contact
+
+Author: Nasef M. Aly
+
+Email: Eng.m.nasef2017@gmail.com
+
+📄 License
+
+Copyright 2025 Nasef M. Aly
+
+Licensed under the Apache License, Version 2.0 (the "License");
+
+you may not use this file except in compliance with the License.
+
+You may obtain a copy of the License at
+
+code
+
+Code
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+
+distributed under the License is distributed on an "AS IS" BASIS,
+
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+
+See the License for the specific language governing permissions and
+
+limitations under the License.
 
 
-1. Introduction: What is this Tool?
-The SDB Master Workflow is a powerful and integrated tool for QGIS designed to fully automate the process of Satellite-Derived Bathymetry (SDB). Instead of manually testing different algorithms, this tool acts as an "automated expert," intelligently running a comprehensive suite of machine learning models, comparing their performance, selecting the best one for your specific data, and producing a final, high-quality depth map—all in a single click.
-This workflow follows the best practices recommended by international bodies like the International Hydrographic Organization (IHO) and empowers you to derive accurate bathymetry from satellite imagery efficiently and reliably.
-
-
-3. The Automated Workflow Explained
-The tool follows a logical, four-stage pipeline:
-Pre-processing and Smart Water Masking: The tool automatically calculates a water index (MNDWI or NDWI) and applies morphological cleaning (opening and closing) to create a high-quality, "clean," water-only version of your satellite image. All subsequent analyses are performed exclusively on this masked image.
-Algorithm Comparison and Hyperparameter Tuning: For each selected algorithm, the tool performs a Smart Search (Bayesian Optimization) to discover the optimal settings (hyperparameters) for your specific data before training the final model.
-
-Post-processing with Median Filter (Optional): If enabled, the tool applies a Median Filter to every raw depth map to remove "salt-and-pepper" noise, resulting in smoother and more realistic outputs.
-Evaluation and the Decision Engine: Each model is rigorously tested against your Unseen Test Points. A Final Score is calculated (70% weight for R², 30% for RMSE) to objectively rank the models. The tool generates a master report and automatically loads the raster from the winning algorithm into QGIS.
-
-
-5. Further Reading and Scientific References
-For a deeper understanding, we highly recommend the following resources:
-IHO Publication B-13: Cookbook for Satellite-Derived Bathymetry: The essential global reference standard for SDB. Search for it on the IHO website: https://iho.int/
-Stumpf, R. P., et al. (2003). The original paper for the Band Ratio model. *Limnology and Oceanography*.
-Caballero, I., & Stumpf, R. P. (2019). A great paper comparing machine learning (like RandomForest) to the Band Ratio model. *Remote Sensing*.
-
-6. Citation
-Nasef M.Aly. (2025). Nasef2017/satellite_derived_bathymetry_for_qgis: satellite_derived_bathymetry_for_qgis-v2.1 (v2.1). Zenodo. 
-https://doi.org/10.5281/zenodo.17770894
-
-
-7. Acknowledgements and Tool Development
-The development of the SDB Tools plugin was significantly accelerated by leveraging advanced AI language models.
+Acknowledgements and Tool Development
+The development of Bathymetrix-AI  plugin was significantly accelerated by leveraging advanced AI language models.
 Google's Gemini Pro: Utilized for its strong capabilities in code generation, logical structuring of complex workflows, and debugging.
-OpenAI's ChatGPT (GPT-3.5/4): Employed for initial code scaffolding and assisting in troubleshooting.
 
-This is the official GitHub of Mohamed Nasef, developer of the "Satellite-Derived Bathymetry for QGIS" plugin.  
-Contact: eng.m.nasef2017@gmail.com or Nasef.M.Aly@alexu.edu.eg
 
+Citation
+
+Nasef M.Aly. (2025). Nasef2017/Bathymetrix-AI: Bathymetrix_AI V3.0 (v3.0). Zenodo. https://doi.org/10.5281/zenodo.18097758
