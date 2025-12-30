@@ -105,11 +105,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 
+
+
+
 Acknowledgements and Tool Development
 The development of Bathymetrix-AI  plugin was significantly accelerated by leveraging advanced AI language models.
 Google's Gemini Pro: Utilized for its strong capabilities in code generation, logical structuring of complex workflows, and debugging.
 
-
-Citation
-
-Nasef M.Aly. (2025). Nasef2017/Bathymetrix-AI: Bathymetrix_AI V3.0 (v3.0). Zenodo. https://doi.org/10.5281/zenodo.18097758
