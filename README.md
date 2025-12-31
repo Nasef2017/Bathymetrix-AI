@@ -78,6 +78,11 @@ Author: Nasef M. Aly
 
 Email: Eng.m.nasef2017@gmail.com
 
+📄Citation
+
+Nasef M.Aly. (2025). Nasef2017/Bathymetrix-AI: Bathymetrix_AI V3.0 (v3.0). Zenodo.
+https://doi.org/10.5281/zenodo.18097758
+
 📄 License
 
 Copyright 2025 Nasef M. Aly
@@ -87,10 +92,6 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 
 You may obtain a copy of the License at
-
-code
-
-Code
 
 http://www.apache.org/licenses/LICENSE-2.0
 
