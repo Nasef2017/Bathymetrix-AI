@@ -58,7 +58,7 @@ code
 
 Bash
 
-pip install scikit-learn,rasterio,scikit-optimize,scipy,pandas,numpy,matplotlib,sliderule,icepyx,geopandas
+pip install numpy pandas rasterio matplotlib seaborn scikit-learn scipy joblib scikit-optimize sliderule icepyx geopandas
 
 💻 Usage
 
