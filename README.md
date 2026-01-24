@@ -1,115 +1,56 @@
-\[🛰️ SDB 🌊] Bathymetrix-AI
+🛰️ Bathymetrix-AI: Advanced SDB Toolkit
+Bathymetrix-AI is a professional QGIS research toolkit designed for high-precision Satellite-Derived Bathymetry (SDB). It integrates Sentinel-2 multispectral imagery with ICESat-2 (ATL24) LiDAR data using a modular and adaptive Machine Learning pipeline.
+The tool overcomes traditional bathymetry challenges like sun-glint, water turbidity, and local depth biases through a systematic 4-phase workflow.
 
-Bathymetrix-AI is a specialized QGIS research toolkit designed to derive high-precision Satellite-Derived Bathymetry (SDB). It integrates corrected multispectral imagery (Sentinel-2\_SR) with photon-counting LiDAR data (ICESat-2-ALTS24) using an advanced Machine Learning pipeline.
+🔬 Scientific Methodology
+The toolkit follows a modular workflow where each phase is designed to improve the accuracy of depth retrieval.
 
-Unlike traditional regression methods, this tool employs a 5-stage adaptive workflow that combines physics-based preprocessing with "Super-Learner" modeling to overcome common challenges like sun-glint, and local depth bias.
+Phase 1: Automated Pre-processing & Feature Engineering
+This phase prepares the satellite imagery by isolating the aquatic domain and correcting radiometric noise.
+Sun-Glint Removal: Removes surface reflections to reveal the seabed signal.
+Water Segmentation: Uses an adaptive threshold to mask land and clouds.
+Log-Ratio Features: Transforms spectral bands into depth-sensitive features based on light attenuation laws.
+Key References:
+Hedley et al. (2005) – Sun-glint correction.
+McFeeters (1996) & Otsu (1979) – Water masking and thresholding.
+Stumpf et al. (2003) – Log-ratio bathymetry model.
 
-🔬 Scientific Methodology \& Workflow
+Phase 2: Robust Altimetry Filtering
+To ensure high-quality training data, the tool filters ICESat-2 photon-counting data to remove outliers (e.g., noise from waves or turbid water).
+RANSAC Algorithm: Iteratively fits a linear model to identify high-confidence "inlier" depth points.
+Key Reference:
+Fischler & Bolles (1981) – Random Sample Consensus (RANSAC).
 
-The toolkit operates as a sequential pipeline (The 5-Module System), designed to maximize depth retrieval accuracy:
+Phase 3: Automated Global Modeling (Auto-ML)
+Instead of using one algorithm, the tool benchmarks 11 different Machine Learning models (e.g., Random Forest, Gradient Boosting, SVR, MLP) to find the best fit for your specific coastal area.
+Hyperparameter Optimization: Automatically tunes model settings for maximum performance.
+Composite Scoring: Ranks models based on R2, RMSE, and wMAPE.
+Key Reference:
+Bergstra & Bengio (2012) – Random search for optimization.
 
-1\. Advanced Pre-processing (Physics-Based)
+Phase 4: Residual-Based Spatial Stacking
+This final phase corrects local errors that global models might miss by analyzing the "residuals" (differences) between predicted and observed depths.
+Spatial Error Mapping: Interpolates local errors using k-Nearest Neighbors (k-NN).
+Adaptive Re-training: Combines spectral data with error maps to produce a refined, high-accuracy final depth map.
+Key Reference:
+Alevizos (2020) – Residual analysis for shallow bathymetry.
 
-Before modeling, the tool prepares the optical environment:
+📊 Performance Metrics
+The tool evaluates results using three main standards:
+R2 (Coefficient of Determination): Measures how well the model fits the data.
+RMSE (Root Mean Square Error): Measures the average vertical error in meters.
+wMAPE (Weighted Mean Absolute Percentage Error): Measures the relative error across different depth ranges.
 
-Sun-Glint Correction: Implements the Hedley et al. (2005) algorithm, enhanced to support the Coastal/Aerosol band alongside visible bands using the NIR channel.
-
-Water Masking: Uses a robust, histogram-based Otsu Thresholding to automatically separate water from land/clouds without manual intervention.
-
-Feature Engineering: Generates the Log-Ratio features (Stumpf et al., 2003) required for the inversion models.
-
-2\. Data Filtering (Linear RANSAC)
-
-ICESat-2 data often contains noise and surface photons.
-
-The tool applies Linear RANSAC (Random Sample Consensus) to fit a robust trend line through the photon data.
-
-Outliers are automatically rejected based on a dynamic residual threshold, ensuring only high-confidence bathymetric points are used for training.
-
-3\. Global Auto-ML Modeling
-
-Instead of relying on a single algorithm, the tool performs Competitive Benchmarking:
-
-It trains 11 Machine Learning Algorithms simultaneously (including Random Forest, ExtraTrees, XGBoost, SVR, and MLPs).
-
-It utilizes Hyperparameter Optimization to find the best-performing global model for the specific water conditions.
-
-4\. Spatial Refinement (The Adaptive Phase)
-
-Global models often miss local underwater geography.
-
-This module applies Universal Spatial Residual Correction (Regression-Kriging).
-
-It calculates the error residuals of the global model, maps them spatially, and "stacks" them back into the prediction. This effectively forces the model to learn local biases, significantly reducing the RMSE.
-
-5\. Rigorous Validation
-
-The tool calculates Stratified wMAPE (Weighted Mean Absolute Percentage Error).
-
-It produces automated validation reports and scatter plots comparing the "Global" vs. "Refined" output against unseen test data.
-
-🛠️ Dependencies
-
-This plugin requires specific scientific libraries.
-
+🛠️ Installation & Dependencies
 Open OSGeo4W Shell (as Administrator) and run:
-
 code
-
 Bash
-
 pip install numpy pandas rasterio matplotlib seaborn scikit-learn scipy joblib scikit-optimize sliderule icepyx geopandas
 
-💻 Usage
-
-Use the "SDB Master Workflow" script to run the entire pipeline end-to-end:
-
-Input: Sentinel-2\_SR Raster \& ICESat-2 Shapefile.
-
-Configuration: Select bands and target algorithms.
-
-Execution: The tool handles CRS reprojection, training, and export automatically.
-
-Output: Returns the final Refined\_Depth\_Map.tif and a statistical report.
-
-📧 Contact
-
+📧 Contact & Citation
 Author: Nasef M. Aly
+Email: Eng.m.nasef2017@gmail.com, Nasefm.aly@alexu.edu.eg
+Citation: Nasef M. Aly. (2025). Bathymetrix-AI V3.0. Zenodo.
 
-Email: Eng.m.nasef2017@gmail.com
-
-📄Citation
-
-Nasef M.Aly. (2025). Nasef2017/Bathymetrix-AI: Bathymetrix_AI V3.0 (v3.0). Zenodo.
-https://doi.org/10.5281/zenodo.18097758
-
-📄 License
-
-Copyright 2025 Nasef M. Aly
-
-Licensed under the Apache License, Version 2.0 (the "License");
-
-you may not use this file except in compliance with the License.
-
-You may obtain a copy of the License at
-
-http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-
-distributed under the License is distributed on an "AS IS" BASIS,
-
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-
-See the License for the specific language governing permissions and
-
-limitations under the License.
-
-
-
-
-
-Acknowledgements and Tool Development
-The development of Bathymetrix-AI  plugin was significantly accelerated by leveraging advanced AI language models.
-Google's Gemini Pro: Utilized for its strong capabilities in code generation, logical structuring of complex workflows, and debugging.
-
+🤖 AI Acknowledgment
+The development of the Bathymetrix-AI code, its logical structure, and the technical documentation were significantly enhanced and optimized using Google Gemini. The AI assisted in debugging complex workflows and ensuring the implementation follows best practices in data science.
