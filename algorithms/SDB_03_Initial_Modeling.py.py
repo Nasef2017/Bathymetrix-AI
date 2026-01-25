@@ -1,9 +1,9 @@
 # SDB_03_Initial_Modeling.py
 # ---------------------------------------------------------------------------
-# MODULE 03: INITIAL MODELING & BENCHMARKING (FIXED WEIGHTS)
+# MODULE 03: INITIAL MODELING & BENCHMARKING (FIXED WEIGHTS & ABSOLUTE WMAPE)
 # Fixes:
-# - Prevents passing sample_weight to MLP/KNN (causes crash).
-# - Strict n_jobs=1.
+# - wMAPE is now strictly absolute (Sum(|Diff|) / Sum(|Actual|)).
+# - Lower wMAPE improves the score (like RMSE).
 # ---------------------------------------------------------------------------
 
 import os
@@ -113,7 +113,7 @@ class SDBModule03(QgsProcessingAlgorithm):
         X, y, weights, _ = self.extract_samples(stack_path, points_layer, depth_fld, weight_fld, feedback)
         
         if len(y) < 10: raise QgsProcessingException("Critically low training points (<10). Check inputs.")
-        if weights is not None: feedback.pushInfo(f"   Using Sample Weights from: {weight_fld}")
+        if weights is not None: feedback.pushInfo(f"   Using Sample Weights (Or Default=1s) from: {weight_fld if weight_fld else 'Auto-Generated'}")
 
         # 2. Benchmark
         feedback.pushInfo(f"   [2/5] Benchmarking {len(sel_idx)} Algorithms...")
@@ -163,10 +163,18 @@ class SDBModule03(QgsProcessingAlgorithm):
                         val_vector = d[:, r, c]
                         if np.all(np.isfinite(val_vector)):
                             X_list.append(val_vector); y_list.append(f[d_fld]); coords.append([r, c])
-                            if w_fld: w_list.append(f[w_fld])
+                            
+                            # <<< TWEAK 1: Handle Missing Confidence >>>
+                            # If w_fld is provided, use it. If not, append 1.0
+                            if w_fld: 
+                                w_list.append(f[w_fld])
+                            else:
+                                w_list.append(1.0)
+                            
                             extracted += 1
             fb.pushInfo(f"      Extracted {extracted}/{total} samples.")
-            return np.array(X_list), np.array(y_list), (np.array(w_list) if w_fld else None), coords
+            # Always return w_list as numpy array (now contains 1s if null)
+            return np.array(X_list), np.array(y_list), np.array(w_list), coords
 
     def run_benchmarking(self, X, y, weights, indices, n_iter, out_dir, fb):
         X = np.nan_to_num(X, nan=0.0)
@@ -184,7 +192,6 @@ class SDBModule03(QgsProcessingAlgorithm):
             os.makedirs(algo_dir, exist_ok=True)
             
             # --- Check if Algorithm supports weights ---
-            # MLP and KNN do NOT support sample_weight in sklearn fit()
             supports_weights = True
             if "MLP" in name or "KNN" in name:
                 supports_weights = False
@@ -194,7 +201,6 @@ class SDBModule03(QgsProcessingAlgorithm):
                 if n_iter > 0 and params:
                     search = RandomizedSearchCV(estimator=base_model, param_distributions=params, 
                                                 n_iter=n_iter, cv=3, n_jobs=1, scoring='r2', random_state=42)
-                    # Smart Weight Application
                     if w_tr is not None and supports_weights:
                         search.fit(X_tr, y_tr, sample_weight=w_tr)
                     else:
@@ -218,16 +224,18 @@ class SDBModule03(QgsProcessingAlgorithm):
                 safe_y = y_val.copy(); safe_y[safe_y==0] = 0.001
                 pct_err = np.abs((y_val - y_p) / safe_y) * 100
                 
-                # Use simple MAPE for reporting, or weighted if needed
                 if w_val is not None:
-                     # Simple Weighted Average based on confidence
                      w_norm = w_val / np.sum(w_val)
                      mape = np.sum(pct_err * w_norm)
                 else:
                      mape = np.mean(pct_err)
 
-                #wMAPE (Global)
-                wmape_score = (np.sum(np.abs(y_val - y_p)) / np.sum(y_val)) * 100
+                # --- MODIFIED: STRICTLY ABSOLUTE wMAPE ---
+                # Formula: Sum(|Actual - Pred|) / Sum(|Actual|)
+                sum_abs_diff = np.sum(np.abs(y_val - y_p))
+                sum_abs_true = np.sum(np.abs(y_val)) # ABS added to denominator
+                
+                wmape_score = (sum_abs_diff / sum_abs_true) * 100 if sum_abs_true != 0 else 0
 
                 self.save_algo_artifacts(y_val, y_p, pct_err, name, algo_dir, r2, rmse, mape, best_params)
                 
@@ -235,7 +243,7 @@ class SDBModule03(QgsProcessingAlgorithm):
                     'Algorithm': name, 'Model': model, 'Params': best_params,
                     'R2': r2, 'RMSE': rmse, 'MAE': mae, 'MAPE': mape, 'wMAPE_Score': wmape_score
                 })
-                fb.pushInfo(f"      > {name}: R2={r2:.3f}, RMSE={rmse:.2f}m")
+                fb.pushInfo(f"      > {name}: R2={r2:.3f}, RMSE={rmse:.2f}m, wMAPE={wmape_score:.2f}%")
 
             except Exception as e:
                 fb.pushWarning(f"      ! Failed {name}: {e}")
@@ -244,19 +252,21 @@ class SDBModule03(QgsProcessingAlgorithm):
         
         df = pd.DataFrame(results)
         
-        # Ranking
+        # Ranking Logic
+        # 1. Normalize RMSE (Lower is Better -> Higher Score)
         min_rmse, max_rmse = df['RMSE'].min(), df['RMSE'].max()
         df['n_rmse'] = 1 - ((df['RMSE'] - min_rmse) / (max_rmse - min_rmse + 1e-6))
         
+        # 2. Normalize wMAPE (Lower is Better -> Higher Score)
         min_wmape, max_wmape = df['wMAPE_Score'].min(), df['wMAPE_Score'].max()
         df['n_wmape'] = 1 - ((df['wMAPE_Score'] - min_wmape) / (max_wmape - min_wmape + 1e-6))
         
-        # 60% R2, 20% RMSE, 20% wMAPE
+        # 3. Calculate Final Score (60% R2 + 20% RMSE + 20% wMAPE)
         df['score'] = (0.6 * df['R2'].clip(lower=0)) + (0.2 * df['n_rmse']) + (0.2 * df['n_wmape'])
         
         winner_row = df.loc[df['score'].idxmax()]
         
-        # Retrain Winner (Respecting Weights support)
+        # Retrain Winner
         final_model = winner_row['Model']
         win_name = winner_row['Algorithm']
         supports_weights = "MLP" not in win_name and "KNN" not in win_name

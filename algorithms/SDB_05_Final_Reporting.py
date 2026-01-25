@@ -1,10 +1,11 @@
 # SDB_05_Final_Reporting.py
 # ---------------------------------------------------------------------------
-# MODULE 05: THE ULTIMATE REPORTER (FIXED PLOTTING ARGS)
+# MODULE 05: THE ULTIMATE REPORTER (SCIENTIFIC & ABSOLUTE WMAPE)
 # Features:
-# 1. Calculates metrics for BOTH Training and Validation Data.
-# 2. Generates Stratified wMAPE Report.
-# 3. Fixed Plotting function call.
+# 1. Absolute wMAPE in all stats.
+# 2. Stratified Error Analysis (Depth Bins).
+# 3. Rich Visualizations (Scatter, Residuals, Histograms).
+# 4. Smart Verdict System.
 # ---------------------------------------------------------------------------
 
 import os
@@ -16,6 +17,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
+import seaborn as sns
 
 warnings.filterwarnings("ignore")
 
@@ -46,18 +48,18 @@ class SDBModule05(QgsProcessingAlgorithm):
         self.addParameter(QgsProcessingParameterRasterLayer(self.INPUT_MAP_P3, 'Input Phase 3 Map (Initial Global Depth)'))
         self.addParameter(QgsProcessingParameterRasterLayer(self.INPUT_MAP_P4, 'Input Phase 4 Map (Final Refined Depth)'))
         
-        # Training Data
+        # Training Data (For Reference Stats)
         self.addParameter(QgsProcessingParameterVectorLayer(self.INPUT_TRAIN, 'Training Points'))
         self.addParameter(QgsProcessingParameterField(self.FIELD_TRAIN, 'Depth Field (Training)', parentLayerParameterName=self.INPUT_TRAIN, type=QgsProcessingParameterField.Numeric))
         
-        # Validation Data
+        # Validation Data (The Judge)
         self.addParameter(QgsProcessingParameterVectorLayer(self.INPUT_VALIDATION, 'Unseen Validation Points'))
         self.addParameter(QgsProcessingParameterField(self.FIELD_VAL_DEPTH, 'Depth Field (Validation)', parentLayerParameterName=self.INPUT_VALIDATION, type=QgsProcessingParameterField.Numeric))
         
         self.addParameter(QgsProcessingParameterFolderDestination(self.OUTPUT_FOLDER, 'Output Folder (Final Reports)'))
 
     def name(self): return 'sdb_05_reporting'
-    def displayName(self): return '5. SDB Module 05: Comprehensive Reporting'
+    def displayName(self): return '5. SDB Module 05: Ultimate Reporting'
     def group(self): return 'SDB Research Tools'
     def groupId(self): return 'sdb_tools'
     def createInstance(self): return SDBModule05()
@@ -76,116 +78,74 @@ class SDBModule05(QgsProcessingAlgorithm):
         val_lyr = self.parameterAsVectorLayer(parameters, self.INPUT_VALIDATION, context)
         val_fld = self.parameterAsString(parameters, self.FIELD_VAL_DEPTH, context)
 
-        feedback.pushInfo("\n>>> MODULE 05: STARTING FINAL EVALUATION & REPORTING...")
+        feedback.pushInfo("\n>>> MODULE 05: STARTING FINAL SCIENTIFIC EVALUATION...")
 
-        # 1. Extract Data (Training)
-        feedback.pushInfo("   [1/4] Evaluating Training Data...")
-        y_train, train_p3, train_p4 = self.extract_values_from_maps(
-            train_lyr, train_fld, init_depth_path, refined_depth_path, feedback
-        )
+        # 1. Extract Data
+        feedback.pushInfo("   [1/5] Sampling Maps (Training & Validation)...")
+        y_train, train_p3, train_p4 = self.extract_values(train_lyr, train_fld, init_depth_path, refined_depth_path, feedback)
+        y_val, val_p3, val_p4 = self.extract_values(val_lyr, val_fld, init_depth_path, refined_depth_path, feedback)
 
-        # 2. Extract Data (Validation)
-        feedback.pushInfo("   [2/4] Evaluating Unseen Validation Data...")
-        y_val, val_p3, val_p4 = self.extract_values_from_maps(
-            val_lyr, val_fld, init_depth_path, refined_depth_path, feedback
-        )
+        if len(y_val) < 5: raise QgsProcessingException("Not enough validation points for a robust report!")
 
-        if len(y_val) < 5: raise QgsProcessingException("Not enough validation points found!")
+        # 2. Calculate Stats & Stratified Analysis
+        feedback.pushInfo("   [2/5] Calculating Advanced Statistics...")
+        
+        # Global Stats (Validation)
+        stats_p3 = self.calc_stats(y_val, val_p3)
+        stats_p4 = self.calc_stats(y_val, val_p4)
+        
+        # Stratified Stats (By Depth Bins)
+        strat_stats = []
+        strat_stats.extend(self.stratified_analysis(y_val, val_p3, "Phase 3 (Global)"))
+        strat_stats.extend(self.stratified_analysis(y_val, val_p4, "Phase 4 (Refined)"))
+        
+        df_strat = pd.DataFrame(strat_stats)
+        df_strat.to_csv(os.path.join(out_dir, '5_Stratified_Error_Analysis.csv'), index=False)
 
-        # 3. Calculate Stats
-        feedback.pushInfo("   [3/4] Generating Statistics & CSVs...")
-        
-        # Calculate Stats Objects
-        stats_val_p3 = self.calc_stats(y_val, val_p3)
-        stats_val_p4 = self.calc_stats(y_val, val_p4)
-        
-        # A. Stratified Stats
-        all_stats = []
-        all_stats.extend(self.calc_stratified_stats(y_train, train_p3, "Phase 3 (Global)", "Training"))
-        all_stats.extend(self.calc_stratified_stats(y_val, val_p3, "Phase 3 (Global)", "Unseen Validation"))
-        all_stats.extend(self.calc_stratified_stats(y_train, train_p4, "Phase 4 (Refined)", "Training"))
-        all_stats.extend(self.calc_stratified_stats(y_val, val_p4, "Phase 4 (Refined)", "Unseen Validation"))
-        
-        df_stats = pd.DataFrame(all_stats)
-        
-        # Reorder columns
-        cols = ['Dataset', 'Phase', 'Depth_Bin', 'Count', 'R2', 'RMSE', 'MAE', 'wMAPE (%)', 'Bias']
-        # Filter existing columns only
-        cols = [c for c in cols if c in df_stats.columns]
-        df_stats = df_stats[cols]
-        
-        df_stats.to_csv(os.path.join(out_dir, '5_MASTER_STRATIFIED_STATS.csv'), index=False)
-
-        # B. Raw Data CSV
-        df_raw_val = pd.DataFrame({
+        # 3. Raw Data Export
+        feedback.pushInfo("   [3/5] Exporting Raw Data...")
+        df_raw = pd.DataFrame({
             'Type': 'Validation', 'Observed': y_val,
-            'P3_Pred': val_p3, 'P4_Pred': val_p4,
-            'P3_MAPE': self.calc_mape_vector(y_val, val_p3),
-            'P4_MAPE': self.calc_mape_vector(y_val, val_p4)
+            'P3_Pred': val_p3, 'P3_Error': val_p3 - y_val,
+            'P4_Pred': val_p4, 'P4_Error': val_p4 - y_val
         })
-        df_raw_train = pd.DataFrame({
-            'Type': 'Training', 'Observed': y_train,
-            'P3_Pred': train_p3, 'P4_Pred': train_p4,
-            'P3_MAPE': self.calc_mape_vector(y_train, train_p3),
-            'P4_MAPE': self.calc_mape_vector(y_train, train_p4)
-        })
-        pd.concat([df_raw_val, df_raw_train]).to_csv(os.path.join(out_dir, '5_MASTER_RAW_DATA.csv'), index=False)
+        df_raw.to_csv(os.path.join(out_dir, '5_Validation_Raw_Data.csv'), index=False)
 
-        # C. Text Summary
-        self.save_summary_txt(out_dir, stats_val_p3, stats_val_p4, len(y_val))
+        # 4. Generate Scientific Plots
+        feedback.pushInfo("   [4/5] Generating Scientific Plots...")
+        self.plot_scatter(y_val, val_p3, val_p4, stats_p3, stats_p4, out_dir)
+        self.plot_residuals(y_val, val_p3, val_p4, out_dir)
+        self.plot_histograms(y_val, val_p3, val_p4, out_dir)
 
-        # 4. Generate Plots
-        feedback.pushInfo("   [4/4] Generating Plots...")
-        
-        # --- FIX: Passing all required arguments correctly ---
-        self.plot_scatter_comparison(
-            y_val, val_p3, val_p4, 
-            stats_val_p3, stats_val_p4, 
-            out_dir
-        )
-        # ---------------------------------------------------
+        # 5. Final Report & Verdict
+        feedback.pushInfo("   [5/5] Writing Final Summary...")
+        self.write_final_verdict(out_dir, stats_p3, stats_p4, len(y_val))
 
-        feedback.pushInfo(f">>> MODULE 05 COMPLETE. Reports saved to: {out_dir}")
-        return {'OUTPUT_REPORT': os.path.join(out_dir, '5_MASTER_STRATIFIED_STATS.csv')}
+        feedback.pushInfo(f">>> REPORTING COMPLETE. Check: {out_dir}")
+        return {'OUTPUT_REPORT': os.path.join(out_dir, '5_FINAL_SUMMARY.txt')}
 
     # =========================================================================
-    # LOGIC
+    # CORE FUNCTIONS
     # =========================================================================
 
-    def extract_values_from_maps(self, vec_layer, fld, path3, path4, fb):
-        rlayer = QgsRasterLayer(path3)
-        tr = QgsCoordinateTransform(vec_layer.sourceCrs(), rlayer.crs(), QgsProject.instance())
-        
-        src3 = rasterio.open(path3); d3 = src3.read(1).astype('float32')
-        src4 = rasterio.open(path4); d4 = src4.read(1).astype('float32')
+    def extract_values(self, vec, fld, p3, p4, fb):
+        rlayer = QgsRasterLayer(p3)
+        tr = QgsCoordinateTransform(vec.sourceCrs(), rlayer.crs(), QgsProject.instance())
+        src3 = rasterio.open(p3); d3 = src3.read(1)
+        src4 = rasterio.open(p4); d4 = src4.read(1)
         h, w = src3.height, src3.width
         
-        y_list, p3_list, p4_list = [], [], []
-        total = vec_layer.featureCount()
-        
-        for f in vec_layer.getFeatures():
-            geom = f.geometry()
-            try: geom.transform(tr)
-            except: continue
-            pt = geom.asPoint()
-            try: r, c = src3.index(pt.x(), pt.y())
-            except: continue
-            
+        y, p3_vals, p4_vals = [], [], []
+        for f in vec.getFeatures():
+            geom = f.geometry(); geom.transform(tr); pt = geom.asPoint()
+            r, c = src3.index(pt.x(), pt.y())
             if 0 <= r < h and 0 <= c < w:
-                val3 = d3[r, c]
-                val4 = d4[r, c]
-                if val3 > -9000 and val4 > -9000 and np.isfinite(val3) and np.isfinite(val4):
-                    y_list.append(f[fld])
-                    p3_list.append(val3)
-                    p4_list.append(val4)
+                v3, v4 = d3[r, c], d4[r, c]
+                if v3 > -9000 and v4 > -9000 and np.isfinite(v3) and np.isfinite(v4):
+                    y.append(f[fld]); p3_vals.append(v3); p4_vals.append(v4)
         
         src3.close(); src4.close()
-        fb.pushInfo(f"      Extracted: {len(y_list)} / {total} points.")
-        return np.array(y_list), np.array(p3_list), np.array(p4_list)
-
-    def calc_mape_vector(self, y_true, y_pred):
-        safe_obs = y_true.copy(); safe_obs[safe_obs==0] = 0.001
-        return np.abs((y_true - y_pred) / safe_obs) * 100
+        return np.array(y), np.array(p3_vals), np.array(p4_vals)
 
     def calc_stats(self, y_true, y_pred):
         r2 = r2_score(y_true, y_pred)
@@ -193,81 +153,144 @@ class SDBModule05(QgsProcessingAlgorithm):
         mae = mean_absolute_error(y_true, y_pred)
         bias = np.mean(y_pred - y_true)
         
-        sum_obs = np.sum(y_true)
-        sum_err = np.sum(np.abs(y_true - y_pred))
-        wmape = (sum_err / sum_obs) * 100 if sum_obs != 0 else 0
+        # STRICT ABSOLUTE wMAPE
+        sum_abs_diff = np.sum(np.abs(y_true - y_pred))
+        sum_abs_true = np.sum(np.abs(y_true))
+        wmape = (sum_abs_diff / sum_abs_true) * 100 if sum_abs_true != 0 else 0
         
         return {'R2': r2, 'RMSE': rmse, 'MAE': mae, 'Bias': bias, 'wMAPE': wmape}
 
-    def calc_stratified_stats(self, y_true, y_pred, phase_name, dataset_name):
-        if len(y_true) < 2: return []
-        max_d = int(np.ceil(max(y_true)))
-        bins = range(0, max_d + 5, 5)
-        
+    def stratified_analysis(self, y_true, y_pred, model_name):
+        bins = [0, 5, 10, 15, 20, 30, 50, 100]
+        labels = [f"{bins[i]}-{bins[i+1]}m" for i in range(len(bins)-1)]
         rows = []
         
-        # Global
+        # 1. Global Row
         s = self.calc_stats(y_true, y_pred)
-        rows.append({
-            'Phase': phase_name, 'Dataset': dataset_name, 'Depth_Bin': 'GLOBAL',
-            'Count': len(y_true), 'R2': round(s['R2'], 4), 'RMSE': round(s['RMSE'], 4),
-            'MAE': round(s['MAE'], 4), 'wMAPE (%)': round(s['wMAPE'], 2), 'Bias': round(s['Bias'], 4)
-        })
+        rows.append({'Model': model_name, 'Depth_Bin': 'GLOBAL', 'Count': len(y_true), **s})
         
-        # Bins
+        # 2. Bin Rows
         for i in range(len(bins)-1):
-            low, high = bins[i], bins[i+1]
-            mask = (y_true >= low) & (y_true < high)
-            if np.sum(mask) > 1:
-                yo = y_true[mask]; yp = y_pred[mask]
-                sb = self.calc_stats(yo, yp)
-                rows.append({
-                    'Phase': phase_name, 'Dataset': dataset_name, 'Depth_Bin': f"{low}-{high}m",
-                    'Count': len(yo), 'R2': round(sb['R2'], 4), 'RMSE': round(sb['RMSE'], 4),
-                    'MAE': round(sb['MAE'], 4), 'wMAPE (%)': round(sb['wMAPE'], 2), 'Bias': round(sb['Bias'], 4)
-                })
+            mask = (y_true >= bins[i]) & (y_true < bins[i+1])
+            if np.sum(mask) > 5:
+                sb = self.calc_stats(y_true[mask], y_pred[mask])
+                rows.append({'Model': model_name, 'Depth_Bin': labels[i], 'Count': np.sum(mask), **sb})
+                
         return rows
 
-    def save_summary_txt(self, out_dir, s3, s4, n):
-        imp_r2 = ((s4['R2'] - s3['R2']) / s3['R2']) * 100 if s3['R2']!=0 else 0
+    def write_final_verdict(self, out_dir, s3, s4, count):
+        # Determine Winner based on RMSE (Primary) and R2 (Secondary)
+        if s4['RMSE'] < s3['RMSE']:
+            winner = "PHASE 4 (Refined Model)"
+            reason = "Lower RMSE indicates better accuracy."
+        elif s4['RMSE'] == s3['RMSE'] and s4['R2'] > s3['R2']:
+            winner = "PHASE 4 (Refined Model)"
+            reason = "Same RMSE but higher R2."
+        elif np.isclose(s4['RMSE'], s3['RMSE'], atol=0.01):
+             winner = "TIE (No significant improvement)"
+             reason = "Both models performed similarly."
+        else:
+            winner = "PHASE 3 (Global Model)"
+            reason = "Phase 4 did not improve RMSE (Possible overfitting in P4)."
+
         imp_rmse = ((s3['RMSE'] - s4['RMSE']) / s3['RMSE']) * 100
+        imp_wmape = ((s3['wMAPE'] - s4['wMAPE']) / s3['wMAPE']) * 100
+
+        report = [
+            "===========================================================",
+            "              SDB FINAL SCIENTIFIC REPORT                 ",
+            "===========================================================",
+            f"Validation Points Used: {count}",
+            "",
+            "--- METRICS COMPARISON (VALIDATION SET) ---",
+            f"{'Metric':<10} | {'Phase 3 (Global)':<20} | {'Phase 4 (Refined)':<20} | {'Improvement':<15}",
+            "-"*75,
+            f"{'RMSE':<10} | {s3['RMSE']:.4f} m            | {s4['RMSE']:.4f} m            | {imp_rmse:+.2f} %",
+            f"{'R2':<10} | {s3['R2']:.4f}              | {s4['R2']:.4f}              | {(s4['R2']-s3['R2'])*100:+.2f} pts",
+            f"{'wMAPE':<10} | {s3['wMAPE']:.2f} %             | {s4['wMAPE']:.2f} %             | {imp_wmape:+.2f} %",
+            f"{'Bias':<10} | {s3['Bias']:.4f} m            | {s4['Bias']:.4f} m            | -",
+            "",
+            "--- FINAL VERDICT ---",
+            f"WINNER: {winner}",
+            f"REASON: {reason}",
+            "",
+            "NOTE: wMAPE is calculated as Sum(|Error|) / Sum(|Observed|).",
+            "==========================================================="
+        ]
         
         with open(os.path.join(out_dir, '5_FINAL_SUMMARY.txt'), 'w') as f:
-            f.write("SDB RESEARCH PROJECT - FINAL REPORT\n=================================\n\n")
-            f.write(f"Total Unseen Validation Points: {n}\n\n")
-            f.write("PHASE 3 (INITIAL GLOBAL):\n")
-            f.write(f"  R2: {s3['R2']:.4f} | RMSE: {s3['RMSE']:.4f}m | wMAPE: {s3['wMAPE']:.2f}%\n")
-            f.write("PHASE 4 (FINAL REFINED):\n")
-            f.write(f"  R2: {s4['R2']:.4f} | RMSE: {s4['RMSE']:.4f}m | wMAPE: {s4['wMAPE']:.2f}%\n")
-            f.write("\nIMPROVEMENT:\n")
-            f.write(f"  R2 Gain: {imp_r2:+.2f}%\n  RMSE Reduction: {imp_rmse:+.2f}%\n")
+            f.write("\n".join(report))
 
-    def plot_scatter_comparison(self, obs, p3, p4, stats3, stats4, out_dir):
+    # =========================================================================
+    # PLOTTING FUNCTIONS
+    # =========================================================================
+
+    def plot_scatter(self, obs, p3, p4, s3, s4, out_dir):
         fig, axes = plt.subplots(1, 2, figsize=(14, 6))
         
-        # Optimized plotting: Use KDE only if points < 2000 to save time
-        use_kde = len(obs) < 2000
+        # Use Density plot if points < 5000 for speed/look
+        use_kde = len(obs) < 5000
         
-        self._subplot(axes[0], obs, p3, stats3, "Phase 3: Global Model", use_kde)
-        self._subplot(axes[1], obs, p4, stats4, "Phase 4: Refined Model", use_kde)
+        self._subplot_scatter(axes[0], obs, p3, s3, "Phase 3: Global Model", use_kde)
+        self._subplot_scatter(axes[1], obs, p4, s4, "Phase 4: Refined Model", use_kde)
         
         plt.tight_layout()
-        plt.savefig(os.path.join(out_dir, '5_Comparative_Scatter.png'), dpi=150)
+        plt.savefig(os.path.join(out_dir, '5_Plot_Scatter_Comparison.png'), dpi=150)
         plt.close()
 
-    def _subplot(self, ax, obs, pred, stats, title, use_kde):
+    def _subplot_scatter(self, ax, obs, pred, stats, title, use_kde):
         if use_kde:
             try:
                 xy = np.vstack([obs, pred])
                 z = gaussian_kde(xy)(xy)
-                ax.scatter(obs, pred, c=z, s=30, cmap='viridis', edgecolor='')
+                sc = ax.scatter(obs, pred, c=z, s=20, cmap='viridis', edgecolor='')
+                plt.colorbar(sc, ax=ax, label='Point Density')
             except:
-                ax.scatter(obs, pred, c='blue', alpha=0.5)
+                ax.scatter(obs, pred, c='navy', alpha=0.4, s=15)
         else:
-             ax.scatter(obs, pred, c='blue', alpha=0.3, s=10)
+            ax.scatter(obs, pred, c='navy', alpha=0.3, s=10)
 
-        ax.plot([min(obs), max(obs)], [min(obs), max(obs)], 'r--', lw=2)
-        ax.set_title(title); ax.set_xlabel('Observed (m)'); ax.set_ylabel('Predicted (m)')
-        ax.grid(True, alpha=0.5)
-        text = f"$R^2={stats['R2']:.3f}$\n$RMSE={stats['RMSE']:.2f}m$\n$wMAPE={stats['wMAPE']:.2f}\%$"
-        ax.text(0.05, 0.95, text, transform=ax.transAxes, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        # 1:1 Line
+        mx = max(obs.max(), pred.max())
+        ax.plot([0, mx], [0, mx], 'r--', lw=2, label='1:1 Line')
+        
+        ax.set_title(title, fontsize=12, fontweight='bold')
+        ax.set_xlabel('Observed Depth (m)')
+        ax.set_ylabel('Predicted Depth (m)')
+        ax.grid(True, alpha=0.3)
+        
+        text = f"$R^2 = {stats['R2']:.3f}$\n$RMSE = {stats['RMSE']:.2f}m$\n$wMAPE = {stats['wMAPE']:.2f}\%$"
+        ax.text(0.05, 0.95, text, transform=ax.transAxes, verticalalignment='top', 
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.9))
+
+    def plot_residuals(self, obs, p3, p4, out_dir):
+        res3 = p3 - obs
+        res4 = p4 - obs
+        
+        plt.figure(figsize=(10, 6))
+        plt.scatter(obs, res3, alpha=0.4, label='Phase 3 Residuals', color='gray', s=15)
+        plt.scatter(obs, res4, alpha=0.4, label='Phase 4 Residuals', color='dodgerblue', s=15)
+        plt.axhline(0, color='red', linestyle='--', lw=2)
+        plt.xlabel('Observed Depth (m)')
+        plt.ylabel('Residual Error (Pred - Obs) [m]')
+        plt.title('Residuals vs Depth Analysis')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.savefig(os.path.join(out_dir, '5_Plot_Residuals.png'), dpi=150)
+        plt.close()
+
+    def plot_histograms(self, obs, p3, p4, out_dir):
+        res3 = p3 - obs
+        res4 = p4 - obs
+        
+        plt.figure(figsize=(10, 6))
+        sns.histplot(res3, color="gray", label="Phase 3 Error", kde=True, stat="density", alpha=0.4, element="step")
+        sns.histplot(res4, color="dodgerblue", label="Phase 4 Error", kde=True, stat="density", alpha=0.4, element="step")
+        
+        plt.axvline(0, color='red', linestyle='--')
+        plt.title('Error Distribution Histogram')
+        plt.xlabel('Error (m)')
+        plt.ylabel('Density')
+        plt.legend()
+        plt.savefig(os.path.join(out_dir, '5_Plot_Error_Histogram.png'), dpi=150)
+        plt.close()
