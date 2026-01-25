@@ -78,7 +78,7 @@ Open OSGeo4W Shell (as Administrator) and run:
 
 📧 ***Contact & Citation***
 
-**Author:** Mohamed Aly Nasef  
+**Developer:** Mohamed Aly Nasef  
 **Email:** Eng.m.nasef2017@gmail.com, Nasefm.aly@alexu.edu.eg  
 **Citation:** Nasef M.Aly. (2026). Nasef2017/Bathymetrix-AI: Bathymetrix_AI V3.2 (v3.2). Zenodo.
 https://doi.org/10.5281/zenodo.18218046
