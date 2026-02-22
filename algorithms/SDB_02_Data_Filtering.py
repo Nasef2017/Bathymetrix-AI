@@ -1,16 +1,15 @@
-# SDB_02_Data_Filtering.py
-# ---------------------------------------------------------------------------
-# MODULE 02: SDB DATA FILTERING & ROBUST MODELING
-# ---------------------------------------------------------------------------
-
 import os
 import numpy as np
 import rasterio
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
 import warnings
+
+# ML & Stats Libraries
+from sklearn.linear_model import RANSACRegressor, LinearRegression, HuberRegressor
+from sklearn.preprocessing import PolynomialFeatures
+from PyQt5.QtCore import QVariant
 
 warnings.filterwarnings("ignore")
 
@@ -18,42 +17,45 @@ from qgis.core import (
     QgsProcessing, QgsProcessingAlgorithm,
     QgsProcessingParameterRasterLayer, QgsProcessingParameterVectorLayer,
     QgsProcessingParameterField, QgsProcessingParameterFolderDestination,
-    QgsProcessingParameterNumber, QgsCoordinateTransform, QgsProject,
+    QgsProcessingParameterNumber, QgsProcessingParameterEnum,
+    QgsCoordinateTransform, QgsProject,
     QgsVectorFileWriter, QgsWkbTypes, QgsRasterLayer, QgsProcessingException, QgsVectorLayer,
-    QgsProcessingParameterBand
+    QgsProcessingParameterBand, QgsField, QgsFeature, QgsRectangle
 )
-
-from sklearn.linear_model import RANSACRegressor, LinearRegression
 
 class SDBModule02(QgsProcessingAlgorithm):
     INPUT_STACK = 'INPUT_STACK'
     INPUT_POINTS = 'INPUT_POINTS'
     FIELD_DEPTH = 'FIELD_DEPTH'
-    
     BLUE_BAND = 'BLUE_BAND'
     GREEN_BAND = 'GREEN_BAND'
-    
     RESIDUAL_THRESHOLD = 'RESIDUAL_THRESHOLD'
-    RANSAC_MAX_TRIALS = 'RANSAC_MAX_TRIALS' # <-- New Parameter
+    RANSAC_MAX_TRIALS = 'RANSAC_MAX_TRIALS' 
+    FILTER_MODE = 'FILTER_MODE'
     OUTPUT_FOLDER = 'OUTPUT_FOLDER'
+
+    FILTER_MODES = [
+        'Linear RANSAC',
+        'LS Variance Fit',
+        'Huber Variance Fit'
+    ]
 
     def initAlgorithm(self, config=None):
         self.addParameter(QgsProcessingParameterRasterLayer(self.INPUT_STACK, 'Input Feature Stack (Phase 1)'))
         self.addParameter(QgsProcessingParameterVectorLayer(self.INPUT_POINTS, 'Raw ICESat-2 Points'))
         self.addParameter(QgsProcessingParameterField(self.FIELD_DEPTH, 'Depth Field', parentLayerParameterName=self.INPUT_POINTS, type=QgsProcessingParameterField.Numeric))
-        
         self.addParameter(QgsProcessingParameterBand(self.BLUE_BAND, 'Blue Band Number', parentLayerParameterName=self.INPUT_STACK, defaultValue=2))
         self.addParameter(QgsProcessingParameterBand(self.GREEN_BAND, 'Green Band Number', parentLayerParameterName=self.INPUT_STACK, defaultValue=3))
         
-        self.addParameter(QgsProcessingParameterNumber(self.RESIDUAL_THRESHOLD, 'RANSAC Threshold (0 = Auto-Calculate)', type=QgsProcessingParameterNumber.Double, defaultValue=0.0))
+        self.addParameter(QgsProcessingParameterEnum(self.FILTER_MODE, 'Filtering Strategy', options=self.FILTER_MODES, defaultValue=2))
         
-        # New: Receive RANSAC Trials from Master
+        # 0 = Auto Calculation
+        self.addParameter(QgsProcessingParameterNumber(self.RESIDUAL_THRESHOLD, 'Threshold/Multiplier (0=Auto)', type=QgsProcessingParameterNumber.Double, defaultValue=0.0))
         self.addParameter(QgsProcessingParameterNumber(self.RANSAC_MAX_TRIALS, 'RANSAC Max Trials', type=QgsProcessingParameterNumber.Integer, defaultValue=100))
-        
         self.addParameter(QgsProcessingParameterFolderDestination(self.OUTPUT_FOLDER, 'Output Folder'))
 
     def name(self): return 'sdb_02_filtering'
-    def displayName(self): return '2. SDB Module 02: Filtering (Final Robust)'
+    def displayName(self): return '2. SDB Module 02: Filtering (Multi-Mode)'
     def group(self): return 'SDB Research Tools'
     def groupId(self): return 'sdb_tools'
     def createInstance(self): return SDBModule02()
@@ -61,19 +63,19 @@ class SDBModule02(QgsProcessingAlgorithm):
     def shortHelpString(self):
         return """
         <div style="font-family: Arial, sans-serif; line-height: 1.2;">
-            <h2 style="margin-bottom: 5px;">🧹 <span style="color: #2E86C1;">SDB Phase 02</span>: Robust Data Filtering</h2>
-            <p style="margin-top: 0; margin-bottom: 10px;">Cleans noisy bathymetry training data using advanced statistical RANSAC filters.</p>
-
-            <b style="display: block; margin-bottom: 2px;">🛡️ Physics Guard & Scaling</b>
+            <h2 style="margin-bottom: 5px;">🔬 Filtering Strategy Guide</h2>
+            <p>This module filters noisy ICESat-2 data using one of three statistical methods.</p>
+            <b style="display: block; margin-bottom: 2px;">1. Linear RANSAC</b>
             <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li><b>Robust Auto-Scaling:</b> Maps the lowest meaningful signals (5th percentile) to a safe baseline (10.0) to prevent logarithmic errors.</li>
-                <li><b>Artifact Removal:</b> Automatically discards physically impossible band ratios.</li>
+                <li><b>Best for:</b> Data with a clear linear relationship but contaminated with significant, random outliers.</li>
             </ul>
-
-            <b style="display: block; margin-bottom: 2px;">📉 RANSAC Outlier Detection</b>
+            <b style="display: block; margin-bottom: 2px;">2. LS Variance Fit</b>
             <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li>Uses <b>RANdom SAmple Consensus</b> with tunable <i>Max Trials</i>.</li>
-                <li><b>Auto-Thresholding:</b> Automatically calculates the residual threshold using Median Absolute Deviation (MAD) if set to 0.</li>
+                <li><b>Best for:</b> Data with a non-linear trend where the noise level is expected to be constant across all depths.</li>
+            </ul>
+            <b style="display: block; margin-bottom: 2px;">3. Huber Variance Fit</b>
+            <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
+                <li><b>Best for:</b> Complex scenarios where data uncertainty increases with depth (heteroscedasticity).</li>
             </ul>
         </div>
         """
@@ -83,200 +85,249 @@ class SDBModule02(QgsProcessingAlgorithm):
     def processAlgorithm(self, parameters, context, feedback):
         out_dir = self.parameterAsString(parameters, self.OUTPUT_FOLDER, context)
         os.makedirs(out_dir, exist_ok=True)
-        
         stack_path = self.parameterAsRasterLayer(parameters, self.INPUT_STACK, context).source()
         points_layer = self.parameterAsVectorLayer(parameters, self.INPUT_POINTS, context)
         depth_fld = self.parameterAsString(parameters, self.FIELD_DEPTH, context)
-        
         b_idx = self.parameterAsInt(parameters, self.BLUE_BAND, context)
         g_idx = self.parameterAsInt(parameters, self.GREEN_BAND, context)
         
-        user_threshold = self.parameterAsDouble(parameters, self.RESIDUAL_THRESHOLD, context)
-        max_trials_val = self.parameterAsInt(parameters, self.RANSAC_MAX_TRIALS, context)
+        mode_idx = self.parameterAsInt(parameters, self.FILTER_MODE, context)
+        user_val = self.parameterAsDouble(parameters, self.RESIDUAL_THRESHOLD, context)
+        max_trials = self.parameterAsInt(parameters, self.RANSAC_MAX_TRIALS, context)
 
-        feedback.pushInfo("\n>>> MODULE 02: STARTING ROBUST FILTERING...")
+        feedback.pushInfo(f"\n>>> MODULE 02: STARTING FILTERING [{self.FILTER_MODES[mode_idx]}]...")
         
-        # 1. EXTRACT DATA
-        feedback.pushInfo("   [1/3] Extracting Data & Applying Robust Scaling...")
         X_ratio, y_depth, features_list, calc_scale = self.extract_and_calc_robust(
             stack_path, points_layer, depth_fld, b_idx, g_idx, feedback
         )
         
-        if len(y_depth) < 10: 
-            raise QgsProcessingException("Not enough valid points found! Check input data or projection.")
+        if len(y_depth) < 20: 
+            raise QgsProcessingException("Not enough valid points found (<20)!")
 
-        feedback.pushInfo(f"   >>> Auto-Scale Factor Used: {calc_scale:.2f}")
-
-        # 2. DETERMINE THRESHOLD
         X = X_ratio.reshape(-1, 1)
         y = y_depth
         
-        final_thresh = user_threshold
-        if user_threshold <= 0:
-            lr = LinearRegression().fit(X, y)
-            preds = lr.predict(X)
-            residuals = np.abs(y - preds)
-            mad = np.median(residuals)
-            final_thresh = 2.5 * mad 
-            feedback.pushInfo(f"   [Auto] Calculated Threshold: {final_thresh:.4f}m (MAD={mad:.4f})")
-        else:
-            feedback.pushInfo(f"   Using Manual Threshold: {final_thresh}m")
-
-        # 3. RUN RANSAC
-        feedback.pushInfo(f"   [2/3] Running RANSAC Model (Trials={max_trials_val})...")
-        ransac = RANSACRegressor(random_state=42, min_samples=0.1, residual_threshold=final_thresh, max_trials=max_trials_val)
-        try:
+        final_mask = None
+        est_sigma = None 
+        sigma_model_for_plot = None
+        
+        # =========================================================
+        # MODE 0: Linear RANSAC
+        # =========================================================
+        if mode_idx == 0:
+            feedback.pushInfo("   [Logic] Running Linear RANSAC...")
+            if user_val <= 0:
+                lr = LinearRegression().fit(X, y)
+                residuals_raw = np.abs(y - lr.predict(X))
+                mad = np.median(residuals_raw)
+                thresh = 2.5 * mad 
+                feedback.pushInfo(f"   [Auto] Threshold: {thresh:.4f}m (MAD-based)")
+            else:
+                thresh = user_val
+                feedback.pushInfo(f"   [User] Using Threshold: {thresh:.4f}m")
+            
+            ransac = RANSACRegressor(random_state=42, min_samples=0.1, residual_threshold=thresh, max_trials=max_trials)
             ransac.fit(X, y)
-        except ValueError as e:
-            raise QgsProcessingException(f"RANSAC Failed: {e}")
-        
-        inlier_mask = ransac.inlier_mask_
-        outlier_mask = np.logical_not(inlier_mask)
-        
-        n_in = np.sum(inlier_mask); n_out = np.sum(outlier_mask)
-        feedback.pushInfo(f"      Status: {n_in} Inliers (Kept), {n_out} Outliers (Rejected)")
+            final_mask = ransac.inlier_mask_
+            est_sigma = np.full_like(y, thresh / 3.0)
+            residuals = y - ransac.predict(X)
 
-        # 4. EXPORT RESULTS
-        feedback.pushInfo("   [3/3] Exporting Results...")
+        # =========================================================
+        # MODE 1: LS Variance Fit
+        # =========================================================
+        elif mode_idx == 1:
+            feedback.pushInfo("   [Logic] Running LS Variance Fit...")
+            poly = PolynomialFeatures(degree=2, include_bias=False)
+            X_poly = poly.fit_transform(X)
+            ls_model = LinearRegression().fit(X_poly, y)
+            residuals = y - ls_model.predict(X_poly)
+            mad = np.median(np.abs(residuals))
+            sigma_val = 1.4826 * mad
+            
+            if user_val <= 0:
+                multiplier = 3.0
+                feedback.pushInfo(f"   [Auto] Global Sigma: {sigma_val:.4f}m | Multiplier: 3.0")
+            else: multiplier = user_val
+            
+            limit = multiplier * sigma_val
+            final_mask = np.abs(residuals) <= limit
+            est_sigma = np.full_like(y, sigma_val)
+            
+            res_sq = residuals**2
+            depth_poly_feat = poly.fit_transform(y.reshape(-1, 1))
+            sigma_model_for_plot = LinearRegression().fit(depth_poly_feat, res_sq)
+
+        # =========================================================
+        # MODE 2: Huber Variance Fit
+        # =========================================================
+        elif mode_idx == 2:
+            feedback.pushInfo("   [Logic] Running Huber Variance Fit...")
+            poly = PolynomialFeatures(degree=2, include_bias=False)
+            X_poly = poly.fit_transform(X)
+            ransac_trend = RANSACRegressor(random_state=42, min_samples=0.1, max_trials=max_trials)
+            ransac_trend.fit(X_poly, y)
+            
+            residuals = y - ransac_trend.predict(X_poly)
+            mask_trend = ransac_trend.inlier_mask_
+            
+            y_clean = y[mask_trend]
+            res_sq_clean = residuals[mask_trend]**2
+            depth_poly_feat = poly.fit_transform(y_clean.reshape(-1, 1))
+            
+            sigma_model = HuberRegressor(epsilon=1.35, max_iter=max_trials)
+            sigma_model.fit(depth_poly_feat, res_sq_clean)
+            sigma_model_for_plot = sigma_model 
+            
+            all_depth_poly = poly.transform(y.reshape(-1, 1))
+            est_sigma_sq = sigma_model.predict(all_depth_poly)
+            est_sigma = np.sqrt(np.maximum(est_sigma_sq, 0.0025))
+            
+            if user_val <= 0:
+                multiplier = 3.0
+                feedback.pushInfo("   [Auto] Using Default 3-Sigma Envelope")
+            else: multiplier = user_val
+            
+            final_mask = np.abs(residuals) <= (multiplier * est_sigma)
+
+        # =========================================================
+        # EXPORT & PLOTTING
+        # =========================================================
         clean_shp = os.path.join(out_dir, '2_Cleaned_Training_Data.shp')
         reject_shp = os.path.join(out_dir, '2_Outliers_Rejected.shp')
-        plot_path = os.path.join(out_dir, '2_RANSAC_Plot.png')
         
-        self.save_subset(points_layer, features_list, inlier_mask, clean_shp, "Cleaned Data")
-        self.save_subset(points_layer, features_list, outlier_mask, reject_shp, "Rejected Data")
-        self.save_ransac_plot(X, y, inlier_mask, outlier_mask, ransac, plot_path, final_thresh, calc_scale)
+        self.save_subset_with_uncert(points_layer, features_list, final_mask, est_sigma, clean_shp, "Cleaned Data")
+        self.save_subset_with_uncert(points_layer, features_list, ~final_mask, est_sigma, reject_shp, "Rejected Data")
+        
+        plot_mult = user_val if user_val > 0 else (2.5 if mode_idx == 0 else 3.0)
+        self.plot_physics_trend(X, y, final_mask, mode_idx, os.path.join(out_dir, '2_Plot_1_Trend.png'))
+        self.plot_variance_analysis(y, residuals, sigma_model_for_plot, mode_idx, os.path.join(out_dir, '2_Plot_2_Variance.png'))
+        self.plot_envelope_analysis(y, residuals, est_sigma, final_mask, plot_mult, mode_idx, os.path.join(out_dir, '2_Plot_3_Envelope.png'))
         
         return {'OUTPUT_CLEAN_VEC': clean_shp}
 
-    # =========================================================================
-    # HELPER FUNCTIONS
-    # =========================================================================
-    
     def extract_and_calc_robust(self, ras_path, vec_layer, depth_fld, b_idx, g_idx, fb):
         rlayer = QgsRasterLayer(ras_path)
-        source_crs = vec_layer.sourceCrs()
-        dest_crs = rlayer.crs()
-        tr = QgsCoordinateTransform(source_crs, dest_crs, QgsProject.instance())
+        tr = QgsCoordinateTransform(vec_layer.sourceCrs(), rlayer.crs(), QgsProject.instance())
         
-        with rasterio.open(ras_path) as src:
-            if b_idx > src.count or g_idx > src.count: raise QgsProcessingException("Band index error.")
-            band_b = src.read(b_idx)
-            band_g = src.read(g_idx)
-            nodata = src.nodata if src.nodata is not None else -9999.0
-            h, w = src.height, src.width
+        # DEBUG COUNTERS
+        total_pts = vec_layer.featureCount()
+        count_invalid_depth = 0
+        count_out_of_bounds = 0
+        count_nodata = 0
+        count_valid = 0
 
-            raw_b_list = []
-            raw_g_list = []
-            depths_list = []
-            feats_list = []
+        with rasterio.open(ras_path) as src:
+            band_b = src.read(b_idx); band_g = src.read(g_idx)
+            raw_b, raw_g, depths_list, feats_list = [], [], [], []
             
-            # --- Pass 1: Collect Raw Data ---
             for f in vec_layer.getFeatures():
                 d = f[depth_fld]
-                # Filter NULL and Land (Depth > 0)
-                if d is None or d > 0: continue 
-
-                geom = f.geometry()
-                try: geom.transform(tr)
-                except: continue
-                pt = geom.asPoint()
-                try: r, c = src.index(pt.x(), pt.y())
-                except: continue
+                # Check 1: Depth Validity
+                if d is None or d == 0: 
+                    count_invalid_depth += 1
+                    continue 
                 
-                if 0 <= r < h and 0 <= c < w:
-                    val_b = band_b[r, c]
-                    val_g = band_g[r, c]
-                    
-                    if (val_b > 0 and val_g > 0 and 
-                        val_b != nodata and val_g != nodata and 
-                        np.isfinite(val_b) and np.isfinite(val_g)):
-                        
-                        raw_b_list.append(val_b)
-                        raw_g_list.append(val_g)
-                        depths_list.append(d)
-                        feats_list.append(f)
+                geom = f.geometry(); geom.transform(tr); pt = geom.asPoint()
+                
+                # Check 2: Bounds
+                try: 
+                    r, c = src.index(pt.x(), pt.y())
+                except:
+                    count_out_of_bounds += 1
+                    continue
+                
+                if 0 <= r < src.height and 0 <= c < src.width:
+                    vb, vg = band_b[r, c], band_g[r, c]
+                    # Check 3: Data Validity (NoData usually -9999 or 0)
+                    if (vb > 0 and vg > 0):
+                        raw_b.append(vb); raw_g.append(vg); depths_list.append(d); feats_list.append(f)
+                        count_valid += 1
+                    else:
+                        count_nodata += 1
+                else:
+                    count_out_of_bounds += 1
             
-            if not raw_b_list: return np.array([]), np.array([]), [], 1.0
+            fb.pushInfo(f"   [DEBUG] Total Points: {total_pts}")
+            fb.pushInfo(f"   [DEBUG] Invalid Depth (0/None): {count_invalid_depth}")
+            fb.pushInfo(f"   [DEBUG] Out of Bounds: {count_out_of_bounds}")
+            fb.pushInfo(f"   [DEBUG] NoData/Masked Pixels: {count_nodata}")
+            fb.pushInfo(f"   [DEBUG] Valid for Training: {count_valid}")
 
-            # --- Pass 2: Calculate Robust Scale ---
-            np_b = np.array(raw_b_list)
-            np_g = np.array(raw_g_list)
+            if count_valid == 0:
+                hint = "Hint: Uncheck 'Enable Water Masking' in Phase 1 if 'NoData' is high." if count_nodata > 0 else "Hint: Check CRS alignment."
+                raise QgsProcessingException(f"No valid training points found! (NoData={count_nodata}, OutBounds={count_out_of_bounds}). {hint}")
             
-            # Use 5th Percentile to ignore noise/dead pixels
-            min_b = np.percentile(np_b, 5)
-            min_g = np.percentile(np_g, 5)
-            min_val = min(min_b, min_g)
-            
-            if min_val <= 1e-6: min_val = 0.0001 
+            np_b, np_g = np.array(raw_b), np.array(raw_g)
+            robust_scale = 10.0 / max(np.percentile(np_b, 5), 0.0001)
+            lb, lg = np.log(np.maximum(np_b * robust_scale, 1.1)), np.log(np.maximum(np_g * robust_scale, 1.1))
+            ratios = lb/lg; valid = (ratios > 0.1) & (ratios < 5.0)
+            return ratios[valid], np.array(depths_list)[valid], [feats_list[i] for i in range(len(valid)) if valid[i]], robust_scale
 
-            # MAP BASELINE TO 10.0
-            TARGET_BASE = 10.0
-            robust_scale = TARGET_BASE / min_val
-            if robust_scale > 100000: robust_scale = 100000.0
-
-            # --- Pass 3: Apply Scale & Log ---
-            np_b_scaled = np_b * robust_scale
-            np_g_scaled = np_g * robust_scale
-            
-            np_b_scaled = np.maximum(np_b_scaled, 1.1)
-            np_g_scaled = np.maximum(np_g_scaled, 1.1)
-
-            lb = np.log(np_b_scaled)
-            lg = np.log(np_g_scaled)
-            
-            with np.errstate(divide='ignore', invalid='ignore'):
-                ratios = lb / lg
-            
-            # --- Pass 4: PHYSICS FILTER ---
-            valid_physics = (ratios > 0.1) & (ratios < 5.0) & (np.isfinite(ratios))
-            
-            ratios_final = ratios[valid_physics]
-            depths_final = np.array(depths_list)[valid_physics]
-            feats_final = [feats_list[i] for i in range(len(valid_physics)) if valid_physics[i]]
-            
-            fb.pushInfo(f"      Extracted {len(ratios_final)} points (Physics Filtered).")
-            
-            return ratios_final, depths_final, feats_final, robust_scale
-
-    def save_subset(self, original_layer, all_features, mask, out_path, layer_name):
-        subset = [f for f, m in zip(all_features, mask) if m]
-        if not subset: return
+    def save_subset_with_uncert(self, original_layer, all_features, mask, uncert, out_path, layer_name):
+        fields = original_layer.fields()
+        fields.append(QgsField("SDB_Uncert", QVariant.Double))
         if os.path.exists(out_path):
             try: os.remove(out_path)
             except: pass 
-        writer = QgsVectorFileWriter(out_path, "UTF-8", original_layer.fields(), QgsWkbTypes.Point, original_layer.sourceCrs(), "ESRI Shapefile")
+        writer = QgsVectorFileWriter(out_path, "UTF-8", fields, QgsWkbTypes.Point, original_layer.sourceCrs(), "ESRI Shapefile")
         if writer.hasError() == QgsVectorFileWriter.NoError:
-            for f in subset: writer.addFeature(f)
+            for i, m in enumerate(mask):
+                if m:
+                    feat = QgsFeature(fields); feat.setGeometry(all_features[i].geometry())
+                    attrs = all_features[i].attributes(); attrs.append(float(uncert[i]))
+                    feat.setAttributes(attrs); writer.addFeature(feat)
             del writer
             QgsProject.instance().addMapLayer(QgsVectorLayer(out_path, layer_name, "ogr"))
 
-    def save_ransac_plot(self, X, y, inlier, outlier, model, path, thresh, scale):
-        plt.figure(figsize=(12, 8))
+    def plot_physics_trend(self, X, y, mask, mode, path):
+        plt.figure(figsize=(10, 6))
+        plt.scatter(X[mask], y[mask], c='dodgerblue', s=15, alpha=0.6, label='Accepted')
+        plt.scatter(X[~mask], y[~mask], c='gray', marker='x', s=15, alpha=0.4, label='Rejected')
         
-        plt.scatter(X[inlier], y[inlier], c='dodgerblue', s=25, alpha=0.7, label='Inliers (Clean)')
-        plt.scatter(X[outlier], y[outlier], c='crimson', s=25, marker='x', alpha=0.4, label='Outliers (Rejected)')
-        
-        x_min, x_max = X.min(), X.max()
-        margin_x = (x_max - x_min) * 0.1
-        line_x = np.linspace(x_min - margin_x, x_max + margin_x, 100).reshape(-1, 1)
-        plt.plot(line_x, model.predict(line_x), 'k-', lw=3, label='RANSAC Model')
-        
-        plt.title(f"SDB Robust Filtering (Scale={scale:.1f})", fontsize=14, fontweight='bold')
-        plt.xlabel("Stumpf Ratio (Ln(Blue)/Ln(Green))", fontsize=12)
-        plt.ylabel("Depth (m)", fontsize=12)
-        
-        ax = plt.gca()
-        ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True)) 
-        ax.tick_params(axis='both', which='major', labelsize=11)
-        
-        if len(y[inlier]) > 0:
-            max_depth_inlier = np.min(y[inlier])
-            plt.ylim(max_depth_inlier - 2.0, 0.5) 
-        
-        plt.xlim(x_min - margin_x, x_max + margin_x)
+        x_rng = np.linspace(X.min(), X.max(), 100).reshape(-1, 1)
+        if mode == 0:
+            model = LinearRegression().fit(X[mask], y[mask])
+            y_rng = model.predict(x_rng)
+        else:
+            poly = PolynomialFeatures(degree=2, include_bias=False)
+            model = LinearRegression().fit(poly.fit_transform(X[mask]), y[mask])
+            y_rng = model.predict(poly.transform(x_rng))
+            
+        plt.plot(x_rng, y_rng, 'k-', lw=2, label='Trend Model')
+        plt.title("Plot 1: Band Ratio vs Depth"); plt.xlabel("Log Ratio"); plt.ylabel("Depth (m)")
+        plt.legend(); plt.grid(True, linestyle='--', alpha=0.5)
+        plt.savefig(path, dpi=100); plt.close()
 
-        plt.legend(loc='upper right', fontsize=12)
-        plt.grid(True, alpha=0.5, linestyle='--', which='both')
-        plt.tight_layout()
-        plt.savefig(path, dpi=150)
-        plt.close()
+    def plot_variance_analysis(self, depths, residuals, sigma_model, mode, path):
+        if mode == 0 or sigma_model is None: return 
+        plt.figure(figsize=(10, 6))
+        d_abs = np.abs(depths)
+        res_sq = residuals**2
+        poly = PolynomialFeatures(degree=2, include_bias=False)
+        d_rng = np.linspace(d_abs.min(), d_abs.max(), 100).reshape(-1, 1)
+        var_pred = sigma_model.predict(poly.fit_transform(d_rng))
+        
+        plt.scatter(d_abs, res_sq, c='black', s=10, alpha=0.5, label='Residual Squares')
+        plt.plot(d_rng, var_pred, 'r-', lw=2.5, label='Variance Trend ($\sigma^2$)')
+        plt.title("Plot 2: Depth vs Residual Square (Variance Analysis)"); 
+        plt.xlabel("Depth (m)"); plt.ylabel("Residual² ($m^2$)")
+        plt.legend(); plt.grid(True, linestyle='--', alpha=0.5)
+        plt.savefig(path, dpi=100); plt.close()
+
+    def plot_envelope_analysis(self, depths, residuals, sigmas, mask, multiplier, mode, path):
+        plt.figure(figsize=(10, 6))
+        d_abs = np.abs(depths)
+        sort_idx = np.argsort(d_abs)
+        d_sorted = d_abs[sort_idx]; sigma_sorted = sigmas[sort_idx]
+        upper = multiplier * sigma_sorted; lower = -multiplier * sigma_sorted
+        
+        plt.plot(d_sorted, upper, 'r-', lw=2, label=f'Upper (+{multiplier}$\sigma$)')
+        plt.plot(d_sorted, lower, 'r-', lw=2, label=f'Lower (-{multiplier}$\sigma$)')
+        plt.fill_between(d_sorted, lower, upper, color='red', alpha=0.1)
+        plt.scatter(d_abs[mask], residuals[mask], c='dodgerblue', s=15, alpha=0.6, label='Accepted')
+        plt.scatter(d_abs[~mask], residuals[~mask], c='gray', marker='x', s=15, alpha=0.4, label='Rejected')
+        plt.axhline(0, c='black', lw=1)
+        plt.title(f"Plot 3: Residuals & Uncertainty Envelope (Mode {mode})")
+        plt.xlabel("Depth (m)"); plt.ylabel("Residual (m)")
+        plt.legend(); plt.grid(True, linestyle='--', alpha=0.5)
+        plt.savefig(path, dpi=100); plt.close()

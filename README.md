@@ -39,11 +39,13 @@ Stumpf et al. (2003) – Log-ratio bathymetry model.
 
 **Phase 2: Robust Altimetry Filtering**
 
-To ensure high-quality training data, the tool filters ICESat-2 photon-counting data to remove outliers (e.g., noise from waves or turbid water).
+To ensure high-quality training data, the tool filters ICESat-2 photon-counting data to remove outliers.
 RANSAC Algorithm: Iteratively fits a linear model to identify high-confidence "inlier" depth points.
+**Newly added Statistical filtering Algorithms**  
 
 ***Key Reference:***
-Fischler & Bolles (1981) – Random Sample Consensus (RANSAC).
+Fischler & Bolles (1981) – Random Sample Consensus (RANSAC).  
+Zhang et al., (2021) – LS Variance Fit, or Huber Variance Fit.  
 
 **Phase 3: Automated Global Modeling (Auto-ML)**
 

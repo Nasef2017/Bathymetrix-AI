@@ -2,10 +2,10 @@
 icon=icon.png
 name=Bathymetrix-AI
 qgisMinimumVersion=3.22
-version=4.0
+version=4.1
 author=Nasef M. Aly
 email=Eng.m.nasef2017@gmail.com
-description=An advanced Machine Learning pipeline for Satellite-Derived Bathymetry (SDB). Features ICESat-2 integration, RANSAC filtering, and Spatial Residual Stacking.
+description=An advanced Machine Learning pipeline for Satellite-Derived Bathymetry (SDB). Features ICESat-2 integration, In-Situ Data filtering, and Spatial Residual Stacking.
 
 about=<h3>Bathymetrix-AI: Advanced SDB Modeling & Spatial Refinement</h3>
     <p><b>Bathymetrix-AI</b> is a specialized QGIS research toolkit designed to derive high-precision bathymetry from corrected multispectral satellite imagery (e.g., Sentinel-2 L2A). It systematically integrates physics-based corrections with data-driven Machine Learning to overcome traditional SDB limitations.</p>
@@ -13,7 +13,7 @@ about=<h3>Bathymetrix-AI: Advanced SDB Modeling & Spatial Refinement</h3>
     <p><b>Core Workflow (The 4-Phase System):</b></p>
     <ul>
         <li><b>1. Automated Pre-processing:</b> Sun-glint removal (Hedley), dynamic water masking (Otsu), and physics-based feature generation (Log-Ratios).</li>
-        <li><b>2. Robust Altimetry Filtering:</b> Uses the <b>RANSAC algorithm</b> to clean ICESat-2 (ATL24) data by identifying high-confidence inliers and removing environmental noise.</li>
+        <li><b>2. Robust Altimetry Filtering:</b> Uses <b>different algorithms</b> to clean ICESat-2 (ATL24) data by identifying high-confidence inliers and removing environmental noise.</li>
         <li><b>3. Global Auto-ML Modeling:</b> Competitive benchmarking of <b>11 ML algorithms</b> with Randomized Hyperparameter Optimization to find the optimal global depth function.</li>
         <li><b>4. Spatial Residual Stacking:</b> Enhances accuracy by analyzing prediction residuals and re-training the model with a <b>Stacked Error Surface</b> to correct local biases.</li>
     </ul>
@@ -21,7 +21,8 @@ about=<h3>Bathymetrix-AI: Advanced SDB Modeling & Spatial Refinement</h3>
     <p><b>Key References:</b><br>
     - <b>Stumpf et al. (2003):</b> Log-Ratio Algorithm for SDB inversion.<br>
     - <b>Hedley et al. (2005):</b> Physics-based sun-glint correction.<br>
-    - <b>Fischler & Bolles (1981):</b> RANSAC algorithm for robust estimation.<br>
+    - <b>Fischler & Bolles (1981):</b> RANSAC algorithm for ICESat-2 data filtering.<br>
+    - <b>Zhang et al., (2021):</b> LS Variance Fit, or Huber Variance Fit for ICESat-2 data filtering.<br>
     - <b>Alevizos (2020):</b> Residual analysis and spatial refinement in shallow waters.<br>
     - <b>Bergstra & Bengio (2012):</b> Randomized search for hyperparameter optimization.<br>
     - <b>Parrish et al. (2025):</b> Analysis and assessment of global ICESat-2 bathymetry.</p>
@@ -34,5 +35,5 @@ tracker=https://github.com/Nasef2017/Bathymetrix-AI/issues
 
 tags=sdb,bathymetry,machine learning,icesat-2,ransac,spatial correction,remote sensing,hydrography,sentinel-2,lidar,python
 category=Raster
-changelog=v4.0: Advanced Hyperparameter Tuning in addition to add Gird search and Gaussian.
+changelog=v4.1: Advanced Tuning for Feature stacking in addition to  LS Variance Fit, or Huber Variance Fit for ICESat-2 data filtering.
 plugin_dependencies=numpy,pandas,rasterio,matplotlib,seaborn,scikit-learn,scipy,joblib,scikit-optimize,sliderule,icepyx,geopandas,parquet
