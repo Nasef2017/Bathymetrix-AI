@@ -76,7 +76,7 @@ The tool evaluates results using three main standards:
 Open OSGeo4W Shell (as Administrator) and run:
 
 
-**pip install numpy pandas rasterio matplotlib seaborn scikit-learn scipy joblib scikit-optimize sliderule icepyx geopandas parquet**
+**python -m pip install "numpy<2.0.0" netCDF4 pandas rasterio matplotlib seaborn scikit-learn scipy joblib scikit-optimize sliderule icepyx geopandas parquet**
 
 📧 ***Contact & Citation***
 
