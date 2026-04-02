@@ -21,6 +21,8 @@ from qgis.core import (QgsProcessing,
 import sys
 import pandas as pd
 import numpy as np
+import os
+import tempfile
 
 # Attempt to import external libraries
 try:
@@ -58,7 +60,6 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
         return ''
 
     def shortHelpString(self):
-        # تم نقل الـ HTML بالكامل هنا ليظهر في اللوحة الجانبية
         return """
         <div style="font-family: Arial, sans-serif; line-height: 1.2;">
             <h2 style="margin-bottom: 5px;">🛰️ <span style="color: #2E86C1;">ICESat-2 Downloader</span>: NASA SlideRule Client</h2>
@@ -78,12 +79,6 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
                 <li><b>Track ID:</b> Specific RGT, Cycle, or Beam selection.</li>
             </ul>
 
-            <b style="display: block; margin-bottom: 2px;">⚙️ Advanced Processing</b>
-            <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li><b>Confidence Filtering:</b> Filter photons based on signal confidence.</li>
-                <li><b>Cloud/API:</b> Server-side processing for rapid retrieval.</li>
-            </ul>
-
             <p style="margin-top: 10px; border-top: 1px solid #ccc; padding-top: 5px;">
                 <b style="color: #E74C3C;">⚠️ Requirements:</b> Requires <i>sliderule</i> and <i>geopandas</i> Python libraries.
             </p>
@@ -95,13 +90,12 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
         """
 
     def helpString(self):
-        # استدعاء shortHelpString لضمان التطابق
         return self.shortHelpString()
 
     def initAlgorithm(self, config=None):
         self.addParameter(QgsProcessingParameterFeatureSource(self.INPUT, self.tr('Input AOI (Shapefile/Polygon)'), [QgsProcessing.TypeVectorPolygon]))
         
-        scenarios = [
+        scenarios =[
             "1. Quick Access (All Data)",              
             "2. Single Track (Requires RGT)",                 
             "3. Detailed Track (Classified)",    
@@ -129,6 +123,20 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
         if 'sliderule' not in sys.modules:
             raise QgsProcessingException("The 'sliderule' library is not installed.")
 
+        # =====================================================================
+        # مسار مؤقت آمن مضمون 100% يعتمد على نظام ويندوز الخاص بك
+        system_temp = tempfile.gettempdir()  # غالباً C:\Users\Nasef\AppData\Local\Temp
+        safe_temp_dir = os.path.join(system_temp, "sliderule_qgis_temp")
+        os.makedirs(safe_temp_dir, exist_ok=True)
+        
+        # إجبار بايثون ومكتبات الـ C++ (GDAL وغيرها) على استخدام هذا المسار
+        tempfile.tempdir = safe_temp_dir
+        os.environ['TMPDIR'] = safe_temp_dir
+        os.environ['TEMP'] = safe_temp_dir
+        os.environ['TMP'] = safe_temp_dir
+        os.environ['CPL_TMPDIR'] = safe_temp_dir # مهم جداً لـ GDAL
+        # =====================================================================
+
         sr.init("slideruleearth.io", verbose=False)
 
         # --- Inputs ---
@@ -137,7 +145,7 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
         transform = QgsCoordinateTransform(source.sourceCrs(), dest_crs, context.project())
         extent_wgs84 = transform.transformBoundingBox(source.sourceExtent())
         
-        aoi = [
+        aoi =[
             {"lon": extent_wgs84.xMinimum(), "lat": extent_wgs84.yMinimum()},
             {"lon": extent_wgs84.xMaximum(), "lat": extent_wgs84.yMinimum()},
             {"lon": extent_wgs84.xMaximum(), "lat": extent_wgs84.yMaximum()},
@@ -172,7 +180,7 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
             parms["cnf"] = -1
         elif scenario == 5: # ATL03 + YAPC
             api_endpoint = "atl03x"
-            parms.setdefault("atl24", {})["class_ph"] = ["bathymetry"]
+            parms.setdefault("atl24", {})["class_ph"] =["bathymetry"]
             parms.setdefault("fit", {})["res"] = 10
             parms["fit"]["len"] = 20
 
@@ -196,7 +204,7 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
         
         # --- Save to QGIS ---
         fields = QgsFields()
-        valid_cols = []
+        valid_cols =[]
         
         for col in gdf.columns:
             if col == 'geometry': continue

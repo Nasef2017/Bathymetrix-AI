@@ -14,7 +14,6 @@ from sklearn.tree import DecisionTreeRegressor
 from sklearn.neural_network import MLPRegressor
 from sklearn.svm import SVR
 from sklearn.model_selection import train_test_split, RandomizedSearchCV, GridSearchCV
-# ADDED r2_score here
 from sklearn.metrics import mean_squared_error, r2_score
 
 try:
@@ -66,7 +65,7 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
     PARAM_SVR = 'PARAM_SVR'
     PARAM_MLP = 'PARAM_MLP'
 
-    MODEL_LIST = ['Linear Regression', 'Random Forest', 'Gradient Boosting', 'Extra Trees', 'Ridge', 'Lasso', 'ElasticNet', 'KNN', 'Decision Tree', 'MLP (Neural Net)', 'SVR']
+    MODEL_LIST =['Linear Regression', 'Random Forest', 'Gradient Boosting', 'Extra Trees', 'Ridge', 'Lasso', 'ElasticNet', 'KNN', 'Decision Tree', 'MLP (Neural Net)', 'SVR']
     OPTIMIZER_LIST = ['Random Search', 'Grid Search', 'Bayesian Search']
     COLLISION_LIST = ['Keep All', 'Highest Conf', 'Closest', 'Hybrid', 'Strict Center']
 
@@ -198,6 +197,22 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
         for i in range(0, len(water_coords), chunk_size):
             chunk = water_coords[i:i+chunk_size]
             if len(chunk) > 0: residual_grid[chunk[:,0], chunk[:,1]] = knn_spatial.predict(chunk)
+            
+        # ------------------------------------------------------------------
+        # NEW: 2.5 EXPORT RESIDUAL ERROR MAP (VISUALIZING DISTORTION)
+        # ------------------------------------------------------------------
+        self.append_log("   Saving Residual Error Map...", log_path, feedback)
+        p_residual = os.path.join(out_dir, '4-Residual_Error_Map.tif')
+        meta_res = meta.copy()
+        meta_res.update(count=1, dtype='float32', nodata=-9999.0)
+        
+        # Replace 0s outside water mask with -9999.0 to focus on target areas
+        res_map_to_save = np.full((h, w), -9999.0, dtype='float32')
+        res_map_to_save[water_indices] = residual_grid[water_indices]
+        
+        with rasterio.open(p_residual, 'w', **meta_res) as dst:
+            dst.write(res_map_to_save, 1)
+        # ------------------------------------------------------------------
         
         # 3. CREATE STACK (Original + Global + Residual)
         with rasterio.open(feat_path) as f: orig_bands = f.read()
@@ -284,9 +299,10 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
         meta.update(count=1, nodata=-9999.0)
         with rasterio.open(p_final, 'w', **meta) as dst: dst.write(final_map, 1)
         
-        # --- RETURN METRICS ---
+        # --- RETURN METRICS & PATHS ---
         return {
             'OUTPUT_FINAL': p_final,
+            'OUTPUT_RESIDUAL': p_residual,  # <--- مسار خريطة الأخطاء المكانية
             'BEST_R2': best_r2,
             'BEST_RMSE': best_rmse,
             'BEST_WMAPE': best_wmape
@@ -295,7 +311,7 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
     def extract_values(self, ras, vec, fld, mode, logger_file, fb):
         ds = rasterio.open(ras); d = ds.read(); h, w = ds.height, ds.width
         tr = QgsCoordinateTransform(vec.sourceCrs(), QgsRasterLayer(ras).crs(), QgsProject.instance())
-        X_out, y_out, c_out = [], [], []
+        X_out, y_out, c_out = [], [],[]
 
         for f in vec.getFeatures():
             g = f.geometry(); g.transform(tr); pt = g.asPoint()
@@ -312,14 +328,14 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
         
         if index == 0: return 'Linear Regression', LinearRegression(), {}
         if index == 1: return 'Random Forest', RandomForestRegressor(n_jobs=1), ({'n_estimators': Integer(100, 500)} if is_bayes else {'n_estimators': [100, 300]})
-        if index == 2: return 'Gradient Boosting', GradientBoostingRegressor(), ({'learning_rate': Real(0.01, 0.2)} if is_bayes else {'learning_rate': [0.05, 0.1]})
+        if index == 2: return 'Gradient Boosting', GradientBoostingRegressor(), ({'learning_rate': Real(0.01, 0.2)} if is_bayes else {'learning_rate':[0.05, 0.1]})
         if index == 3: return 'Extra Trees', ExtraTreesRegressor(n_jobs=1), ({'n_estimators': Integer(100, 500)} if is_bayes else {'n_estimators': [100, 300]})
         if index == 4: return 'Ridge', Ridge(), ({'alpha': Real(0.1, 10.0)} if is_bayes else {'alpha': [0.1, 1.0]})
         if index == 5: return 'Lasso', Lasso(), ({'alpha': Real(0.01, 1.0)} if is_bayes else {'alpha': [0.01, 0.1]})
         if index == 6: return 'ElasticNet', ElasticNet(), ({'l1_ratio': Real(0.1, 0.9)} if is_bayes else {'l1_ratio': [0.5]})
         if index == 7: return 'KNN', KNeighborsRegressor(n_jobs=1), ({'n_neighbors': Integer(3, 15)} if is_bayes else {'n_neighbors': [5, 10]})
         if index == 8: return 'Decision Tree', DecisionTreeRegressor(), ({'max_depth': Integer(5, 20)} if is_bayes else {'max_depth': [5, 10]})
-        if index == 9: return 'MLP', MLPRegressor(max_iter=500), {'hidden_layer_sizes': [(100,), (100, 50)], 'activation': ['relu', 'tanh'], 'learning_rate_init': [0.001, 0.01]}
+        if index == 9: return 'MLP', MLPRegressor(max_iter=500), {'hidden_layer_sizes': [(100,), (100, 50)], 'activation':['relu', 'tanh'], 'learning_rate_init': [0.001, 0.01]}
         if index == 10: return 'SVR', SVR(cache_size=1000, max_iter=20000), ({'C': Real(1.0, 100.0)} if is_bayes else {'C': [10, 100], 'kernel':['rbf']})
             
         return 'Unknown', LinearRegression(), {}
