@@ -82,7 +82,7 @@ Open OSGeo4W Shell (as Administrator) and run:
 
 **Author:** Mohamed Aly Nasef  
 **Email:** Eng.m.nasef2017@gmail.com, Nasefm.aly@alexu.edu.eg  
-**Citation:** Nasef M.Aly. (2026). Nasef2017/Bathymetrix-AI: Bathymetrix-AI v4.1 (v4.1). Zenodo. https://doi.org/10.5281/zenodo.18730120
+**Citation:** Nasef M.Aly. (2026). Nasef2017/Bathymetrix-AI: v4.2 (v4.2). Zenodo. https://doi.org/10.5281/zenodo.19391111
 
 🤖 **AI Acknowledgment**  
 The development of the Bathymetrix-AI code, its logical structure, and the technical documentation were significantly enhanced and optimized using Google Gemini. The AI assisted in debugging complex workflows and ensuring the implementation follows best practices in data science.
