@@ -2,7 +2,8 @@
 icon=icon.png
 name=Bathymetrix-AI
 qgisMinimumVersion=3.22
-version=4.3
+qgisMaximumVersion=4.99
+version=4.7
 author=Nasef M. Aly
 email=Eng.m.nasef2017@gmail.com
 description=An advanced Machine Learning pipeline for Satellite-Derived Bathymetry (SDB). Features ICESat-2 integration, In-Situ Data filtering, and Spatial Residual Stacking.
@@ -35,5 +36,5 @@ tracker=https://github.com/Nasef2017/Bathymetrix-AI/issues
 
 tags=sdb,bathymetry,machine learning,icesat-2,ransac,spatial correction,remote sensing,hydrography,sentinel-2,python
 category=Raster
-changelog=v4.3: Enhance Stability.
-plugin_dependencies=numpy<2.0.0,pandas,rasterio,matplotlib,seaborn,scikit-learn,scipy,joblib,scikit-optimize,sliderule,icepyx,geopandas,parquet,netCDF4
+changelog=v4.7: Enhance Stability. Added full compatibility for QGIS 4.0 (Qt6/PyQt6) via qgis.PyQt.
+plugin_dependencies=numpy,pandas,rasterio,matplotlib,seaborn,scikit-learn>=1.5.0,scipy,joblib,scikit-optimize,sliderule,icepyx,geopandas,parquet,netCDF4

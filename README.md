@@ -73,16 +73,17 @@ The tool evaluates results using three main standards:
 **wMAPE** (Weighted Mean Absolute Percentage Error): Measures the relative error across different depth ranges.
 
 🛠️ **Installation & Dependencies**  
-Open OSGeo4W Shell (as Administrator) and run:
+Open **OSGeo4W Shell** (as Administrator) and run the following command to install all required libraries. This version is optimized for **QGIS 4.0 (Qt6)** and **NumPy 2.0** support:
 
-
-**python -m pip install "numpy<2.0.0" netCDF4 pandas rasterio matplotlib seaborn scikit-learn scipy joblib scikit-optimize sliderule icepyx geopandas parquet**
+```bash
+pip install numpy pandas rasterio matplotlib seaborn scikit-learn>=1.5.0 scipy joblib scikit-optimize sliderule icepyx geopandas parquet netCDF4
+```
 
 📧 ***Contact & Citation***
 
 **Author:** Mohamed Aly Nasef  
 **Email:** Eng.m.nasef2017@gmail.com, Nasefm.aly@alexu.edu.eg  
-**Citation:** Nasef M.Aly. (2026). Nasef2017/Bathymetrix-AI: Bathymetrix_AI V4.3 (v4.3). Zenodo. https://doi.org/10.5281/zenodo.19447811  
+**Citation:** Nasef M.Aly. (2026). Nasef2017/Bathymetrix-AI: Bathymetrix-AI v4.1 (v4.1). Zenodo. https://doi.org/10.5281/zenodo.18730120
 
 🤖 **AI Acknowledgment**  
 The development of the Bathymetrix-AI code, its logical structure, and the technical documentation were significantly enhanced and optimized using Google Gemini. The AI assisted in debugging complex workflows and ensuring the implementation follows best practices in data science.

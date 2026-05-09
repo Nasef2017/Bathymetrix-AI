@@ -1,5 +1,6 @@
 from qgis.core import QgsApplication
-from .provider import SdbProvider
+from .qgis_interface.provider import SdbProvider
+
 
 class SdbToolsPlugin:
     def __init__(self, iface):
