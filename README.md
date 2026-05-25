@@ -79,10 +79,12 @@ Open **OSGeo4W Shell** (as Administrator) and run the following command to insta
 pip install numpy pandas rasterio matplotlib seaborn scikit-learn>=1.5.0 scipy joblib scikit-optimize sliderule icepyx geopandas parquet netCDF4
 ```
 
-📧 ***Contact***
+📧 ***Contact & Citations***
 
 **Author:** Mohamed Aly Nasef  
 **Email:** Eng.m.nasef2017@gmail.com, Nasefm.aly@alexu.edu.eg  
+
+Nasef M.Aly. (2026). Nasef2017/Bathymetrix-AI: Bathymetrix_AI V4.8 (v4.8). Zenodo. https://doi.org/10.5281/zenodo.20387205
 
 🤖 **AI Acknowledgment**  
 The development of the Bathymetrix-AI code, its logical structure, and the technical documentation were significantly enhanced and optimized using Google Gemini. The AI assisted in debugging complex workflows and ensuring the implementation follows best practices in data science.
