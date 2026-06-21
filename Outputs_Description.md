@@ -98,7 +98,7 @@ This section explains every editable parameter in the plugin so you can tune it 
     *   **What it does:** Turns on the **Deep Water Filter** (fully customized for ML algorithms) to mathematically separate shallow from deep water and build the OSW mask.
 *   **NIR Percentile for Deep Water** `[Default: 10.0]`
     *   **What it does:** Uses the darkest 10% of NIR pixels to calculate the statistical deep water thresholds.
-*   **OSW Mask Median Filter Size** `[Default: 3]`
+*   **OSW Mask Median Filter Size** `[Default: 5]`
     *   **What it does:** Sets the size of the smoothing brush used to clean speckles from the OSW mask.
 
 ### 📏 [2] Phase 2: Training Data & Filtering
