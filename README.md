@@ -15,7 +15,7 @@
 
 
 **Bathymetrix-AI** is a professional QGIS research toolkit designed for high-precision Satellite-Derived Bathymetry (SDB). It integrates Sentinel-2 multispectral imagery with ICESat-2 (ATL24) LiDAR data using a modular and adaptive Machine Learning pipeline.
-The tool overcomes traditional bathymetry challenges like sun-glint, water turbidity, and local depth biases through a systematic 4-phase workflow.
+The tool overcomes traditional bathymetry challenges like sun-glint and deep-water noise through a systematic 4-phase workflow.
 
 
 <p align="center">
@@ -25,11 +25,12 @@ The tool overcomes traditional bathymetry challenges like sun-glint, water turbi
 🔬 **Scientific Methodology**
 The toolkit follows a modular workflow where each phase is designed to improve the accuracy of depth retrieval.
 
-**Phase 1: Automated Pre-processing & Feature Engineering**
+**Phase 1: Automated Pre-processing, Feature Engineering & Deep Water OSW Filtering**
 
 This phase prepares the satellite imagery by isolating the aquatic domain and correcting radiometric noise.  
 **Sun-Glint Removal:** Removes surface reflections to reveal the seabed signal.  
-**Water Segmentation:** Uses an adaptive threshold to mask land and clouds.  
+**Water Segmentation:** Features a **new Advanced Water Mask** using 3-Indices (NDWI, MNDWI, NWI) alongside adaptive thresholding to accurately isolate the aquatic domain.
+**Deep Water OSW Filtering:** Features a **Deep Water Filter** fully customized for ML algorithms, automatically calculating deep water statistical thresholds to isolate the Optically Shallow Water (OSW) zone where bathymetry is valid.
 **Log-Ratio Features:** Transforms spectral bands into depth-sensitive features based on light attenuation laws.
 
 ***Key References:***  
@@ -84,7 +85,7 @@ pip install numpy pandas rasterio matplotlib seaborn scikit-learn>=1.5.0 scipy j
 **Author:** Mohamed Aly Nasef  
 **Email:** Eng.m.nasef2017@gmail.com, Nasefm.aly@alexu.edu.eg  
 
-Nasef M.Aly. (2026). Nasef2017/Bathymetrix-AI: Bathymetrix_AI V4.8 (v4.8). Zenodo. https://doi.org/10.5281/zenodo.20387205
+Nasef M.Aly. (2026). Nasef2017/Bathymetrix-AI: Bathymetrix_AI V5.0 (v5.0). Zenodo. https://doi.org/10.5281/zenodo.20782533
 
 🤖 **AI Acknowledgment**  
 The development of the Bathymetrix-AI code, its logical structure, and the technical documentation were significantly enhanced and optimized using Google Gemini. The AI assisted in debugging complex workflows and ensuring the implementation follows best practices in data science.
