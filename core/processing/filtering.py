@@ -89,7 +89,7 @@ def extract_and_calc_robust(ras_path, vec_layer, depth_fld, b_idx, g_idx, fb):
 
         if count_valid == 0:
             hint = (
-                "Hint: Uncheck 'Enable Water Masking' in Phase 1 if 'NoData' is high."
+                "Hint: Uncheck 'Enable Water Masking' in Phase 01 if 'NoData' is high."
                 if count_nodata > 0
                 else "Hint: Check CRS alignment."
             )

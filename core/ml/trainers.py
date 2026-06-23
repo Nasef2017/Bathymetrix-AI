@@ -450,7 +450,7 @@ def run_benchmarking(
     }
 
 
-def predict_map(model, stack_path, mask_path, out_path, med_size, output_format="float32"):
+def predict_map(model, stack_path, mask_path, out_path, med_size, output_format="float32", selected_indices=None):
     with rasterio.open(stack_path) as s:
         d = s.read()
         h, w = s.height, s.width
@@ -467,6 +467,10 @@ def predict_map(model, stack_path, mask_path, out_path, med_size, output_format=
     if len(water_idx) == 0:
         return
     X_pixels = np.nan_to_num(d_flat[water_idx], nan=0.0)
+    
+    if selected_indices is not None and len(selected_indices) > 0:
+        X_pixels = X_pixels[:, selected_indices]
+        
     preds = model.predict(X_pixels)
     out_img = np.full(h * w, -9999.0, dtype="float32")
     out_img[water_idx] = preds
@@ -569,6 +573,17 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
     col_mode = algorithm.parameterAsInt(
         parameters, algorithm.COLLISION_HANDLING, context
     )
+    
+    try:
+        corr_idx = algorithm.parameterAsEnum(parameters, algorithm.FEATURE_CORR_THRESHOLD, context)
+        corr_threshold = float(corr_idx) / 10.0
+    except:
+        corr_threshold = 0.2
+
+    try:
+        corr_method_idx = algorithm.parameterAsEnum(parameters, algorithm.FEATURE_CORR_METHOD, context)
+    except:
+        corr_method_idx = 1
 
     append_log(
         f"MODULE 03 START: Optimizer = {OPTIMIZER_LIST[opt_idx]}", log_path, feedback
@@ -591,6 +606,74 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
         stack_path,
         points_layer.sourceCrs(),
     )
+    
+    selected_indices = None
+    if corr_threshold > 0.0:
+        append_log(f"   [Feature Analysis] Running with threshold >= {corr_threshold}", log_path, feedback)
+        num_bands = X.shape[1]
+        correlations = []
+        method_name = "Spearman" if corr_method_idx == 1 else "Pearson"
+        
+        if corr_method_idx == 1:
+            try:
+                from scipy.stats import spearmanr
+            except ImportError:
+                method_name = "Pearson (Fallback)"
+                corr_method_idx = 0
+                
+        for b in range(num_bands):
+            std_X = np.std(X[:, b])
+            std_y = np.std(y)
+            if std_X == 0 or std_y == 0:
+                r = 0.0
+            else:
+                if corr_method_idx == 1:
+                    r = spearmanr(X[:, b], y)[0]
+                else:
+                    r = np.corrcoef(X[:, b], y)[0, 1]
+            if np.isnan(r):
+                r = 0.0
+            correlations.append(r)
+        
+        correlations = np.array(correlations)
+        abs_correlations = np.abs(correlations)
+        selected_indices = np.where(abs_correlations >= corr_threshold)[0]
+        
+        if len(selected_indices) == 0:
+            append_log(f"   [Warning] No bands met threshold {corr_threshold}. Using all bands.", log_path, feedback)
+            selected_indices = np.arange(num_bands)
+        else:
+            append_log(f"   [Feature Analysis] Selected {len(selected_indices)} bands: {list(selected_indices)}", log_path, feedback)
+            X = X[:, selected_indices]
+            
+        report_path = os.path.join(out_dir, "3_Feature_Analysis_Report.txt")
+        with open(report_path, "w") as f:
+            f.write(f"Feature Analysis - {method_name} Correlation with Depth\n")
+            f.write("-" * 50 + "\n")
+            for b in range(num_bands):
+                status = "Selected" if b in selected_indices else "Discarded"
+                f.write(f"Band_{b+1}: r = {correlations[b]:.4f}  | abs(r) = {abs_correlations[b]:.4f}  [{status}]\n")
+                
+        try:
+            import matplotlib.pyplot as plt
+            plt.figure(figsize=(10, 6))
+            bars = plt.bar(range(1, num_bands + 1), abs_correlations, color='skyblue')
+            plt.axhline(y=corr_threshold, color='r', linestyle='--', label=f'Threshold ({corr_threshold})')
+            for i, b in enumerate(bars):
+                if i not in selected_indices:
+                    b.set_color('lightgray')
+            plt.xlabel('Band Number')
+            plt.ylabel(f'Absolute {method_name} Correlation (|r|)')
+            plt.title(f'Feature Correlation with Depth ({method_name})')
+            plt.xticks(range(1, num_bands + 1))
+            plt.legend()
+            plt.grid(axis='y', linestyle='--', alpha=0.7)
+            plt.tight_layout()
+            plt.savefig(os.path.join(out_dir, "3_Feature_Correlation_Plot.png"), dpi=150)
+            plt.close()
+        except Exception as e:
+            append_log(f"   [Warning] Failed to generate correlation plot: {e}", log_path, feedback)
+
     # Direct layer addition removed to prevent auto-loading in panel.
     # The output is returned to the processing framework instead.
     # QgsProject.instance().addMapLayer(QgsVectorLayer(actual_pts_path, "3_Actual_Model_Input_Points", "ogr"))
@@ -627,7 +710,7 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
     p_map = os.path.join(out_dir, "3_Initial_Global_Depth.tif")
 
     append_log("   Generating prediction map...", log_path, feedback)
-    predict_map(best_algo_data["model"], stack_path, mask_path, p_map, med_size, output_format)
+    predict_map(best_algo_data["model"], stack_path, mask_path, p_map, med_size, output_format, selected_indices)
     # Direct layer addition removed to prevent auto-loading in panel.
     # The output is returned to the processing framework instead.
     # QgsProject.instance().addMapLayer(QgsRasterLayer(p_map, f"3_Initial_Global_Depth ({win_name})"))

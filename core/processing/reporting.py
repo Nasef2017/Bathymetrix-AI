@@ -126,23 +126,23 @@ def write_final_verdict(out_dir, s3, s4, n_val, p3_name, p4_name):
         winner = "TIE — No significant difference between models"
         reason = "RMSE difference is within 0.01 m tolerance."
     elif s4["RMSE"] < s3["RMSE"]:
-        winner = "PHASE 4 (Refined / Best Map)"
+        winner = "Phase 04 (Refined / Best Map)"
         reason = "Lower RMSE confirms improvement from adaptive refinement."
     else:
-        winner = "PHASE 3 (Global Model)"
-        reason = "Phase 4 did not improve RMSE — possible overfitting in adaptive step."
+        winner = "Phase 03 (Global Model)"
+        reason = "Phase 04 did not improve RMSE — possible overfitting in adaptive step."
 
     sep = "=" * 65
     lines = [
         sep,
         "           SDB FINAL SCIENTIFIC VALIDATION REPORT          ",
         sep,
-        f"  Phase 3 map : {p3_name}",
-        f"  Phase 4 map : {p4_name}",
+        f"  Phase 03 map : {p3_name}",
+        f"  Phase 04 map : {p4_name}",
         f"  Validation points used : {n_val}",
         "",
         "--- METRICS COMPARISON (VALIDATION SET) ---",
-        f"{'Metric':<12} {'Phase 3 (Global)':>20} {'Phase 4 (Refined)':>20} {'Improvement':>15}",
+        f"{'Metric':<12} {'Phase 03 (Global)':>20} {'Phase 04 (Refined)':>20} {'Improvement':>15}",
         "-" * 70,
         f"{'RMSE (m)':<12} {s3['RMSE']:>20.4f} {s4['RMSE']:>20.4f} {imp_rmse:>+14.2f}%",
         f"{'R²':<12} {s3['R2']:>20.4f} {s4['R2']:>20.4f} {imp_r2:>+14.2f} pts",
@@ -216,8 +216,8 @@ def plot_scatter(obs, p3, p4, s3, s4, out_dir):
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
     use_kde = len(obs) <= 5000
 
-    _subplot_scatter(axes[0], obs, p3, s3, "Phase 3: Global Model", use_kde)
-    _subplot_scatter(axes[1], obs, p4, s4, "Phase 4: Refined / Best Map", use_kde)
+    _subplot_scatter(axes[0], obs, p3, s3, "Phase 03: Global Model", use_kde)
+    _subplot_scatter(axes[1], obs, p4, s4, "Phase 04: Refined / Best Map", use_kde)
 
     plt.suptitle(
         "Observed vs Predicted Depth (Validation Set)",
@@ -237,13 +237,13 @@ def plot_residuals(obs, p3, p4, out_dir):
 
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.scatter(
-        obs, res3, alpha=0.35, label="Phase 3 Residuals", color="gray", s=15, zorder=2
+        obs, res3, alpha=0.35, label="Phase 03 Residuals", color="gray", s=15, zorder=2
     )
     ax.scatter(
         obs,
         res4,
         alpha=0.35,
-        label="Phase 4 Residuals",
+        label="Phase 04 Residuals",
         color="dodgerblue",
         s=15,
         zorder=3,
@@ -280,7 +280,7 @@ def plot_histograms(obs, p3, p4, out_dir):
     sns.histplot(
         res3,
         color="gray",
-        label="Phase 3 Error",
+        label="Phase 03 Error",
         kde=True,
         stat="density",
         alpha=0.4,
@@ -290,7 +290,7 @@ def plot_histograms(obs, p3, p4, out_dir):
     sns.histplot(
         res4,
         color="dodgerblue",
-        label="Phase 4 Error",
+        label="Phase 04 Error",
         kde=True,
         stat="density",
         alpha=0.4,
@@ -373,8 +373,8 @@ def run_phase05_reporting(algorithm, parameters, context, feedback):
     stats_p4 = calc_stats(y_val, val_p4)
 
     strat_rows = []
-    strat_rows.extend(stratified_analysis(y_val, val_p3, "Phase 3 (Global)"))
-    strat_rows.extend(stratified_analysis(y_val, val_p4, "Phase 4 (Refined)"))
+    strat_rows.extend(stratified_analysis(y_val, val_p3, "Phase 03 (Global)"))
+    strat_rows.extend(stratified_analysis(y_val, val_p4, "Phase 04 (Refined)"))
     pd.DataFrame(strat_rows).to_csv(
         os.path.join(out_dir, "5_Stratified_Error_Analysis.csv"), index=False
     )

@@ -32,7 +32,7 @@ class SDBModule02(QgsProcessingAlgorithm):
     def initAlgorithm(self, config=None):
         self.addParameter(
             QgsProcessingParameterRasterLayer(
-                self.INPUT_STACK, "Input Feature Stack (Phase 1)"
+                self.INPUT_STACK, "Input Feature Stack (Phase 01)"
             )
         )
         self.addParameter(

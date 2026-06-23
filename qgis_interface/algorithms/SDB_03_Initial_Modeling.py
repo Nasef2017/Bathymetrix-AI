@@ -28,6 +28,8 @@ class SDBModule03(QgsProcessingAlgorithm):
     COLLISION_HANDLING = "COLLISION_HANDLING"
     N_ITERATIONS = "N_ITERATIONS"
     MEDIAN_SIZE = "MEDIAN_SIZE"
+    FEATURE_CORR_THRESHOLD = "FEATURE_CORR_THRESHOLD"
+    FEATURE_CORR_METHOD = "FEATURE_CORR_METHOD"
     OUTPUT_FOLDER = "OUTPUT_FOLDER"
     LOG_FILE = "LOG_FILE"
     OUTPUT_DEPTH_MAP = "OUTPUT_DEPTH_MAP"
@@ -134,6 +136,22 @@ class SDBModule03(QgsProcessingAlgorithm):
                 "Optimization Iterations",
                 type=QgsProcessingParameterNumber.Integer,
                 defaultValue=10,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.FEATURE_CORR_METHOD,
+                "Feature Correlation Method",
+                options=["Pearson (Linear)", "Spearman (Rank)"],
+                defaultValue=1,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.FEATURE_CORR_THRESHOLD,
+                "Feature Correlation Threshold",
+                options=['0.0 (Disable)', '0.1', '0.2', '0.3', '0.4', '0.5', '0.6', '0.7', '0.8', '0.9', '1.0'],
+                defaultValue=2,
             )
         )
 
@@ -244,6 +262,7 @@ class SDBModule03(QgsProcessingAlgorithm):
 
         <h3>Settings:</h3>
         <ul>
+            <li><b>Feature Correlation Threshold:</b> Optionally type a threshold (e.g. 0.1). Any band whose Pearson or Spearman correlation with Depth is below this value will be automatically discarded from training. Leave as 0.0 to disable and use all bands.</li>
             <li><b>Select Algorithms:</b> Choose which ML algorithms to benchmark. The tool will pick the winner based on R2 and RMSE.</li>
             <li><b>Optimizer:</b> Method to tune hyperparameters (Random, Grid, or Bayesian Search).</li>
             <li><b>Collision Handling:</b> Determines how to handle multiple points falling within the same raster pixel (e.g., keep all, take the closest to center, or average them).</li>
@@ -252,6 +271,7 @@ class SDBModule03(QgsProcessingAlgorithm):
         <h3>Outputs:</h3>
         <p>Saves all outputs to the selected folder, including:</p>
         <ul>
+            <li><b>Feature Analysis Report & Plot:</b> Shows which bands passed the correlation threshold and were used for training.</li>
             <li><b>Initial Global Depth Map:</b> The predicted bathymetry raster using the winning model.</li>
             <li><b>Best Global Model (.pkl):</b> The trained model file to be used in subsequent modules.</li>
             <li><b>Benchmark CSV:</b> Detailed results for all tested algorithms.</li>

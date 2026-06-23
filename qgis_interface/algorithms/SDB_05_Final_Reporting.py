@@ -24,12 +24,12 @@ class SDBModule05(QgsProcessingAlgorithm):
     def initAlgorithm(self, config=None):
         self.addParameter(
             QgsProcessingParameterRasterLayer(
-                self.INPUT_MAP_P3, "Phase 3 Depth Map (Initial Global)"
+                self.INPUT_MAP_P3, "Phase 03 Depth Map (Initial Global)"
             )
         )
         self.addParameter(
             QgsProcessingParameterRasterLayer(
-                self.INPUT_MAP_P4, "Phase 4 Depth Map (Final Refined / Best Map)"
+                self.INPUT_MAP_P4, "Phase 04 Depth Map (Final Refined / Best Map)"
             )
         )
 
@@ -86,7 +86,7 @@ class SDBModule05(QgsProcessingAlgorithm):
         return """
         <div style="font-family: Arial, sans-serif; line-height: 1.4;">
             <h2 style="color: #2E86C1;">SDB Phase 05 — Scientific Validation</h2>
-            <p>Compares Phase 3 (global model) vs Phase 4 (best final map) against unseen validation points.</p>
+            <p>Compares Phase 03 (global model) vs Phase 04 (best final map) against unseen validation points.</p>
 
             <b>Metrics Calculated:</b>
             <ul>

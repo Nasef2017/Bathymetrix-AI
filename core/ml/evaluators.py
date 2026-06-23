@@ -256,6 +256,18 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
     opt_idx = algorithm.parameterAsInt(parameters, algorithm.OPTIMIZER_METHOD, context)
 
     col_mode = 0
+    
+    try:
+        corr_idx = algorithm.parameterAsEnum(parameters, algorithm.FEATURE_CORR_THRESHOLD, context)
+        corr_threshold = float(corr_idx) / 10.0
+    except:
+        corr_threshold = 0.2
+
+    try:
+        corr_method_idx = algorithm.parameterAsEnum(parameters, algorithm.FEATURE_CORR_METHOD, context)
+    except:
+        corr_method_idx = 1
+
     append_log(
         f"MODULE 04 START: Refinement Phase | Opt={OPTIMIZER_LIST[opt_idx]}",
         log_path,
@@ -328,6 +340,52 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
         p_stack, train_lyr, train_fld, col_mode, log_path, feedback
     )
     y_final = y_final.flatten()
+
+    selected_indices = None
+    if corr_threshold > 0.0:
+        append_log(f"   [Feature Analysis] Running with threshold >= {corr_threshold}", log_path, feedback)
+        num_bands = X_final.shape[1]
+        correlations = []
+        method_name = "Spearman" if corr_method_idx == 1 else "Pearson"
+        
+        if corr_method_idx == 1:
+            try:
+                from scipy.stats import spearmanr
+            except ImportError:
+                method_name = "Pearson (Fallback)"
+                corr_method_idx = 0
+                
+        for b in range(num_bands):
+            std_X = np.std(X_final[:, b])
+            std_y = np.std(y_final)
+            if std_X == 0 or std_y == 0:
+                r = 0.0
+            else:
+                if corr_method_idx == 1:
+                    r = spearmanr(X_final[:, b], y_final)[0]
+                else:
+                    r = np.corrcoef(X_final[:, b], y_final)[0, 1]
+            if np.isnan(r):
+                r = 0.0
+            correlations.append(r)
+        
+        abs_correlations = np.abs(np.array(correlations))
+        selected_indices = np.where(abs_correlations >= corr_threshold)[0]
+        
+        if len(selected_indices) == 0:
+            append_log(f"   [Warning] No bands met threshold {corr_threshold}. Using all bands.", log_path, feedback)
+            selected_indices = np.arange(num_bands)
+        else:
+            append_log(f"   [Feature Analysis] Selected {len(selected_indices)} bands: {list(selected_indices)}", log_path, feedback)
+            X_final = X_final[:, selected_indices]
+            
+        report_path = os.path.join(out_dir, "4_Feature_Analysis_Report.txt")
+        with open(report_path, "w") as f:
+            f.write(f"Phase 04 Feature Analysis - {method_name} Correlation with Depth\n")
+            f.write("-" * 50 + "\n")
+            for b in range(num_bands):
+                status = "Selected" if b in selected_indices else "Discarded"
+                f.write(f"Feature_{b+1}: r = {correlations[b]:.4f}  | abs(r) = {abs_correlations[b]:.4f}  [{status}]\n")
 
     X_train, X_val, y_train, y_val = train_test_split(
         X_final, y_final, test_size=test_size, random_state=random_state
@@ -411,6 +469,10 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
     append_log(f"   Predicting Final Map using {best_algo_name}...", log_path, feedback)
     X_map = stack[:, water_indices[0], water_indices[1]].T
     X_map = np.nan_to_num(X_map, nan=0.0)
+    
+    if selected_indices is not None and len(selected_indices) > 0:
+        X_map = X_map[:, selected_indices]
+        
     z_out = best_model.predict(X_map)
 
     final_map = np.full((h, w), -9999.0, dtype="float32")

@@ -146,7 +146,7 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
         else:
             enable_val = False
 
-    append_log("\n>>> Phase 1: Pre-processing...", log_path, feedback)
+    append_log("\n>>> Phase 01: Pre-processing...", log_path, feedback)
     p1 = processing.run(
         "sdb_tools:sdb_phase1_preprocessing",
         {
@@ -187,7 +187,7 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
 
     path_clean = final_train
     if algorithm.parameterAsBool(parameters, algorithm.ENABLE_RANSAC, context):
-        append_log("\n>>> Phase 2: Filtering & Uncertainty...", log_path, feedback)
+        append_log("\n>>> Phase 02: Filtering & Uncertainty...", log_path, feedback)
         p2 = processing.run(
             "sdb_tools:sdb_02_filtering",
             {
@@ -207,7 +207,7 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
         )
         path_clean = p2["OUTPUT_CLEAN_VEC"]
 
-    append_log("\n>>> Phase 3: Global Modeling...", log_path, feedback)
+    append_log("\n>>> Phase 03: Global Modeling...", log_path, feedback)
     p3_params = {
         "INPUT_STACK": p1["OUTPUT_FEATURES"],
         "INPUT_POINTS": path_clean,
@@ -220,6 +220,8 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
         "COLLISION_HANDLING": parameters[algorithm.COLLISION_HANDLING],
         "N_ITERATIONS": parameters[algorithm.N_ITERATIONS],
         "MEDIAN_SIZE": parameters[algorithm.MEDIAN_SIZE],
+        "FEATURE_CORR_THRESHOLD": parameters.get(algorithm.FEATURE_CORR_THRESHOLD, 2),
+        "FEATURE_CORR_METHOD": parameters.get(algorithm.FEATURE_CORR_METHOD, 0),
         "OUTPUT_FOLDER": out_dir,
         "LOG_FILE": log_path,
         "PARAM_RF": parameters[algorithm.PARAM_RF],
@@ -249,11 +251,11 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
     )
 
     if "BEST_R2" in p3:
-        append_log(f"[Phase 3] R2: {p3['BEST_R2']:.4f}", log_path, feedback)
+        append_log(f"[Phase 03] R2: {p3['BEST_R2']:.4f}", log_path, feedback)
 
     path_refined = p3["OUTPUT_DEPTH_MAP"]
     if algorithm.parameterAsBool(parameters, algorithm.ENABLE_ADAPTIVE, context):
-        append_log("\n>>> Phase 4: Adaptive Refinement...", log_path, feedback)
+        append_log("\n>>> Phase 04: Adaptive Refinement...", log_path, feedback)
 
         ad_layer = algorithm.parameterAsVectorLayer(
             parameters, algorithm.INPUT_ADAPTIVE_TRAIN, context
@@ -279,6 +281,8 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
             "COLLISION_HANDLING": parameters[algorithm.COLLISION_HANDLING],
             "N_ITERATIONS": parameters[algorithm.N_ITERATIONS],
             "MEDIAN_SIZE": parameters[algorithm.MEDIAN_SIZE],
+            "FEATURE_CORR_THRESHOLD": parameters.get(algorithm.FEATURE_CORR_THRESHOLD, 2),
+            "FEATURE_CORR_METHOD": parameters.get(algorithm.FEATURE_CORR_METHOD, 0),
             "OUTPUT_FOLDER": out_dir,
             "LOG_FILE": log_path,
             "PARAM_RF": parameters[algorithm.PARAM_RF],
@@ -309,7 +313,7 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
         path_refined = p4["OUTPUT_FINAL"]
 
         if "BEST_R2" in p4:
-            append_log(f"[Phase 4] R2: {p4['BEST_R2']:.4f}", log_path, feedback)
+            append_log(f"[Phase 04] R2: {p4['BEST_R2']:.4f}", log_path, feedback)
 
     feat_stack = p1["OUTPUT_FEATURES"]
 
@@ -327,7 +331,7 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
             current_p3 = p3_clamped
 
         if p1.get("OUTPUT_OSW_POLY") and os.path.exists(p1["OUTPUT_OSW_POLY"]):
-            append_log("\n>>> Clipping Phase 3 Map with OSW Polygon...", log_path, feedback)
+            append_log("\n>>> Clipping Phase 03 Map with OSW Polygon...", log_path, feedback)
             p3_osw_clipped = os.path.join(out_dir, "Phase03_Depth_OSW_Clipped.tif")
             processing.run(
                 "gdal:cliprasterbymasklayer",
@@ -376,7 +380,7 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
             path_refined = p4_no_pos
 
         if p1.get("OUTPUT_OSW_POLY") and os.path.exists(p1["OUTPUT_OSW_POLY"]):
-            append_log("\n>>> Clipping Phase 4 Map with OSW Polygon...", log_path, feedback)
+            append_log("\n>>> Clipping Phase 04 Map with OSW Polygon...", log_path, feedback)
             p4_osw_clipped = os.path.join(out_dir, "Phase04_Final_Depth_OSW_Clipped.tif")
             processing.run(
                 "gdal:cliprasterbymasklayer",
@@ -400,7 +404,7 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
                 path_refined = p4_osw_clipped
 
     if enable_val and final_test:
-        append_log("\n>>> Phase 5: Validation...", log_path, feedback)
+        append_log("\n>>> Phase 05: Validation...", log_path, feedback)
         processing.run(
             "sdb_tools:sdb_05_reporting",
             {
@@ -421,13 +425,13 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
 
     if p3.get("OUTPUT_DEPTH_MAP") and os.path.exists(p3["OUTPUT_DEPTH_MAP"]):
         details_init = QgsProcessingContext.LayerDetails(
-            "Initial SDB Map [Phase 3]", QgsProject.instance(), "Initial SDB"
+            "Initial SDB Map [Phase 03]", QgsProject.instance(), "Initial SDB"
         )
         context.addLayerToLoadOnCompletion(p3["OUTPUT_DEPTH_MAP"], details_init)
 
     if path_refined and os.path.exists(path_refined):
         details_ref = QgsProcessingContext.LayerDetails(
-            "Refined SDB Map [Phase 4]", QgsProject.instance(), "Refined SDB"
+            "Refined SDB Map [Phase 04]", QgsProject.instance(), "Refined SDB"
         )
         context.addLayerToLoadOnCompletion(path_refined, details_ref)
 

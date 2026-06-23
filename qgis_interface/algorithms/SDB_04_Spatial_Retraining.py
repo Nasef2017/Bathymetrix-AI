@@ -30,6 +30,8 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
     COLLISION_HANDLING = "COLLISION_HANDLING"
     N_ITERATIONS = "N_ITERATIONS"
     MEDIAN_SIZE = "MEDIAN_SIZE"
+    FEATURE_CORR_THRESHOLD = "FEATURE_CORR_THRESHOLD"
+    FEATURE_CORR_METHOD = "FEATURE_CORR_METHOD"
 
     OUTPUT_FOLDER = "OUTPUT_FOLDER"
     LOG_FILE = "LOG_FILE"
@@ -71,7 +73,7 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
     def initAlgorithm(self, config=None):
         self.addParameter(
             QgsProcessingParameterRasterLayer(
-                self.INPUT_GLOBAL_RASTER, "Input Phase 3 Depth Map"
+                self.INPUT_GLOBAL_RASTER, "Input Phase 03 Depth Map"
             )
         )
         self.addParameter(
@@ -130,6 +132,22 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
                 "Optimization Iterations",
                 type=QgsProcessingParameterNumber.Integer,
                 defaultValue=10,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.FEATURE_CORR_METHOD,
+                "Feature Correlation Method",
+                options=["Pearson (Linear)", "Spearman (Rank)"],
+                defaultValue=1,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.FEATURE_CORR_THRESHOLD,
+                "Feature Correlation Threshold",
+                options=['0.0 (Disable)', '0.1', '0.2', '0.3', '0.4', '0.5', '0.6', '0.7', '0.8', '0.9', '1.0'],
+                defaultValue=2,
             )
         )
         self.addParameter(
@@ -250,7 +268,7 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
 
             <b style="display: block; margin-bottom: 2px;">📉 Residual Analysis</b>
             <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li>Calculates the error <i>(Residual = True Depth - Phase 3 Depth)</i> at training points.</li>
+                <li>Calculates the error <i>(Residual = True Depth - Phase 03 Depth)</i> at training points.</li>
                 <li>Uses <b>KNN Spatial Interpolation</b> to create a continuous "Error Grid" across the entire image.</li>
             </ul>
 

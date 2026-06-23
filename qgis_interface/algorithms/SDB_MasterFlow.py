@@ -79,6 +79,8 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
     COLLISION_HANDLING = "COLLISION_HANDLING"
     N_ITERATIONS = "N_ITERATIONS"
     MEDIAN_SIZE = "MEDIAN_SIZE"
+    FEATURE_CORR_METHOD = "FEATURE_CORR_METHOD"
+    FEATURE_CORR_THRESHOLD = "FEATURE_CORR_THRESHOLD"
 
     PARAM_RF = "PARAM_RF"
     PARAM_GB = "PARAM_GB"
@@ -176,9 +178,9 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
             <b style="display: block; margin-bottom: 2px;">🌊 Phase 01: Advanced Pre-processing</b>
             <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
                 <li>Sun-glint correction <i>(Hedley et al., 2005)</i>.</li>
-                <li><b>New Advanced Water Masking</b> using 3-Indices (NDWI, MNDWI, NWI).</li>
+                <li><b>Advanced Water Masking</b> using 3-Indices (NDWI, MNDWI, NWI).</li>
                 <li>Physics-based Log-Ratio features computation.</li>
-                <li><b>Deep Water Filter</b> (OSW Mask), fully customized for ML algorithms.</li>
+                <li><b>Deep Water Filter</b> (OSW Mask), customized for ML algorithms.</li>
             </ul>
 
             <b style="display: block; margin-bottom: 2px;">🎯 Phase 02: Robust Filtering</b>
@@ -186,8 +188,9 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
                 <li>Noise removal using <b>Linear RANSAC</b>, <b>LS Variance Fit</b>, or <b>Huber Variance Fit</b> <i>(Zhang et al., 2021)</i>.</li>
             </ul>
 
-            <b style="display: block; margin-bottom: 2px;">🤖 Phase 03: Global Auto-ML</b>
+            <b style="display: block; margin-bottom: 2px;">🤖 Phase 03: Global Auto-ML & Feature Analysis</b>
             <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
+                <li><b>Feature Analysis:</b> Optionally drop weak bands based on their Pearson or Spearman correlation with the target depth.</li>
                 <li>Benchmarks 11 algorithms (RF, GBM, MLP, SVR, etc.).</li>
                 <li>Optimization via <b>Random Search</b>, Grid Search, or Bayesian <i>(Bergstra & Bengio, 2012)</i>.</li>
                 <li>Fully <b>Customizable Hyperparameters</b> for fine-tuning.</li>
@@ -211,10 +214,13 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
 
     def helpString(self):
         return """<b>SDB Master Workflow (Full Pipeline)</b><br><br>
-        This tool executes a complete Auto-ML pipeline for Satellite-Derived Bathymetry (SDB).<br><br>
+        This tool executes a complete Auto-ML pipeline for Satellite-Derived Bathymetry (SDB) using a 5-phase scientific methodology.<br><br>
         <b>Outputs Explained:</b><br>
-        • <b>Initial SDB Map[Phase 3]:</b> The base depth map produced after the global machine learning modeling.<br>
-        • <b>Refined SDB Map [Phase 4]:</b> The final, highly accurate depth map after applying adaptive localized corrections.<br><br>
+        • <b>Phase 01:</b> Outputs intermediate feature layers including sun-glint corrected bands, water masks, and physical log-ratio features.<br>
+        • <b>Phase 02:</b> Outputs the filtered and robust ground truth altimetry data (e.g., ICESat-2).<br>
+        • <b>Phase 03 (Initial SDB Map):</b> The base depth map produced after global machine learning benchmarking and hyperparameter optimization.<br>
+        • <b>Phase 04 (Refined SDB Map):</b> The final, highly accurate depth map after applying adaptive localized corrections based on spatial residual analysis.<br>
+        • <b>Phase 05 (Validation):</b> Outputs comprehensive accuracy assessment reports and error distribution charts.<br><br>
         <i>* Note: All output files are automatically saved to your specified 'Main Output Folder' and loaded cleanly into the map canvas upon completion.</i>
         """
 
@@ -246,7 +252,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         )
 
         # -------------------------------------------------------------------
-        # [1] Phase 1: Pre-processing (Bands & Sunglint)
+        # [1] Phase 01: Advanced Pre-processing
         # -------------------------------------------------------------------
         self.addParameter(
             QgsProcessingParameterBand(
@@ -322,7 +328,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         )
 
         # -------------------------------------------------------------------
-        # [1] Phase 1: Masking & Features
+        # [1] Phase 01: Advanced Pre-processing (Masking & Features)
         # -------------------------------------------------------------------
         self.addParameter(
             QgsProcessingParameterVectorLayer(
@@ -408,7 +414,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         )
 
         # -------------------------------------------------------------------
-        # [1] Phase 1: OSW Filter (Deep Water)
+        # [1] Phase 01: Advanced Pre-processing (OSW Filter)
         # -------------------------------------------------------------------
         self.addParameter(
             QgsProcessingParameterBoolean(
@@ -466,7 +472,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         self.addParameter(p_extract)
 
         # -------------------------------------------------------------------
-        # [2] Phase 2: Training Data & Filtering
+        # [2] Phase 02: Robust Filtering
         # -------------------------------------------------------------------
         self.addParameter(
             QgsProcessingParameterVectorLayer(
@@ -530,7 +536,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         )
 
         # -------------------------------------------------------------------
-        # [3] Phase 3: Global Modeling (Auto-ML)
+        # [3] Phase 03: Global Auto-ML & Feature Analysis
         # -------------------------------------------------------------------
         self.addParameter(
             QgsProcessingParameterEnum(
@@ -571,6 +577,22 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
                 "🤖 [3] Output Median Filter Size",
                 type=QgsProcessingParameterNumber.Integer,
                 defaultValue=5,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.FEATURE_CORR_METHOD,
+                "🤖 [3] Feature Correlation Method",
+                options=["Pearson (Linear)", "Spearman (Rank)"],
+                defaultValue=1,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.FEATURE_CORR_THRESHOLD,
+                "🤖 [3] Feature Correlation Threshold",
+                options=['0.0 (Disable)', '0.1', '0.2', '0.3', '0.4', '0.5', '0.6', '0.7', '0.8', '0.9', '1.0'],
+                defaultValue=2,
             )
         )
 
@@ -634,7 +656,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         self.addParameter(p_dt)
 
         # -------------------------------------------------------------------
-        # [4] Phase 4: Adaptive Refinement
+        # [4] Phase 04: Adaptive Refinement
         # -------------------------------------------------------------------
         self.addParameter(
             QgsProcessingParameterBoolean(
@@ -658,7 +680,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         )
 
         # -------------------------------------------------------------------
-        # [5] Phase 5: Validation & Output Cleanup
+        # [5] Phase 05: Validation & Reporting
         # -------------------------------------------------------------------
         self.addParameter(
             QgsProcessingParameterBoolean(

@@ -740,7 +740,7 @@ def run_phase01_preprocessing(algorithm, parameters, context, feedback):
             nir_perc=nir_perc,
             median_size=osw_median,
             fill_holes=fill_holes,
-            extract_polygon=True, # Always extract polygon for Phase 3/4 clipping
+            extract_polygon=True, # Always extract polygon for Phase 03/4 clipping
             context=context,
             feedback=feedback
         )

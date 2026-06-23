@@ -3,20 +3,21 @@ icon=icon.png
 name=Bathymetrix-AI
 qgisMinimumVersion=3.22
 qgisMaximumVersion=4.99
-version=5.0
-author=Nasef M. Aly
+version=5.1
+author=Mohamed Aly Nasef
 email=Eng.m.nasef2017@gmail.com
 description=An advanced Machine Learning pipeline for Satellite-Derived Bathymetry (SDB). Features ICESat-2 integration, In-Situ Data filtering, and Spatial Residual Stacking.
 
 about=<h3>Bathymetrix-AI: Advanced SDB Modeling & Spatial Refinement</h3>
     <p><b>Bathymetrix-AI</b> is a specialized QGIS research toolkit designed to derive high-precision bathymetry from corrected multispectral satellite imagery (e.g., Sentinel-2 L2A). It systematically integrates physics-based corrections with data-driven Machine Learning to overcome traditional SDB limitations.</p>
     
-    <p><b>Core Workflow (The 4-Phase System):</b></p>
+    <p><b>Core Workflow (The 5-Phase System):</b></p>
     <ul>
-        <li><b>1. Automated Pre-processing:</b> Sun-glint removal (Hedley), <b>new Advanced Water Masking</b> (3-Indices), physics-based feature generation (Log-Ratios), and a <b>Deep Water Filter</b> fully customized for ML algorithms.</li>
-        <li><b>2. Robust Altimetry Filtering:</b> Uses <b>different algorithms</b> to clean ICESat-2 (ATL24) data by identifying high-confidence inliers and removing environmental noise.</li>
-        <li><b>3. Global Auto-ML Modeling:</b> Competitive benchmarking of <b>11 ML algorithms</b> with Randomized Hyperparameter Optimization to find the optimal global depth function.</li>
-        <li><b>4. Spatial Residual Stacking:</b> Enhances accuracy by analyzing prediction residuals and re-training the model with a <b>Stacked Error Surface</b> to correct local biases.</li>
+        <li><b>Phase 01: Advanced Pre-processing:</b> Sun-glint correction (Hedley), <b>Advanced Water Masking</b> using 3-Indices (NDWI, MNDWI, NWI), physics-based Log-Ratio features computation, and a <b>Deep Water Filter</b> customized for ML algorithms.</li>
+        <li><b>Phase 02: Robust Filtering:</b> Noise removal using Linear RANSAC, LS Variance Fit, or Huber Variance Fit (Zhang et al., 2021).</li>
+        <li><b>Phase 03: Global Auto-ML & Feature Analysis:</b> Optional feature correlation analysis, competitive benchmarking of <b>11 ML algorithms</b>, and hyperparameter optimization via Random Search, Grid Search, or Bayesian.</li>
+        <li><b>Phase 04: Adaptive Refinement:</b> Spatially localized corrections and residual analysis (Alevizos, 2020) to fix local biases.</li>
+        <li><b>Phase 05: Validation & Reporting:</b> Independent accuracy assessment on unseen test data.</li>
     </ul>
 
     <p><b>Key References:</b><br>
@@ -36,4 +37,4 @@ tracker=https://github.com/Nasef2017/Bathymetrix-AI/issues
 
 tags=sdb,bathymetry,machine learning,icesat-2,ransac,spatial correction,remote sensing,hydrography,sentinel-2,python
 category=Raster
-changelog=v5.0: Added Advanced 3-Indices Water Masking (NDWI, MNDWI, NWI) with adaptive thresholding. Introduced customizable Deep Water Filter to isolate Optically Shallow Water (OSW). Implemented full ML Algorithm Customization with complete hyperparameter control for Auto-ML models.
+changelog=v5.1: Added Feature Analysis to best select of Bands for ML algorithms. 
