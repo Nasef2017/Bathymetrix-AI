@@ -10,6 +10,7 @@ from qgis.core import (
     QgsProcessingParameterNumber,
     QgsProcessingParameterFile,
     QgsProcessingParameterString,
+    QgsProcessingParameterBoolean,
     QgsProcessingOutputRasterLayer,
     QgsProcessingOutputNumber,
     QgsProcessingParameterDefinition,
@@ -53,6 +54,17 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
     PARAM_ELASTICNET = "PARAM_ELASTICNET"
     PARAM_KNN = "PARAM_KNN"
     PARAM_DT = "PARAM_DT"
+    PARAM_HUBER = "PARAM_HUBER"
+    PARAM_XGB = "PARAM_XGB"
+    PARAM_LGBM = "PARAM_LGBM"
+    PARAM_CATBOOST = "PARAM_CATBOOST"
+
+    ENABLE_ENSEMBLE = "ENABLE_ENSEMBLE"
+    ENSEMBLE_METHOD = "ENSEMBLE_METHOD"
+    ENSEMBLE_SIZE = "ENSEMBLE_SIZE"
+    RESIDUAL_INTERP_METHOD = "RESIDUAL_INTERP_METHOD"
+    KNN_NEIGHBORS = "KNN_NEIGHBORS"
+    SPATIAL_CV = "SPATIAL_CV"
 
     MODEL_LIST = [
         "Linear Regression",
@@ -66,6 +78,10 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
         "Decision Tree",
         "MLP (Neural Net)",
         "SVR",
+        "Huber Regressor",
+        "XGBoost",
+        "LightGBM",
+        "CatBoost",
     ]
     OPTIMIZER_LIST = ["Random Search", "Grid Search", "Bayesian Search"]
     COLLISION_LIST = ["Keep All", "Highest Conf", "Closest", "Hybrid", "Strict Center"]
@@ -134,6 +150,59 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
                 defaultValue=10,
             )
         )
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.RESIDUAL_INTERP_METHOD,
+                "📍 Spatial Residual Interpolation Method",
+                options=["Standard KNN", "Robust KNN (Huber Weights)", "Gaussian Process / Kriging"],
+                defaultValue=0,
+            )
+        )
+        p_knn = QgsProcessingParameterNumber(
+            self.KNN_NEIGHBORS,
+            "📍 KNN Nearest Neighbors (K)",
+            type=QgsProcessingParameterNumber.Integer,
+            defaultValue=15,
+            minValue=1,
+            maxValue=100,
+        )
+        p_knn.setFlags(p_knn.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_knn)
+        p_sp = QgsProcessingParameterBoolean(
+            self.SPATIAL_CV,
+            "🌍 Enable Spatial Block Cross-Validation",
+            defaultValue=False,
+        )
+        p_sp.setFlags(p_sp.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_sp)
+
+        p_ens = QgsProcessingParameterBoolean(
+            self.ENABLE_ENSEMBLE,
+            "⚙️ Enable Ensemble of Top Models",
+            defaultValue=False,
+        )
+        p_ens.setFlags(p_ens.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_ens)
+
+        p_ens_meth = QgsProcessingParameterEnum(
+            self.ENSEMBLE_METHOD,
+            "📊 Ensemble Blending Method",
+            options=["Average", "Median", "Stacking"],
+            defaultValue=0,
+        )
+        p_ens_meth.setFlags(p_ens_meth.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_ens_meth)
+
+        p_ens_size = QgsProcessingParameterNumber(
+            self.ENSEMBLE_SIZE,
+            "📊 Ensemble Size (Top N Models to blend)",
+            type=QgsProcessingParameterNumber.Integer,
+            defaultValue=3,
+            minValue=2,
+            maxValue=5,
+        )
+        p_ens_size.setFlags(p_ens_size.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_ens_size)
         self.addParameter(
             QgsProcessingParameterEnum(
                 self.FEATURE_CORR_METHOD,
@@ -205,7 +274,7 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
         p_fmt.setFlags(p_fmt.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_fmt)
 
-        p_rf = QgsProcessingParameterString(self.PARAM_RF, "RF Params", defaultValue="'n_estimators':[100, 300], 'max_depth':[10, 30]", optional=True)
+        p_rf = QgsProcessingParameterString(self.PARAM_RF, "RF Params", defaultValue="'n_estimators':[100, 500], 'max_depth':[10, 30]", optional=True)
         p_rf.setFlags(p_rf.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_rf)
 
@@ -213,7 +282,7 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
         p_gb.setFlags(p_gb.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_gb)
 
-        p_et = QgsProcessingParameterString(self.PARAM_ET, "ET Params", defaultValue="'n_estimators':[100, 300], 'max_depth':[10, 30]", optional=True)
+        p_et = QgsProcessingParameterString(self.PARAM_ET, "ET Params", defaultValue="'n_estimators':[100, 500], 'max_depth':[10, 30]", optional=True)
         p_et.setFlags(p_et.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_et)
 
@@ -244,6 +313,22 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
         p_dt = QgsProcessingParameterString(self.PARAM_DT, "Decision Tree Params", defaultValue="'max_depth':[5, 10]", optional=True)
         p_dt.setFlags(p_dt.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_dt)
+
+        p_huber = QgsProcessingParameterString(self.PARAM_HUBER, "Huber Params", defaultValue="'epsilon':[1.1, 1.35, 1.5]", optional=True)
+        p_huber.setFlags(p_huber.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_huber)
+
+        p_xgb = QgsProcessingParameterString(self.PARAM_XGB, "XGBoost Params", defaultValue="'n_estimators':[100, 200], 'max_depth':[4, 6], 'learning_rate':[0.05, 0.1]", optional=True)
+        p_xgb.setFlags(p_xgb.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_xgb)
+
+        p_lgbm = QgsProcessingParameterString(self.PARAM_LGBM, "LightGBM Params", defaultValue="'n_estimators':[100, 200], 'max_depth':[4, 6], 'learning_rate':[0.05, 0.1]", optional=True)
+        p_lgbm.setFlags(p_lgbm.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_lgbm)
+
+        p_cat = QgsProcessingParameterString(self.PARAM_CATBOOST, "CatBoost Params", defaultValue="'iterations':[100, 200], 'depth':[4, 6], 'learning_rate':[0.05, 0.1]", optional=True)
+        p_cat.setFlags(p_cat.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_cat)
 
     def name(self):
         return "sdb_phase4_adaptive"

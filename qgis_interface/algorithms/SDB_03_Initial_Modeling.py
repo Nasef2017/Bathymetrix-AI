@@ -9,6 +9,7 @@ from qgis.core import (
     QgsProcessingParameterNumber,
     QgsProcessingParameterFile,
     QgsProcessingParameterString,
+    QgsProcessingParameterBoolean,
     QgsProcessingOutputRasterLayer,
     QgsProcessingOutputNumber,
     QgsProcessingParameterDefinition,
@@ -50,6 +51,15 @@ class SDBModule03(QgsProcessingAlgorithm):
     PARAM_ELASTICNET = "PARAM_ELASTICNET"
     PARAM_KNN = "PARAM_KNN"
     PARAM_DT = "PARAM_DT"
+    PARAM_HUBER = "PARAM_HUBER"
+    PARAM_XGB = "PARAM_XGB"
+    PARAM_LGBM = "PARAM_LGBM"
+    PARAM_CATBOOST = "PARAM_CATBOOST"
+
+    ENABLE_ENSEMBLE = "ENABLE_ENSEMBLE"
+    ENSEMBLE_METHOD = "ENSEMBLE_METHOD"
+    ENSEMBLE_SIZE = "ENSEMBLE_SIZE"
+    SPATIAL_CV = "SPATIAL_CV"
 
     MODEL_LIST = [
         "Linear Regression",
@@ -63,6 +73,10 @@ class SDBModule03(QgsProcessingAlgorithm):
         "Decision Tree",
         "MLP (Neural Net)",
         "SVR",
+        "Huber Regressor",
+        "XGBoost",
+        "LightGBM",
+        "CatBoost",
     ]
     OPTIMIZER_LIST = ["Random Search", "Grid Search", "Bayesian Search"]
     COLLISION_LIST = [
@@ -139,6 +153,38 @@ class SDBModule03(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.ENABLE_ENSEMBLE,
+                "⚙️ Enable Ensemble of Top Models",
+                defaultValue=False,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.ENSEMBLE_METHOD,
+                "📊 Ensemble Blending Method",
+                options=["Average", "Median", "Stacking"],
+                defaultValue=0,
+            )
+        )
+        p_ens_size = QgsProcessingParameterNumber(
+            self.ENSEMBLE_SIZE,
+            "📊 Ensemble Size (Top N Models to blend)",
+            type=QgsProcessingParameterNumber.Integer,
+            defaultValue=3,
+            minValue=2,
+            maxValue=5,
+        )
+        p_ens_size.setFlags(p_ens_size.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_ens_size)
+        p_sp = QgsProcessingParameterBoolean(
+            self.SPATIAL_CV,
+            "🌍 Enable Spatial Block Cross-Validation",
+            defaultValue=False,
+        )
+        p_sp.setFlags(p_sp.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_sp)
+        self.addParameter(
             QgsProcessingParameterEnum(
                 self.FEATURE_CORR_METHOD,
                 "Feature Correlation Method",
@@ -193,7 +239,7 @@ class SDBModule03(QgsProcessingAlgorithm):
         p_fmt.setFlags(p_fmt.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_fmt)
 
-        p_rf = QgsProcessingParameterString(self.PARAM_RF, "RF Params", defaultValue="'n_estimators':[100, 300], 'max_depth':[10, 30]", optional=True)
+        p_rf = QgsProcessingParameterString(self.PARAM_RF, "RF Params", defaultValue="'n_estimators':[100, 500], 'max_depth':[10, 30]", optional=True)
         p_rf.setFlags(p_rf.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_rf)
 
@@ -201,7 +247,7 @@ class SDBModule03(QgsProcessingAlgorithm):
         p_gb.setFlags(p_gb.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_gb)
 
-        p_et = QgsProcessingParameterString(self.PARAM_ET, "ET Params", defaultValue="'n_estimators':[100, 300], 'max_depth':[10, 30]", optional=True)
+        p_et = QgsProcessingParameterString(self.PARAM_ET, "ET Params", defaultValue="'n_estimators':[100, 500], 'max_depth':[10, 30]", optional=True)
         p_et.setFlags(p_et.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_et)
 
@@ -233,6 +279,22 @@ class SDBModule03(QgsProcessingAlgorithm):
         p_dt.setFlags(p_dt.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_dt)
 
+        p_huber = QgsProcessingParameterString(self.PARAM_HUBER, "Huber Params", defaultValue="'epsilon':[1.1, 1.35, 1.5]", optional=True)
+        p_huber.setFlags(p_huber.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_huber)
+
+        p_xgb = QgsProcessingParameterString(self.PARAM_XGB, "XGBoost Params", defaultValue="'n_estimators':[100, 200], 'max_depth':[4, 6], 'learning_rate':[0.05, 0.1]", optional=True)
+        p_xgb.setFlags(p_xgb.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_xgb)
+
+        p_lgbm = QgsProcessingParameterString(self.PARAM_LGBM, "LightGBM Params", defaultValue="'n_estimators':[100, 200], 'max_depth':[4, 6], 'learning_rate':[0.05, 0.1]", optional=True)
+        p_lgbm.setFlags(p_lgbm.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_lgbm)
+
+        p_cat = QgsProcessingParameterString(self.PARAM_CATBOOST, "CatBoost Params", defaultValue="'iterations':[100, 200], 'depth':[4, 6], 'learning_rate':[0.05, 0.1]", optional=True)
+        p_cat.setFlags(p_cat.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_cat)
+
     def name(self):
         return "sdb_03_initial_modeling"
 
@@ -249,34 +311,19 @@ class SDBModule03(QgsProcessingAlgorithm):
         return SDBModule03()
 
     def shortHelpString(self):
-        return """<h2>3. SDB Module 03: Global Auto-ML</h2>
-        <p>This module performs automated machine learning (Auto-ML) to build a global bathymetry prediction model. It evaluates multiple algorithms to find the best fit for your depth points.</p>
-
-        <h3>Inputs:</h3>
-        <ul>
-            <li><b>Input Feature Stack:</b> The multiband raster containing your predictors (bands, ratios, spatial features).</li>
-            <li><b>Input Water Mask:</b> A binary raster (1=Water, 0=Land) to restrict predictions to water areas.</li>
-            <li><b>Cleaned Training Points:</b> Your reference depth points.</li>
-            <li><b>Depth & Weight Fields:</b> Fields from your points defining the true depth and optional weights for modeling.</li>
-        </ul>
-
-        <h3>Settings:</h3>
-        <ul>
-            <li><b>Feature Correlation Threshold:</b> Optionally type a threshold (e.g. 0.1). Any band whose Pearson or Spearman correlation with Depth is below this value will be automatically discarded from training. Leave as 0.0 to disable and use all bands.</li>
-            <li><b>Select Algorithms:</b> Choose which ML algorithms to benchmark. The tool will pick the winner based on R2 and RMSE.</li>
-            <li><b>Optimizer:</b> Method to tune hyperparameters (Random, Grid, or Bayesian Search).</li>
-            <li><b>Collision Handling:</b> Determines how to handle multiple points falling within the same raster pixel (e.g., keep all, take the closest to center, or average them).</li>
-        </ul>
-
-        <h3>Outputs:</h3>
-        <p>Saves all outputs to the selected folder, including:</p>
-        <ul>
-            <li><b>Feature Analysis Report & Plot:</b> Shows which bands passed the correlation threshold and were used for training.</li>
-            <li><b>Initial Global Depth Map:</b> The predicted bathymetry raster using the winning model.</li>
-            <li><b>Best Global Model (.pkl):</b> The trained model file to be used in subsequent modules.</li>
-            <li><b>Benchmark CSV:</b> Detailed results for all tested algorithms.</li>
-            <li><b>Actual Model Input Points (.shp):</b> The exact pixels/values used after resolving point collisions.</li>
-        </ul>
+        return """
+        <div style="font-family: Arial, sans-serif; line-height: 1.2;">
+            <h2 style="margin-bottom: 5px;">🤖 <span style="color: #2E86C1;">SDB Module 03</span>: Global Auto-ML & Feature Analysis</h2>
+            <p style="margin-top: 0; margin-bottom: 10px;">Performs automated machine learning to build a global bathymetry prediction model.</p>
+            
+            <b style="display: block; margin-bottom: 2px;">🤖 Phase 03: Global Auto-ML</b>
+            <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
+                <li><b>Feature Analysis:</b> Automatically drops weak bands based on their Pearson or Spearman correlation with target depth.</li>
+                <li><b>Algorithm Benchmarking:</b> Evaluates 15+ models to find the optimal fit.</li>
+                <li><b>Optimization:</b> Tunes hyperparameters via Random, Grid, or Bayesian Search.</li>
+                <li><b>Validation:</b> Supports Spatial Block Cross-Validation for base models.</li>
+            </ul>
+        </div>
         """
 
     def processAlgorithm(self, parameters, context, feedback):

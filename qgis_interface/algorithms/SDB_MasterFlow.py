@@ -92,6 +92,18 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
     PARAM_ELASTICNET = "PARAM_ELASTICNET"
     PARAM_KNN = "PARAM_KNN"
     PARAM_DT = "PARAM_DT"
+    PARAM_HUBER = "PARAM_HUBER"
+    PARAM_XGB = "PARAM_XGB"
+    PARAM_LGBM = "PARAM_LGBM"
+    PARAM_CATBOOST = "PARAM_CATBOOST"
+
+    ENABLE_ENSEMBLE = "ENABLE_ENSEMBLE"
+    ENSEMBLE_METHOD = "ENSEMBLE_METHOD"
+    ENSEMBLE_SIZE = "ENSEMBLE_SIZE"
+    RESIDUAL_INTERP_METHOD = "RESIDUAL_INTERP_METHOD"
+    KNN_NEIGHBORS = "KNN_NEIGHBORS"
+    SPATIAL_CV_P3 = "SPATIAL_CV_P3"
+    SPATIAL_CV_P4 = "SPATIAL_CV_P4"
 
     TRAIN_TEST_SPLIT = "TRAIN_TEST_SPLIT"
     RANDOM_STATE = "RANDOM_STATE"
@@ -99,6 +111,9 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
 
     # [4] Adaptive Refinement
     ENABLE_ADAPTIVE = "ENABLE_ADAPTIVE"
+    ENABLE_ENSEMBLE_P4 = "ENABLE_ENSEMBLE_P4"
+    ENSEMBLE_METHOD_P4 = "ENSEMBLE_METHOD_P4"
+    ENSEMBLE_SIZE_P4 = "ENSEMBLE_SIZE_P4"
     INPUT_ADAPTIVE_TRAIN = "INPUT_ADAPTIVE_TRAIN"
     FIELD_ADAPTIVE_DEPTH = "FIELD_ADAPTIVE_DEPTH"
 
@@ -127,6 +142,10 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         "Decision Tree",
         "MLP",
         "SVR",
+        "Huber Regressor",
+        "XGBoost",
+        "LightGBM",
+        "CatBoost",
     ]
     OPTIMIZER_LIST_NAMES = ["Random Search", "Grid Search", "Bayesian Search"]
     COLLISION_LIST_NAMES = [
@@ -178,9 +197,9 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
             <b style="display: block; margin-bottom: 2px;">🌊 Phase 01: Advanced Pre-processing</b>
             <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
                 <li>Sun-glint correction <i>(Hedley et al., 2005)</i>.</li>
-                <li><b>Advanced Water Masking</b> using 3-Indices (NDWI, MNDWI, NWI).</li>
+                <li>Advanced Water Masking</li>
                 <li>Physics-based Log-Ratio features computation.</li>
-                <li><b>Deep Water Filter</b> (OSW Mask), customized for ML algorithms.</li>
+                <li>Deep Water Filter (OSW Mask)</li>
             </ul>
 
             <b style="display: block; margin-bottom: 2px;">🎯 Phase 02: Robust Filtering</b>
@@ -191,20 +210,28 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
             <b style="display: block; margin-bottom: 2px;">🤖 Phase 03: Global Auto-ML & Feature Analysis</b>
             <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
                 <li><b>Feature Analysis:</b> Optionally drop weak bands based on their Pearson or Spearman correlation with the target depth.</li>
-                <li>Benchmarks 11 algorithms (RF, GBM, MLP, SVR, etc.).</li>
+                <li>Benchmarks 15+ algorithms (RF, GBM, MLP, SVR, etc.).</li>
                 <li>Optimization via <b>Random Search</b>, Grid Search, or Bayesian <i>(Bergstra & Bengio, 2012)</i>.</li>
+                <li><b>Spatial Cross-Validation:</b> Independent control of spatial block validation for base models.</li>
                 <li>Fully <b>Customizable Hyperparameters</b> for fine-tuning.</li>
             </ul>
 
             <b style="display: block; margin-bottom: 2px;">📍 Phase 04: Adaptive Refinement</b>
             <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li>Spatially localized corrections & <b>Residual Analysis</b> <i>(Alevizos, 2020)</i>.</li>
+                <li>Spatially localized corrections & <b>Residual Analysis</b> <i>(Alevizos, 2020)</i> using Standard KNN, Robust KNN, or Gaussian Process (Kriging).</li>
+                <li><b>Spatial Cross-Validation:</b> Independent control of spatial block validation for residual modeling.</li>
+                <li>Optional model ensemble blending for localized refinement.</li>
             </ul>
 
             <b style="display: block; margin-bottom: 2px;">📉 Phase 05: Validation & Reporting</b>
             <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
                 <li>Independent accuracy assessment on unseen test data.</li>
             </ul>
+
+            <b style="display: block; margin-bottom: 2px;">⚙️ Pipeline Architecture & UI Standards</b>
+            <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
+                <li><b>Structured UI:</b> Advanced parameters grouped clearly into <i>[Phase 03]</i>, <i>[Phase 04]</i>, <i>[Phase 03 & 04]</i>, <i>[General ML]</i>, and <i>[General]</i>.</li>
+
 
             <p style="margin-top: 10px; border-top: 1px solid #ccc; padding-top: 5px;">
                 <b>Developer:</b> Mohamed Aly Nasef
@@ -572,6 +599,38 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.ENABLE_ENSEMBLE,
+                "⚙️ [3] Enable Ensemble of Top Models",
+                defaultValue=False,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.ENSEMBLE_METHOD,
+                "📊 [3] Ensemble Blending Method",
+                options=["Average", "Median", "Stacking"],
+                defaultValue=0,
+            )
+        )
+        p_ens_size = QgsProcessingParameterNumber(
+            self.ENSEMBLE_SIZE,
+            "📊 [Phase 03] Ensemble Size (Top N Models to blend)",
+            type=QgsProcessingParameterNumber.Integer,
+            defaultValue=3,
+            minValue=2,
+            maxValue=5,
+        )
+        p_ens_size.setFlags(p_ens_size.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_ens_size)
+        p_sp_p3 = QgsProcessingParameterBoolean(
+            self.SPATIAL_CV_P3,
+            "🌍 [Phase 03] Enable Spatial Block Cross-Validation",
+            defaultValue=False,
+        )
+        p_sp_p3.setFlags(p_sp_p3.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_sp_p3)
+        self.addParameter(
             QgsProcessingParameterNumber(
                 self.MEDIAN_SIZE,
                 "🤖 [3] Output Median Filter Size",
@@ -598,62 +657,78 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
 
         # Hyperparameters and ML Settings
         p_split = QgsProcessingParameterNumber(
-            self.TRAIN_TEST_SPLIT, "🎛️ [3] Training Data Ratio (e.g., 0.8 for 80%)", type=QgsProcessingParameterNumber.Double, defaultValue=0.8
+            self.TRAIN_TEST_SPLIT, "🎛️ [Phase 03 & 04] Training Data Ratio (e.g., 0.8 for 80%)", type=QgsProcessingParameterNumber.Double, defaultValue=0.8
         )
         p_split.setFlags(p_split.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_split)
 
         p_rs = QgsProcessingParameterNumber(
-            self.RANDOM_STATE, "🎛️ [3] Random State", type=QgsProcessingParameterNumber.Integer, defaultValue=42
+            self.RANDOM_STATE, "⚙️ [General] Random State for ML Split", type=QgsProcessingParameterNumber.Integer, defaultValue=42
         )
         p_rs.setFlags(p_rs.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_rs)
 
         p_fmt = QgsProcessingParameterEnum(
-            self.OUTPUT_FORMAT, "🎛️ [3] Output Format", options=["float32", "float64", "uint16"], defaultValue=0
+            self.OUTPUT_FORMAT, "⚙️ [General] Output Raster Format (Bit Depth)", options=["float32", "float64", "uint16"], defaultValue=0
         )
         p_fmt.setFlags(p_fmt.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_fmt)
 
-        p_rf = QgsProcessingParameterString(self.PARAM_RF, "🎛️ [3] Random Forest Params", defaultValue="'n_estimators':[100, 300], 'max_depth':[10, 30]")
+        p_rf = QgsProcessingParameterString(self.PARAM_RF, "🎛️ [General ML] Random Forest Hyperparameters", defaultValue="'n_estimators':[100, 500], 'max_depth':[10, 30]")
         p_rf.setFlags(p_rf.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_rf)
 
-        p_gb = QgsProcessingParameterString(self.PARAM_GB, "🎛️ [3] Gradient Boosting Params", defaultValue="'n_estimators':[100, 300], 'learning_rate':[0.05, 0.1]")
+        p_gb = QgsProcessingParameterString(self.PARAM_GB, "🎛️ [General ML] Gradient Boosting Hyperparameters", defaultValue="'n_estimators':[100, 300], 'learning_rate':[0.05, 0.1]")
         p_gb.setFlags(p_gb.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_gb)
 
-        p_et = QgsProcessingParameterString(self.PARAM_ET, "🎛️ [3] Extra Trees Params", defaultValue="'n_estimators':[100, 300], 'max_depth':[10, 30]")
+        p_et = QgsProcessingParameterString(self.PARAM_ET, "🎛️ [General ML] Extra Trees Hyperparameters", defaultValue="'n_estimators':[100, 500], 'max_depth':[10, 30]")
         p_et.setFlags(p_et.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_et)
 
-        p_svr = QgsProcessingParameterString(self.PARAM_SVR, "🎛️ [3] SVR Params", defaultValue="'C':[1, 10, 100], 'kernel':['rbf'], 'cache_size':[1000], 'max_iter':[20000]")
+        p_svr = QgsProcessingParameterString(self.PARAM_SVR, "🎛️ [General ML] SVR Hyperparameters", defaultValue="'C':[1, 10, 100], 'kernel':['rbf'], 'cache_size':[1000], 'max_iter':[20000]")
         p_svr.setFlags(p_svr.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_svr)
 
-        p_mlp = QgsProcessingParameterString(self.PARAM_MLP, "🎛️ [3] MLP Params", defaultValue="'hidden_layer_sizes':[(100,), (50, 50)], 'max_iter':[500]")
+        p_mlp = QgsProcessingParameterString(self.PARAM_MLP, "🎛️ [General ML] MLP Hyperparameters", defaultValue="'hidden_layer_sizes':[(100,), (50, 50)], 'max_iter':[500]")
         p_mlp.setFlags(p_mlp.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_mlp)
 
-        p_ridge = QgsProcessingParameterString(self.PARAM_RIDGE, "🎛️ [3] Ridge Params", defaultValue="'alpha':[0.1, 1.0]", optional=True)
+        p_ridge = QgsProcessingParameterString(self.PARAM_RIDGE, "🎛️ [General ML] Ridge Hyperparameters", defaultValue="'alpha':[0.1, 1.0]", optional=True)
         p_ridge.setFlags(p_ridge.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_ridge)
 
-        p_lasso = QgsProcessingParameterString(self.PARAM_LASSO, "🎛️ [3] Lasso Params", defaultValue="'alpha':[0.01, 0.1]", optional=True)
+        p_lasso = QgsProcessingParameterString(self.PARAM_LASSO, "🎛️ [General ML] Lasso Hyperparameters", defaultValue="'alpha':[0.01, 0.1]", optional=True)
         p_lasso.setFlags(p_lasso.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_lasso)
 
-        p_en = QgsProcessingParameterString(self.PARAM_ELASTICNET, "🎛️ [3] ElasticNet Params", defaultValue="'l1_ratio':[0.5]", optional=True)
+        p_en = QgsProcessingParameterString(self.PARAM_ELASTICNET, "🎛️ [General ML] ElasticNet Hyperparameters", defaultValue="'l1_ratio':[0.5]", optional=True)
         p_en.setFlags(p_en.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_en)
 
-        p_knn = QgsProcessingParameterString(self.PARAM_KNN, "🎛️ [3] KNN Params", defaultValue="'n_neighbors':[5, 10]", optional=True)
+        p_knn = QgsProcessingParameterString(self.PARAM_KNN, "🎛️ [General ML] KNN Hyperparameters", defaultValue="'n_neighbors':[5, 10]", optional=True)
         p_knn.setFlags(p_knn.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_knn)
 
-        p_dt = QgsProcessingParameterString(self.PARAM_DT, "🎛️ [3] Decision Tree Params", defaultValue="'max_depth':[5, 10]", optional=True)
+        p_dt = QgsProcessingParameterString(self.PARAM_DT, "🎛️ [General ML] Decision Tree Hyperparameters", defaultValue="'max_depth':[5, 10]", optional=True)
         p_dt.setFlags(p_dt.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_dt)
+
+        p_huber = QgsProcessingParameterString(self.PARAM_HUBER, "🎛️ [General ML] Huber Hyperparameters", defaultValue="'epsilon':[1.1, 1.35, 1.5]", optional=True)
+        p_huber.setFlags(p_huber.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_huber)
+
+        p_xgb = QgsProcessingParameterString(self.PARAM_XGB, "🎛️ [General ML] XGBoost Hyperparameters", defaultValue="'n_estimators':[100, 200], 'max_depth':[4, 6], 'learning_rate':[0.05, 0.1]", optional=True)
+        p_xgb.setFlags(p_xgb.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_xgb)
+
+        p_lgbm = QgsProcessingParameterString(self.PARAM_LGBM, "🎛️ [General ML] LightGBM Hyperparameters", defaultValue="'n_estimators':[100, 200], 'max_depth':[4, 6], 'learning_rate':[0.05, 0.1]", optional=True)
+        p_lgbm.setFlags(p_lgbm.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_lgbm)
+
+        p_cat = QgsProcessingParameterString(self.PARAM_CATBOOST, "🎛️ [General ML] CatBoost Hyperparameters", defaultValue="'iterations':[100, 200], 'depth':[4, 6], 'learning_rate':[0.05, 0.1]", optional=True)
+        p_cat.setFlags(p_cat.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_cat)
 
         # -------------------------------------------------------------------
         # [4] Phase 04: Adaptive Refinement
@@ -665,6 +740,60 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
                 defaultValue=True,
             )
         )
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.RESIDUAL_INTERP_METHOD,
+                "📍 [4] Spatial Residual Interpolation Method",
+                options=["Standard KNN", "Robust KNN (Huber Weights)", "Gaussian Process / Kriging"],
+                defaultValue=0,
+            )
+        )
+        p_knn = QgsProcessingParameterNumber(
+            self.KNN_NEIGHBORS,
+            "📍 [Phase 04] KNN Nearest Neighbors (K) for Residuals",
+            type=QgsProcessingParameterNumber.Integer,
+            defaultValue=15,
+            minValue=1,
+            maxValue=100,
+        )
+        p_knn.setFlags(p_knn.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_knn)
+
+        p_ens_p4 = QgsProcessingParameterBoolean(
+            self.ENABLE_ENSEMBLE_P4,
+            "⚙️ [Phase 04] Enable Ensemble of Top Models",
+            defaultValue=False,
+        )
+        p_ens_p4.setFlags(p_ens_p4.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_ens_p4)
+
+        p_ens_meth_p4 = QgsProcessingParameterEnum(
+            self.ENSEMBLE_METHOD_P4,
+            "📊 [Phase 04] Ensemble Blending Method",
+            options=["Average", "Median", "Stacking"],
+            defaultValue=0,
+        )
+        p_ens_meth_p4.setFlags(p_ens_meth_p4.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_ens_meth_p4)
+
+        p_ens_size_p4 = QgsProcessingParameterNumber(
+            self.ENSEMBLE_SIZE_P4,
+            "📊 [Phase 04] Ensemble Size (Top N Models to blend)",
+            type=QgsProcessingParameterNumber.Integer,
+            defaultValue=3,
+            minValue=2,
+            maxValue=5,
+        )
+        p_ens_size_p4.setFlags(p_ens_size_p4.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_ens_size_p4)
+
+        p_sp_p4 = QgsProcessingParameterBoolean(
+            self.SPATIAL_CV_P4,
+            "🌍 [Phase 04] Enable Spatial Block Cross-Validation",
+            defaultValue=False,
+        )
+        p_sp_p4.setFlags(p_sp_p4.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_sp_p4)
         self.addParameter(
             QgsProcessingParameterVectorLayer(
                 self.INPUT_ADAPTIVE_TRAIN, "🎯 [4] Adaptive Points", optional=True

@@ -234,6 +234,14 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
         "PARAM_ELASTICNET": parameters.get(algorithm.PARAM_ELASTICNET, ""),
         "PARAM_KNN": parameters.get(algorithm.PARAM_KNN, ""),
         "PARAM_DT": parameters.get(algorithm.PARAM_DT, ""),
+        "PARAM_HUBER": parameters.get(algorithm.PARAM_HUBER, ""),
+        "PARAM_XGB": parameters.get(algorithm.PARAM_XGB, ""),
+        "PARAM_LGBM": parameters.get(algorithm.PARAM_LGBM, ""),
+        "PARAM_CATBOOST": parameters.get(algorithm.PARAM_CATBOOST, ""),
+        "ENABLE_ENSEMBLE": parameters.get(algorithm.ENABLE_ENSEMBLE, False),
+        "ENSEMBLE_METHOD": parameters.get(algorithm.ENSEMBLE_METHOD, 0),
+        "ENSEMBLE_SIZE": parameters.get(algorithm.ENSEMBLE_SIZE, 3),
+        "SPATIAL_CV": parameters.get(algorithm.SPATIAL_CV_P3, False),
         "TRAIN_TEST_SPLIT": parameters[algorithm.TRAIN_TEST_SPLIT],
         "RANDOM_STATE": parameters[algorithm.RANDOM_STATE],
         "NUM_THREADS": parameters[algorithm.NUM_THREADS],
@@ -253,7 +261,7 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
     if "BEST_R2" in p3:
         append_log(f"[Phase 03] R2: {p3['BEST_R2']:.4f}", log_path, feedback)
 
-    path_refined = p3["OUTPUT_DEPTH_MAP"]
+    path_refined = None
     if algorithm.parameterAsBool(parameters, algorithm.ENABLE_ADAPTIVE, context):
         append_log("\n>>> Phase 04: Adaptive Refinement...", log_path, feedback)
 
@@ -295,6 +303,16 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
             "PARAM_ELASTICNET": parameters.get(algorithm.PARAM_ELASTICNET, ""),
             "PARAM_KNN": parameters.get(algorithm.PARAM_KNN, ""),
             "PARAM_DT": parameters.get(algorithm.PARAM_DT, ""),
+            "PARAM_HUBER": parameters.get(algorithm.PARAM_HUBER, ""),
+            "PARAM_XGB": parameters.get(algorithm.PARAM_XGB, ""),
+            "PARAM_LGBM": parameters.get(algorithm.PARAM_LGBM, ""),
+            "PARAM_CATBOOST": parameters.get(algorithm.PARAM_CATBOOST, ""),
+            "ENABLE_ENSEMBLE": parameters.get(algorithm.ENABLE_ENSEMBLE_P4, False),
+            "ENSEMBLE_METHOD": parameters.get(algorithm.ENSEMBLE_METHOD_P4, 0),
+            "ENSEMBLE_SIZE": parameters.get(algorithm.ENSEMBLE_SIZE_P4, 3),
+            "RESIDUAL_INTERP_METHOD": parameters.get(algorithm.RESIDUAL_INTERP_METHOD, 0),
+            "KNN_NEIGHBORS": parameters.get(algorithm.KNN_NEIGHBORS, 15),
+            "SPATIAL_CV": parameters.get(algorithm.SPATIAL_CV_P4, False),
             "TRAIN_TEST_SPLIT": parameters[algorithm.TRAIN_TEST_SPLIT],
             "RANDOM_STATE": parameters[algorithm.RANDOM_STATE],
             "NUM_THREADS": parameters[algorithm.NUM_THREADS],
@@ -409,7 +427,7 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
             "sdb_tools:sdb_05_reporting",
             {
                 "INPUT_MAP_P3": p3["OUTPUT_DEPTH_MAP"],
-                "INPUT_MAP_P4": path_refined,
+                "INPUT_MAP_P4": path_refined if path_refined else p3["OUTPUT_DEPTH_MAP"],
                 "INPUT_TRAIN": path_clean,
                 "FIELD_TRAIN": field_depth,
                 "INPUT_VALIDATION": final_test,

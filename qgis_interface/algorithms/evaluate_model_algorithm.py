@@ -75,7 +75,16 @@ class EvaluateModelAlgorithm(QgsProcessingAlgorithm):
         return ""
 
     def shortHelpString(self):
-        return "Evaluates predicted depth against unseen data. Generates Report, Scatter Plot, and CSV in the output file directory."
+        return """
+        <div style="font-family: Arial, sans-serif; line-height: 1.2;">
+            <h2 style="margin-bottom: 5px;">📊 <span style="color: #2E86C1;">SDB Utility</span>: Evaluate Model</h2>
+            <p style="margin-top: 0; margin-bottom: 10px;">Evaluates predicted depth against unseen data.</p>
+            <b style="display: block; margin-bottom: 2px;">Outputs:</b>
+            <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
+                <li>Generates Report, Scatter Plot, and CSV in the output directory.</li>
+            </ul>
+        </div>
+        """
 
     def createInstance(self):
         return EvaluateModelAlgorithm()

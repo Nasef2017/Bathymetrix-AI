@@ -360,7 +360,20 @@ class SDBPhase1Preprocessing(QgsProcessingAlgorithm):
         return SDBPhase1Preprocessing()
 
     def shortHelpString(self):
-        return "<p><b>Phase 01: Preprocessing</b></p><p><b>Masking Logic:</b> Vector Polygon masks water perfectly. Or NDWI is used. <b>OSW Filter:</b> Deepwater mask is generated using original band values and applied to the final output feature stack.</p>"
+        return """
+        <div style="font-family: Arial, sans-serif; line-height: 1.2;">
+            <h2 style="margin-bottom: 5px;">🌊 <span style="color: #2E86C1;">SDB Module 01</span>: Advanced Pre-processing</h2>
+            <p style="margin-top: 0; margin-bottom: 10px;">Prepares satellite imagery by isolating the aquatic domain and correcting radiometric noise.</p>
+            
+            <b style="display: block; margin-bottom: 2px;">🌊 Phase 01: Advanced Pre-processing</b>
+            <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
+                <li>Sun-glint correction <i>(Hedley et al., 2005)</i>.</li>
+                <li>Advanced Water Masking</li>
+                <li>Physics-based Log-Ratio features computation.</li>
+                <li>Deep Water Filter (OSW Mask)</li>
+            </ul>
+        </div>
+        """
 
     def helpString(self):
         return self.shortHelpString()

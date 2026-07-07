@@ -13,13 +13,80 @@ from sklearn.ensemble import (
     GradientBoostingRegressor,
     RandomForestRegressor,
 )
-from sklearn.linear_model import ElasticNet, Lasso, LinearRegression, Ridge
+from sklearn.linear_model import ElasticNet, Lasso, LinearRegression, Ridge, HuberRegressor
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, train_test_split
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.neural_network import MLPRegressor
 from sklearn.svm import SVR
 from sklearn.tree import DecisionTreeRegressor
+from sklearn.base import BaseEstimator, RegressorMixin, clone
+
+try:
+    import optuna
+    OPTUNA_AVAILABLE = True
+except ImportError:
+    OPTUNA_AVAILABLE = False
+
+try:
+    import xgboost as xgb
+    XGB_AVAILABLE = True
+except ImportError:
+    XGB_AVAILABLE = False
+
+try:
+    import lightgbm as lgb
+    LGBM_AVAILABLE = True
+except ImportError:
+    LGBM_AVAILABLE = False
+
+try:
+    import catboost as cb
+    CATBOOST_AVAILABLE = True
+except ImportError:
+    CATBOOST_AVAILABLE = False
+
+
+class CustomEnsembleRegressor(BaseEstimator, RegressorMixin):
+    def __init__(self, estimators, method="Average"):
+        self.estimators = estimators  # List of (name, model)
+        self.method = method
+        self.fitted_estimators_ = []
+        self.meta_learner_ = None
+
+    def fit(self, X, y, sample_weight=None):
+        self.fitted_estimators_ = []
+        for name, est in self.estimators:
+            model_to_fit = clone(est)
+            fit_params = {}
+            if sample_weight is not None:
+                import inspect
+                sig = inspect.signature(model_to_fit.fit)
+                if "sample_weight" in sig.parameters:
+                    fit_params["sample_weight"] = sample_weight
+            model_to_fit.fit(X, y, **fit_params)
+            self.fitted_estimators_.append(model_to_fit)
+
+        if self.method == "Stacking":
+            base_preds = np.column_stack([est.predict(X) for est in self.fitted_estimators_])
+            self.meta_learner_ = Ridge(alpha=1.0)
+            self.meta_learner_.fit(base_preds, y, sample_weight=sample_weight)
+        
+        return self
+
+    def predict(self, X):
+        if not self.fitted_estimators_:
+            raise ValueError("Ensemble is not fitted yet.")
+        preds = np.column_stack([est.predict(X) for est in self.fitted_estimators_])
+        if self.method == "Average":
+            return np.mean(preds, axis=1)
+        elif self.method == "Median":
+            return np.median(preds, axis=1)
+        elif self.method == "Stacking":
+            if self.meta_learner_ is None:
+                raise ValueError("Meta learner is not fitted.")
+            return self.meta_learner_.predict(preds)
+        return np.mean(preds, axis=1)
 
 from qgis.core import (
     QgsCoordinateTransform,
@@ -71,14 +138,22 @@ def convert_to_bayes(params_dict):
     bayes_params = {}
     for k, v in params_dict.items():
         if isinstance(v, list) and len(v) > 0:
-            if all(isinstance(x, int) for x in v):
-                bayes_params[k] = Integer(min(v), max(v))
+            if len(v) == 1:
+                bayes_params[k] = Categorical(v)
+            elif all(isinstance(x, int) for x in v):
+                if min(v) == max(v):
+                    bayes_params[k] = Categorical(v)
+                else:
+                    bayes_params[k] = Integer(min(v), max(v))
             elif all(isinstance(x, (int, float)) for x in v):
-                bayes_params[k] = Real(min(v), max(v))
+                if min(v) == max(v):
+                    bayes_params[k] = Categorical(v)
+                else:
+                    bayes_params[k] = Real(min(v), max(v))
             else:
                 bayes_params[k] = Categorical(v)
         else:
-            bayes_params[k] = Categorical(v)
+            bayes_params[k] = Categorical([v])
     return bayes_params
 
 
@@ -232,7 +307,7 @@ def get_model_and_params(index, opt_idx=0, random_state=42, n_jobs=-1):
             (
                 {"n_estimators": Integer(100, 500)}
                 if is_bayes
-                else {"n_estimators": [100, 300]}
+                else {"n_estimators": [100, 500]}
             ),
         )
     if index == 2:
@@ -252,7 +327,7 @@ def get_model_and_params(index, opt_idx=0, random_state=42, n_jobs=-1):
             (
                 {"n_estimators": Integer(100, 500)}
                 if is_bayes
-                else {"n_estimators": [100, 300]}
+                else {"n_estimators": [100, 500]}
             ),
         )
     if index == 4:
@@ -305,25 +380,260 @@ def get_model_and_params(index, opt_idx=0, random_state=42, n_jobs=-1):
                 else {"C": [10, 100], "kernel": ["rbf"]}
             ),
         )
+    if index == 11:
+        return (
+            "Huber Regressor",
+            HuberRegressor(),
+            (
+                {"epsilon": Real(1.1, 1.5)}
+                if is_bayes
+                else {"epsilon": [1.1, 1.35, 1.5]}
+            ),
+        )
+    if index == 12:
+        if not XGB_AVAILABLE:
+            return "XGBoost", None, {}
+        return (
+            "XGBoost",
+            xgb.XGBRegressor(random_state=random_state, n_jobs=n_jobs),
+            (
+                {
+                    "n_estimators": Integer(50, 300),
+                    "max_depth": Integer(3, 10),
+                    "learning_rate": Real(0.01, 0.2),
+                }
+                if is_bayes
+                else {"n_estimators": [100, 200], "max_depth": [4, 6], "learning_rate": [0.05, 0.1]}
+            ),
+        )
+    if index == 13:
+        if not LGBM_AVAILABLE:
+            return "LightGBM", None, {}
+        return (
+            "LightGBM",
+            lgb.LGBMRegressor(random_state=random_state, n_jobs=n_jobs, verbose=-1),
+            (
+                {
+                    "n_estimators": Integer(50, 300),
+                    "max_depth": Integer(3, 10),
+                    "learning_rate": Real(0.01, 0.2),
+                }
+                if is_bayes
+                else {"n_estimators": [100, 200], "max_depth": [4, 6], "learning_rate": [0.05, 0.1]}
+            ),
+        )
+    if index == 14:
+        if not CATBOOST_AVAILABLE:
+            return "CatBoost", None, {}
+        return (
+            "CatBoost",
+            cb.CatBoostRegressor(random_state=random_state, thread_count=n_jobs, verbose=0),
+            (
+                {
+                    "iterations": Integer(50, 300),
+                    "depth": Integer(3, 10),
+                    "learning_rate": Real(0.01, 0.2),
+                }
+                if is_bayes
+                else {"iterations": [100, 200], "depth": [4, 6], "learning_rate": [0.05, 0.1]}
+            ),
+        )
     return "Unknown", LinearRegression(), {}
+
+
+def run_optuna_search(base_model, name, param_distributions, X, y, fit_params, n_iter=20, cv=3, random_state=42, n_jobs=-1, groups=None):
+    import optuna
+    from sklearn.model_selection import KFold
+    from sklearn.metrics import mean_squared_error
+    from sklearn.base import clone
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+    def objective(trial):
+        params = {}
+        for param_name, dist in param_distributions.items():
+            cls_name = type(dist).__name__
+            if "Integer" in cls_name or "Real" in cls_name:
+                low = dist.low
+                high = dist.high
+                if "Integer" in cls_name:
+                    params[param_name] = trial.suggest_int(param_name, int(low), int(high))
+                else:
+                    is_log = getattr(dist, "prior", None) == "log-uniform"
+                    params[param_name] = trial.suggest_float(param_name, float(low), float(high), log=is_log)
+            elif "Categorical" in cls_name:
+                params[param_name] = trial.suggest_categorical(param_name, dist.categories)
+            elif hasattr(dist, 'bounds') and hasattr(dist, 'low') and hasattr(dist, 'high'):
+                low = dist.low
+                high = dist.high
+                params[param_name] = trial.suggest_float(param_name, float(low), float(high))
+            elif isinstance(dist, list):
+                if all(isinstance(x, int) for x in dist):
+                    params[param_name] = trial.suggest_int(param_name, min(dist), max(dist))
+                elif all(isinstance(x, (int, float)) for x in dist):
+                    params[param_name] = trial.suggest_float(param_name, min(dist), max(dist))
+                else:
+                    params[param_name] = trial.suggest_categorical(param_name, dist)
+            else:
+                params[param_name] = trial.suggest_categorical(param_name, [dist])
+
+        if groups is not None:
+            from sklearn.model_selection import GroupKFold
+            n_unique_groups = len(np.unique(groups))
+            if n_unique_groups >= 2:
+                actual_cv = min(cv, n_unique_groups)
+                kf = GroupKFold(n_splits=actual_cv)
+                split_iterator = kf.split(X, y, groups=groups)
+            else:
+                kf = KFold(n_splits=cv, shuffle=True, random_state=random_state)
+                split_iterator = kf.split(X)
+        else:
+            kf = KFold(n_splits=cv, shuffle=True, random_state=random_state)
+            split_iterator = kf.split(X)
+
+        scores = []
+        for train_idx, val_idx in split_iterator:
+            X_tr_cv, X_val_cv = X[train_idx], X[val_idx]
+            y_tr_cv, y_val_cv = y[train_idx], y[val_idx]
+            
+            split_fit_params = {}
+            if "sample_weight" in fit_params:
+                split_fit_params["sample_weight"] = fit_params["sample_weight"][train_idx]
+
+            fold_model = clone(base_model)
+            fold_model.set_params(**params)
+            fold_model.fit(X_tr_cv, y_tr_cv, **split_fit_params)
+            preds = fold_model.predict(X_val_cv)
+            scores.append(mean_squared_error(y_val_cv, preds))
+        return np.mean(scores)
+
+    study = optuna.create_study(direction="minimize", sampler=optuna.samplers.TPESampler(seed=random_state))
+    study.optimize(objective, n_trials=n_iter, n_jobs=1)
+    
+    best_params = study.best_params
+    best_model = clone(base_model)
+    best_model.set_params(**best_params)
+    return best_model, best_params
+
+
+def export_feature_importance(model, win_name, X_val, y_val, out_dir, log_path, feedback, selected_indices=None):
+    """
+    Extracts, plots, and saves feature importances (or coefficients/permutation importance)
+    for the winning model or ensemble.
+    """
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    
+    num_features = X_val.shape[1]
+    feature_names = [f"Band_{i+1}" for i in range(num_features)]
+    if selected_indices is not None:
+        feature_names = [f"Band_{idx+1}" for idx in selected_indices]
+        
+    importances = None
+    method_used = "Feature Importance"
+    
+    # 1. Check for native feature importances (Tree-based models)
+    if hasattr(model, "feature_importances_"):
+        importances = model.feature_importances_
+        method_used = "Native Feature Importance"
+    # 2. Check for coefficients (Linear models)
+    elif hasattr(model, "coef_"):
+        importances = np.abs(model.coef_)
+        total = np.sum(importances)
+        if total > 0:
+            importances = importances / total
+        method_used = "Normalized Absolute Coefficients"
+    # 3. Check if it's our CustomEnsembleRegressor
+    elif win_name.startswith("Ensemble") and hasattr(model, "fitted_estimators_"):
+        base_importances = []
+        for est in model.fitted_estimators_:
+            if hasattr(est, "feature_importances_"):
+                base_importances.append(est.feature_importances_)
+            elif hasattr(est, "coef_"):
+                coefs = np.abs(est.coef_)
+                total = np.sum(coefs)
+                if total > 0:
+                    base_importances.append(coefs / total)
+        if len(base_importances) > 0:
+            importances = np.mean(base_importances, axis=0)
+            method_used = "Ensemble Average Importance"
+            
+    # 4. Fallback to Permutation Importance
+    if importances is None:
+        append_log("   Calculating Permutation Importance (Fallback)...", log_path, feedback)
+        from sklearn.inspection import permutation_importance
+        subset_size = min(1000, len(X_val))
+        X_sub = X_val[:subset_size]
+        y_sub = y_val[:subset_size]
+        
+        result = permutation_importance(model, X_sub, y_sub, n_repeats=3, random_state=42, n_jobs=1)
+        importances = np.clip(result.importances_mean, 0, None)
+        total = np.sum(importances)
+        if total > 0:
+            importances = importances / total
+        method_used = "Permutation Importance (Normalized)"
+        
+    # Save report
+    df_imp = pd.DataFrame({
+        "Feature": feature_names,
+        "Importance": importances
+    }).sort_values(by="Importance", ascending=False)
+    
+    csv_path = os.path.join(out_dir, "3_Model_Feature_Importance_Report.csv")
+    df_imp.to_csv(csv_path, index=False)
+    
+    # Plot importances
+    plt.figure(figsize=(10, 6))
+    df_plot = df_imp.sort_values(by="Importance", ascending=True)
+    plt.barh(df_plot["Feature"], df_plot["Importance"], color="dodgerblue", edgecolor="black", alpha=0.8)
+    plt.xlabel("Normalized Importance / Contribution")
+    plt.ylabel("Features (Spectral Bands)")
+    plt.title(f"Model Feature Importance ({win_name})\nMethod: {method_used}")
+    plt.grid(axis="x", linestyle="--", alpha=0.7)
+    plt.tight_layout()
+    
+    img_path = os.path.join(out_dir, "3_Model_Feature_Importance.png")
+    plt.savefig(img_path, dpi=150)
+    plt.close()
+    
+    append_log(f"   Saved feature importance plot and report to: {out_dir}", log_path, feedback)
 
 
 def run_benchmarking(
     X, y, weights, indices, n_iter, out_dir, feedback, opt_idx, log_path, custom_params,
-    test_size=0.2, random_state=42, n_jobs=-1
+    test_size=0.2, random_state=42, n_jobs=-1, enable_ensemble=False, ensemble_method="Average",
+    spatial_cv=False, coords=None, selected_indices=None, ensemble_size=3
 ):
     X = np.nan_to_num(X, nan=0.0)
-    X_tr, X_val, y_tr, y_val, w_tr, _ = train_test_split(
-        X, y, weights, test_size=test_size, random_state=random_state
-    )
+    
+    groups_tr = None
+    if spatial_cv and coords is not None:
+        from sklearn.cluster import KMeans
+        from sklearn.model_selection import GroupShuffleSplit
+        kmeans = KMeans(n_clusters=5, random_state=random_state, n_init=10)
+        spatial_groups = kmeans.fit_predict(coords)
+        
+        gss = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=random_state)
+        train_idx, val_idx = next(gss.split(X, y, groups=spatial_groups))
+        X_tr, X_val = X[train_idx], X[val_idx]
+        y_tr, y_val = y[train_idx], y[val_idx]
+        w_tr = weights[train_idx]
+        groups_tr = spatial_groups[train_idx]
+        append_log(f"   [Spatial CV] Split data into 5 geographic clusters using KMeans.", log_path, feedback)
+    else:
+        X_tr, X_val, y_tr, y_val, w_tr, _ = train_test_split(
+            X, y, weights, test_size=test_size, random_state=random_state
+        )
 
     results = []
     for idx in [int(i) for i in indices]:
         name, base_model, default_params = get_model_and_params(idx, opt_idx, random_state, n_jobs)
+        if base_model is None:
+            append_log(f"      ! Skipping {name}: Library is not installed.", log_path, feedback)
+            continue
 
         if name in custom_params and custom_params[name]:
             parsed_dict = custom_params[name]
-            # Extract base parameters
             base_params = {k: (v[0] if isinstance(v, list) and len(v)>0 else v) for k, v in parsed_dict.items()}
             base_model.set_params(**base_params)
 
@@ -349,6 +659,10 @@ def run_benchmarking(
                 "Decision Tree",
                 "SVR",
                 "Linear Regression",
+                "Huber Regressor",
+                "XGBoost",
+                "LightGBM",
+                "CatBoost",
             ]:
                 fit_params["sample_weight"] = w_tr
 
@@ -358,26 +672,85 @@ def run_benchmarking(
                     current_opt_idx = opt_idx
                     if name == "MLP (Neural Net)":
                         current_opt_idx = 0
+                    
+                    cv_splitter = 3
+                    if groups_tr is not None:
+                        n_unique_groups = len(np.unique(groups_tr))
+                        if n_unique_groups >= 2:
+                            from sklearn.model_selection import GroupKFold
+                            cv_splitter = GroupKFold(n_splits=min(3, n_unique_groups))
+                        else:
+                            groups_tr = None
+
                     if current_opt_idx == 0:
+                        import scipy.stats as stats
+                        opt_params = {}
+                        for k, v in params.items():
+                            if isinstance(v, list) and len(v) == 2:
+                                if all(isinstance(x, int) for x in v) and v[0] < v[1]:
+                                    opt_params[k] = stats.randint(v[0], v[1] + 1)
+                                elif all(isinstance(x, (int, float)) for x in v) and v[0] < v[1]:
+                                    opt_params[k] = stats.uniform(v[0], v[1] - v[0])
+                                else:
+                                    opt_params[k] = v
+                            else:
+                                opt_params[k] = v
                         search = RandomizedSearchCV(
-                            base_model, params, n_iter=n_iter, cv=3, n_jobs=n_jobs
+                            base_model, opt_params, n_iter=n_iter, cv=cv_splitter, n_jobs=n_jobs, random_state=random_state
                         )
                     elif current_opt_idx == 1:
-                        search = GridSearchCV(base_model, params, cv=3, n_jobs=n_jobs)
+                        opt_params = {}
+                        for k, v in params.items():
+                            if isinstance(v, list) and len(v) == 2:
+                                if all(isinstance(x, int) for x in v) and v[0] < v[1]:
+                                    opt_params[k] = list(np.linspace(v[0], v[1], 5, dtype=int))
+                                elif all(isinstance(x, (int, float)) for x in v) and v[0] < v[1]:
+                                    opt_params[k] = list(np.linspace(v[0], v[1], 5))
+                                else:
+                                    opt_params[k] = v
+                            else:
+                                opt_params[k] = v
+                        search = GridSearchCV(base_model, opt_params, cv=cv_splitter, n_jobs=n_jobs)
                     elif current_opt_idx == 2:
-                        search = (
-                            BayesSearchCV(base_model, params, n_iter=n_iter, cv=3, n_jobs=n_jobs)
-                            if SKOPT_AVAILABLE
-                            else RandomizedSearchCV(
-                                base_model, params, n_iter=n_iter, cv=3, n_jobs=n_jobs
+                        if OPTUNA_AVAILABLE:
+                            best_model, best_params = run_optuna_search(
+                                base_model, name, params, X_tr, y_tr, fit_params,
+                                n_iter=n_iter, cv=3, random_state=random_state, n_jobs=n_jobs,
+                                groups=groups_tr
                             )
-                        )
+                            model = best_model
+                            model.fit(X_tr, y_tr, **fit_params)
+                            params_str = str(best_params)
+                            search = None
+                        else:
+                            import scipy.stats as stats
+                            opt_params = {}
+                            for k, v in params.items():
+                                if isinstance(v, list) and len(v) == 2:
+                                    if all(isinstance(x, int) for x in v) and v[0] < v[1]:
+                                        opt_params[k] = stats.randint(v[0], v[1] + 1)
+                                    elif all(isinstance(x, (int, float)) for x in v) and v[0] < v[1]:
+                                        opt_params[k] = stats.uniform(v[0], v[1] - v[0])
+                                    else:
+                                        opt_params[k] = v
+                                else:
+                                    opt_params[k] = v
+                            search = (
+                                BayesSearchCV(base_model, params, n_iter=n_iter, cv=cv_splitter, n_jobs=n_jobs)
+                                if SKOPT_AVAILABLE
+                                else RandomizedSearchCV(
+                                    base_model, opt_params, n_iter=n_iter, cv=cv_splitter, n_jobs=n_jobs, random_state=random_state
+                                )
+                            )
 
                     if search:
-                        search.fit(X_tr, y_tr, **fit_params)
+                        if groups_tr is not None:
+                            search.fit(X_tr, y_tr, groups=groups_tr, **fit_params)
+                        else:
+                            search.fit(X_tr, y_tr, **fit_params)
                         model = search.best_estimator_
                         params_str = str(search.best_params_)
-                    else:
+                    elif not OPTUNA_AVAILABLE or current_opt_idx != 2:
                         model.fit(X_tr, y_tr, **fit_params)
                         params_str = "Default"
                 else:
@@ -402,6 +775,7 @@ def run_benchmarking(
                 wmape,
                 params_str,
             )
+
             results.append(
                 {
                     "Algorithm": name,
@@ -420,14 +794,80 @@ def run_benchmarking(
 
     if not results:
         raise QgsProcessingException("All selected algorithms failed.")
+
+    if enable_ensemble and len(results) >= 2:
+        df_temp = pd.DataFrame(results)
+        max_rmse = df_temp["RMSE"].max() if len(df_temp) > 0 else 1.0
+        temp_scores = []
+        for r in results:
+            s_r2 = max(0, r["R2"])
+            s_rmse = 1.0 - (r["RMSE"] / max_rmse) if max_rmse != 0 else 0
+            temp_scores.append(0.6 * s_r2 + 0.4 * s_rmse)
+
+        sorted_indices = np.argsort(temp_scores)[::-1]
+        top_results = [results[i] for i in sorted_indices[:ensemble_size]]
+
+        estimators = [(r["Algorithm"], r["Model"]) for r in top_results]
+        append_log(f"   [Ensemble] Blending top models: {[r['Algorithm'] for r in top_results]} using {ensemble_method}", log_path, feedback)
+
+        ensemble_model = CustomEnsembleRegressor(estimators=estimators, method=ensemble_method)
+        ensemble_model.fit(X_tr, y_tr, sample_weight=w_tr)
+
+        y_p = ensemble_model.predict(X_val)
+        r2 = r2_score(y_val, y_p)
+        rmse = np.sqrt(mean_squared_error(y_val, y_p))
+        sum_abs_diff = np.sum(np.abs(y_val - y_p))
+        sum_abs_true = np.sum(np.abs(y_val))
+        wmape = (sum_abs_diff / sum_abs_true) * 100 if sum_abs_true != 0 else 0
+
+        ensemble_dir = os.path.join(out_dir, "Ensemble_Model")
+        os.makedirs(ensemble_dir, exist_ok=True)
+        save_algo_artifacts(
+            y_val,
+            y_p,
+            np.abs(y_val - y_p),
+            f"Ensemble ({ensemble_method})",
+            ensemble_dir,
+            r2,
+            rmse,
+            wmape,
+            f"Method: {ensemble_method}, Models: {[r['Algorithm'] for r in top_results]}",
+        )
+
+        results.append(
+            {
+                "Algorithm": f"Ensemble ({ensemble_method})",
+                "Model": ensemble_model,
+                "R2": r2,
+                "RMSE": rmse,
+                "wMAPE": wmape,
+            }
+        )
+        append_log(
+            f"      > Ensemble ({ensemble_method}): R2={r2:.3f}, RMSE={rmse:.2f}m", log_path, feedback
+        )
+
     df = pd.DataFrame(results)
     df["score"] = (0.6 * df["R2"].clip(lower=0)) + (
         0.4 * (1 - (df["RMSE"] / df["RMSE"].max()))
     )
+    
     winner = df.loc[df["score"].idxmax()]
+
+    if enable_ensemble:
+        ens_name = f"Ensemble ({ensemble_method})"
+        if any(df["Algorithm"] == ens_name):
+            ens_row = df[df["Algorithm"] == ens_name].iloc[0]
+            if winner["Algorithm"] != ens_name:
+                append_log(f"   [Ensemble] Ensemble did not beat winner {winner['Algorithm']} (Ensemble Score={ens_row['score']:.4f} vs Winner Score={winner['score']:.4f})", log_path, feedback)
+            else:
+                append_log(f"   [Ensemble] Ensemble wins the benchmark! Score={winner['score']:.4f}", log_path, feedback)
+
     final_model = winner["Model"]
     fit_params_final = {}
-    if winner["Algorithm"] in [
+    if winner["Algorithm"].startswith("Ensemble"):
+        fit_params_final["sample_weight"] = weights
+    elif winner["Algorithm"] in [
         "Random Forest",
         "Gradient Boosting",
         "Extra Trees",
@@ -436,10 +876,30 @@ def run_benchmarking(
         "Decision Tree",
         "SVR",
         "Linear Regression",
+        "Huber Regressor",
+        "XGBoost",
+        "LightGBM",
+        "CatBoost",
     ]:
         fit_params_final["sample_weight"] = weights
+
     with joblib.parallel_backend("threading", n_jobs=n_jobs):
         final_model.fit(X, y, **fit_params_final)
+
+    try:
+        export_feature_importance(
+            final_model,
+            winner["Algorithm"],
+            X_val,
+            y_val,
+            out_dir,
+            log_path,
+            feedback,
+            selected_indices
+        )
+    except Exception as e:
+        append_log(f"   [Warning] Failed to generate feature importance plot: {e}", log_path, feedback)
+
     return df, {
         "name": winner["Algorithm"],
         "model": final_model,
@@ -535,6 +995,18 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
         ),
         "Decision Tree": parse_param_string(
             algorithm.parameterAsString(parameters, algorithm.PARAM_DT, context)
+        ),
+        "Huber Regressor": parse_param_string(
+            algorithm.parameterAsString(parameters, "PARAM_HUBER", context)
+        ),
+        "XGBoost": parse_param_string(
+            algorithm.parameterAsString(parameters, "PARAM_XGB", context)
+        ),
+        "LightGBM": parse_param_string(
+            algorithm.parameterAsString(parameters, "PARAM_LGBM", context)
+        ),
+        "CatBoost": parse_param_string(
+            algorithm.parameterAsString(parameters, "PARAM_CATBOOST", context)
         ),
     }
 
@@ -678,6 +1150,28 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
     # The output is returned to the processing framework instead.
     # QgsProject.instance().addMapLayer(QgsVectorLayer(actual_pts_path, "3_Actual_Model_Input_Points", "ogr"))
 
+    try:
+        enable_ensemble = algorithm.parameterAsBool(parameters, "ENABLE_ENSEMBLE", context)
+    except Exception:
+        enable_ensemble = False
+
+    try:
+        ens_idx = algorithm.parameterAsEnum(parameters, "ENSEMBLE_METHOD", context)
+        ens_map = {0: "Average", 1: "Median", 2: "Stacking"}
+        ensemble_method = ens_map.get(ens_idx, "Average")
+    except Exception:
+        ensemble_method = "Average"
+
+    try:
+        spatial_cv = algorithm.parameterAsBool(parameters, "SPATIAL_CV", context)
+    except Exception:
+        spatial_cv = False
+
+    try:
+        ensemble_size = algorithm.parameterAsInt(parameters, "ENSEMBLE_SIZE", context)
+    except Exception:
+        ensemble_size = 3
+
     results_df, best_algo_data = run_benchmarking(
         X,
         y,
@@ -691,7 +1185,13 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
         custom_params,
         test_size,
         random_state,
-        n_jobs
+        n_jobs,
+        enable_ensemble,
+        ensemble_method,
+        spatial_cv,
+        coords,
+        selected_indices,
+        ensemble_size
     )
     results_df.to_csv(
         os.path.join(out_dir, "3_All_Algorithms_Benchmark.csv"), index=False

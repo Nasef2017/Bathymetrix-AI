@@ -11,13 +11,31 @@ from sklearn.ensemble import (
     GradientBoostingRegressor,
     RandomForestRegressor,
 )
-from sklearn.linear_model import ElasticNet, Lasso, LinearRegression, Ridge
+from sklearn.linear_model import ElasticNet, Lasso, LinearRegression, Ridge, HuberRegressor
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, train_test_split
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.neural_network import MLPRegressor
 from sklearn.svm import SVR
 from sklearn.tree import DecisionTreeRegressor
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import RBF, ConstantKernel as C
+
+from .trainers import (
+    CustomEnsembleRegressor,
+    run_optuna_search,
+    OPTUNA_AVAILABLE,
+    XGB_AVAILABLE,
+    LGBM_AVAILABLE,
+    CATBOOST_AVAILABLE,
+)
+
+if XGB_AVAILABLE:
+    import xgboost as xgb
+if LGBM_AVAILABLE:
+    import lightgbm as lgb
+if CATBOOST_AVAILABLE:
+    import catboost as cb
 
 from qgis.core import (
     QgsCoordinateTransform,
@@ -62,14 +80,22 @@ def convert_to_bayes(params_dict):
     bayes_params = {}
     for k, v in params_dict.items():
         if isinstance(v, list) and len(v) > 0:
-            if all(isinstance(x, int) for x in v):
-                bayes_params[k] = Integer(min(v), max(v))
+            if len(v) == 1:
+                bayes_params[k] = Categorical(v)
+            elif all(isinstance(x, int) for x in v):
+                if min(v) == max(v):
+                    bayes_params[k] = Categorical(v)
+                else:
+                    bayes_params[k] = Integer(min(v), max(v))
             elif all(isinstance(x, (int, float)) for x in v):
-                bayes_params[k] = Real(min(v), max(v))
+                if min(v) == max(v):
+                    bayes_params[k] = Categorical(v)
+                else:
+                    bayes_params[k] = Real(min(v), max(v))
             else:
                 bayes_params[k] = Categorical(v)
         else:
-            bayes_params[k] = Categorical(v)
+            bayes_params[k] = Categorical([v])
     return bayes_params
 
 
@@ -109,7 +135,7 @@ def get_model_and_params(index, opt_idx=0, random_state=42, n_jobs=-1):
             (
                 {"n_estimators": Integer(100, 500)}
                 if is_bayes
-                else {"n_estimators": [100, 300]}
+                else {"n_estimators": [100, 500]}
             ),
         )
     if index == 2:
@@ -129,7 +155,7 @@ def get_model_and_params(index, opt_idx=0, random_state=42, n_jobs=-1):
             (
                 {"n_estimators": Integer(100, 500)}
                 if is_bayes
-                else {"n_estimators": [100, 300]}
+                else {"n_estimators": [100, 500]}
             ),
         )
     if index == 4:
@@ -182,8 +208,98 @@ def get_model_and_params(index, opt_idx=0, random_state=42, n_jobs=-1):
                 else {"C": [10, 100], "kernel": ["rbf"]}
             ),
         )
+    if index == 11:
+        return (
+            "Huber Regressor",
+            HuberRegressor(),
+            (
+                {"epsilon": Real(1.1, 1.5)}
+                if is_bayes
+                else {"epsilon": [1.1, 1.35, 1.5]}
+            ),
+        )
+    if index == 12:
+        if not XGB_AVAILABLE:
+            return "XGBoost", None, {}
+        return (
+            "XGBoost",
+            xgb.XGBRegressor(random_state=random_state, n_jobs=n_jobs),
+            (
+                {
+                    "n_estimators": Integer(50, 300),
+                    "max_depth": Integer(3, 10),
+                    "learning_rate": Real(0.01, 0.2),
+                }
+                if is_bayes
+                else {"n_estimators": [100, 200], "max_depth": [4, 6], "learning_rate": [0.05, 0.1]}
+            ),
+        )
+    if index == 13:
+        if not LGBM_AVAILABLE:
+            return "LightGBM", None, {}
+        return (
+            "LightGBM",
+            lgb.LGBMRegressor(random_state=random_state, n_jobs=n_jobs, verbose=-1),
+            (
+                {
+                    "n_estimators": Integer(50, 300),
+                    "max_depth": Integer(3, 10),
+                    "learning_rate": Real(0.01, 0.2),
+                }
+                if is_bayes
+                else {"n_estimators": [100, 200], "max_depth": [4, 6], "learning_rate": [0.05, 0.1]}
+            ),
+        )
+    if index == 14:
+        if not CATBOOST_AVAILABLE:
+            return "CatBoost", None, {}
+        return (
+            "CatBoost",
+            cb.CatBoostRegressor(random_state=random_state, thread_count=n_jobs, verbose=0),
+            (
+                {
+                    "iterations": Integer(50, 300),
+                    "depth": Integer(3, 10),
+                    "learning_rate": Real(0.01, 0.2),
+                }
+                if is_bayes
+                else {"iterations": [100, 200], "depth": [4, 6], "learning_rate": [0.05, 0.1]}
+            ),
+        )
 
     return "Unknown", LinearRegression(), {}
+
+
+class RobustSpatialKNN:
+    def __init__(self, n_neighbors=15):
+        self.n_neighbors = n_neighbors
+        self.coords_tr = None
+        self.residuals = None
+        self.huber_w = None
+
+    def fit(self, coords_tr, residuals):
+        self.coords_tr = coords_tr
+        self.residuals = residuals
+        from sklearn.neighbors import KNeighborsRegressor
+        knn = KNeighborsRegressor(n_neighbors=self.n_neighbors, weights="distance")
+        knn.fit(coords_tr, residuals)
+        errors = residuals - knn.predict(coords_tr)
+        mad = np.median(np.abs(errors))
+        scale = 1.4826 * mad if mad > 0 else 1e-4
+        self.huber_w = np.clip(1.35 * scale / (np.abs(errors) + 1e-6), 0.0, 1.0)
+        return self
+
+    def predict(self, X_query):
+        from sklearn.neighbors import NearestNeighbors
+        nn = NearestNeighbors(n_neighbors=self.n_neighbors)
+        nn.fit(self.coords_tr)
+        dists, indices = nn.kneighbors(X_query)
+        inv_dists = 1.0 / (dists + 1e-6)
+        w = inv_dists * self.huber_w[indices]
+        w_sum = np.sum(w, axis=1, keepdims=True)
+        w_sum[w_sum == 0] = 1.0
+        predictions = np.sum(w * self.residuals[indices], axis=1) / w_sum.flatten()
+        return predictions
 
 
 def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
@@ -221,6 +337,18 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
         ),
         "Decision Tree": parse_param_string(
             algorithm.parameterAsString(parameters, algorithm.PARAM_DT, context)
+        ),
+        "Huber Regressor": parse_param_string(
+            algorithm.parameterAsString(parameters, "PARAM_HUBER", context)
+        ),
+        "XGBoost": parse_param_string(
+            algorithm.parameterAsString(parameters, "PARAM_XGB", context)
+        ),
+        "LightGBM": parse_param_string(
+            algorithm.parameterAsString(parameters, "PARAM_LGBM", context)
+        ),
+        "CatBoost": parse_param_string(
+            algorithm.parameterAsString(parameters, "PARAM_CATBOOST", context)
         ),
     }
 
@@ -285,10 +413,48 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
 
     residuals = z_true.flatten() - z_pred3.flatten()
 
-    knn_spatial = KNeighborsRegressor(n_neighbors=15, weights="distance", n_jobs=n_jobs)
-    knn_spatial.fit(coords_tr, residuals)
+    try:
+        interp_idx = algorithm.parameterAsEnum(parameters, "RESIDUAL_INTERP_METHOD", context)
+    except Exception:
+        interp_idx = 0
 
-    append_log("   Interpolating Residual Grid (KNN)...", log_path, feedback)
+    try:
+        spatial_cv = algorithm.parameterAsBool(parameters, "SPATIAL_CV", context)
+    except Exception:
+        spatial_cv = False
+
+    try:
+        knn_k = algorithm.parameterAsInt(parameters, "KNN_NEIGHBORS", context)
+    except Exception:
+        knn_k = 15
+
+    if interp_idx == 0:
+        interp_name = "KNN Standard"
+        append_log(f"   Fitting Standard Spatial KNN (K={knn_k})...", log_path, feedback)
+        spatial_model = KNeighborsRegressor(n_neighbors=knn_k, weights="distance", n_jobs=n_jobs)
+        spatial_model.fit(coords_tr, residuals)
+    elif interp_idx == 1:
+        interp_name = "KNN Robust"
+        append_log(f"   Fitting Robust Spatial KNN (Huber weights, K={knn_k})...", log_path, feedback)
+        spatial_model = RobustSpatialKNN(n_neighbors=knn_k)
+        spatial_model.fit(coords_tr, residuals)
+    else:
+        interp_name = "Kriging/GP"
+        append_log("   Fitting Gaussian Process Regression (Kriging)...", log_path, feedback)
+        if len(coords_tr) > 1500:
+            np.random.seed(random_state)
+            gpr_idx = np.random.choice(len(coords_tr), size=1500, replace=False)
+            coords_gpr = coords_tr[gpr_idx]
+            residuals_gpr = residuals[gpr_idx]
+        else:
+            coords_gpr = coords_tr
+            residuals_gpr = residuals
+        
+        kernel = C(1.0, (1e-3, 1e3)) * RBF(length_scale=100.0, length_scale_bounds=(10, 10000))
+        spatial_model = GaussianProcessRegressor(kernel=kernel, alpha=0.1, n_restarts_optimizer=2, random_state=random_state)
+        spatial_model.fit(coords_gpr, residuals_gpr)
+
+    append_log(f"   Interpolating Residual Grid ({interp_name})...", log_path, feedback)
     
     if mask_path and str(mask_path).strip() and mask_path != "None":
         with rasterio.open(mask_path) as m:
@@ -310,7 +476,7 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
     for i in range(0, len(water_coords), chunk_size):
         chunk = water_coords[i:i + chunk_size]
         if len(chunk) > 0:
-            residual_grid[chunk[:, 0], chunk[:, 1]] = knn_spatial.predict(chunk)
+            residual_grid[chunk[:, 0], chunk[:, 1]] = spatial_model.predict(chunk)
 
     append_log("   Saving Residual Error Map...", log_path, feedback)
     p_residual = os.path.join(out_dir, "4-Residual_Error_Map.tif")
@@ -387,9 +553,23 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
                 status = "Selected" if b in selected_indices else "Discarded"
                 f.write(f"Feature_{b+1}: r = {correlations[b]:.4f}  | abs(r) = {abs_correlations[b]:.4f}  [{status}]\n")
 
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_final, y_final, test_size=test_size, random_state=random_state
-    )
+    groups_tr = None
+    if spatial_cv and coords_tr is not None:
+        from sklearn.cluster import KMeans
+        from sklearn.model_selection import GroupShuffleSplit
+        kmeans = KMeans(n_clusters=5, random_state=random_state, n_init=10)
+        spatial_groups = kmeans.fit_predict(coords_tr)
+        
+        gss = GroupShuffleSplit(n_splits=1, test_size=test_size, random_state=random_state)
+        train_idx, val_idx = next(gss.split(X_final, y_final, groups=spatial_groups))
+        X_train, X_val = X_final[train_idx], X_final[val_idx]
+        y_train, y_val = y_final[train_idx], y_final[val_idx]
+        groups_tr = spatial_groups[train_idx]
+        append_log(f"   [Spatial CV] Split Phase 04 retraining data into 5 geographic clusters.", log_path, feedback)
+    else:
+        X_train, X_val, y_train, y_val = train_test_split(
+            X_final, y_final, test_size=test_size, random_state=random_state
+        )
 
     best_rmse = float("inf")
     best_model = None
@@ -397,8 +577,30 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
     best_r2 = 0.0
     best_wmape = 0.0
 
+    try:
+        enable_ensemble = algorithm.parameterAsBool(parameters, "ENABLE_ENSEMBLE", context)
+    except Exception:
+        enable_ensemble = False
+
+    try:
+        ens_idx = algorithm.parameterAsEnum(parameters, "ENSEMBLE_METHOD", context)
+        ens_map = {0: "Average", 1: "Median", 2: "Stacking"}
+        ensemble_method = ens_map.get(ens_idx, "Average")
+    except Exception:
+        ensemble_method = "Average"
+
+    try:
+        ensemble_size = algorithm.parameterAsInt(parameters, "ENSEMBLE_SIZE", context)
+    except Exception:
+        ensemble_size = 3
+
+    all_models_p4 = []
+
     for idx in sel_idx:
         name, model_inst, default_params = get_model_and_params(idx, opt_idx, random_state, n_jobs)
+        if model_inst is None:
+            append_log(f"       ! Skipping {name}: Library is not installed.", log_path, feedback)
+            continue
 
         if name in custom_params and custom_params[name]:
             parsed_dict = custom_params[name]
@@ -421,47 +623,137 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
                     if name == "MLP (Neural Net)":
                         current_opt_idx = 0
 
+                    cv_splitter = 3
+                    if groups_tr is not None:
+                        n_unique_groups = len(np.unique(groups_tr))
+                        if n_unique_groups >= 2:
+                            from sklearn.model_selection import GroupKFold
+                            cv_splitter = GroupKFold(n_splits=min(3, n_unique_groups))
+                        else:
+                            groups_tr = None
+
                     if current_opt_idx == 0:
+                        import scipy.stats as stats
+                        opt_params = {}
+                        for k, v in params.items():
+                            if isinstance(v, list) and len(v) == 2:
+                                if all(isinstance(x, int) for x in v) and v[0] < v[1]:
+                                    opt_params[k] = stats.randint(v[0], v[1] + 1)
+                                elif all(isinstance(x, (int, float)) for x in v) and v[0] < v[1]:
+                                    opt_params[k] = stats.uniform(v[0], v[1] - v[0])
+                                else:
+                                    opt_params[k] = v
+                            else:
+                                opt_params[k] = v
                         search = RandomizedSearchCV(
-                            model_inst, params, n_iter=n_iter, cv=3, n_jobs=n_jobs
+                            model_inst, opt_params, n_iter=n_iter, cv=cv_splitter, n_jobs=n_jobs, random_state=random_state
                         )
                     elif current_opt_idx == 1:
-                        search = GridSearchCV(model_inst, params, cv=3, n_jobs=n_jobs)
+                        opt_params = {}
+                        for k, v in params.items():
+                            if isinstance(v, list) and len(v) == 2:
+                                if all(isinstance(x, int) for x in v) and v[0] < v[1]:
+                                    opt_params[k] = list(np.linspace(v[0], v[1], 5, dtype=int))
+                                elif all(isinstance(x, (int, float)) for x in v) and v[0] < v[1]:
+                                    opt_params[k] = list(np.linspace(v[0], v[1], 5))
+                                else:
+                                    opt_params[k] = v
+                            else:
+                                opt_params[k] = v
+                        search = GridSearchCV(model_inst, opt_params, cv=cv_splitter, n_jobs=n_jobs)
                     elif current_opt_idx == 2:
-                        search = (
-                            BayesSearchCV(model_inst, params, n_iter=n_iter, cv=3, n_jobs=n_jobs)
-                            if SKOPT_AVAILABLE
-                            else RandomizedSearchCV(
-                                model_inst, params, n_iter=n_iter, cv=3, n_jobs=n_jobs
+                        if OPTUNA_AVAILABLE:
+                            best_m, best_params = run_optuna_search(
+                                model_inst, name, params, X_train, y_train, {},
+                                n_iter=n_iter, cv=3, random_state=random_state, n_jobs=n_jobs,
+                                groups=groups_tr
                             )
-                        )
+                            curr_model = best_m
+                            curr_model.fit(X_train, y_train)
+                            search = None
+                        else:
+                            import scipy.stats as stats
+                            opt_params = {}
+                            for k, v in params.items():
+                                if isinstance(v, list) and len(v) == 2:
+                                    if all(isinstance(x, int) for x in v) and v[0] < v[1]:
+                                        opt_params[k] = stats.randint(v[0], v[1] + 1)
+                                    elif all(isinstance(x, (int, float)) for x in v) and v[0] < v[1]:
+                                        opt_params[k] = stats.uniform(v[0], v[1] - v[0])
+                                    else:
+                                        opt_params[k] = v
+                                else:
+                                    opt_params[k] = v
+                            search = (
+                                BayesSearchCV(model_inst, params, n_iter=n_iter, cv=cv_splitter, n_jobs=n_jobs)
+                                if SKOPT_AVAILABLE
+                                else RandomizedSearchCV(
+                                    model_inst, opt_params, n_iter=n_iter, cv=cv_splitter, n_jobs=n_jobs, random_state=random_state
+                                )
+                            )
 
                     if search:
-                        search.fit(X_train, y_train)
+                        if groups_tr is not None:
+                            search.fit(X_train, y_train, groups=groups_tr)
+                        else:
+                            search.fit(X_train, y_train)
                         curr_model = search.best_estimator_
-                    else:
+                    elif not OPTUNA_AVAILABLE or current_opt_idx != 2:
                         curr_model.fit(X_train, y_train)
                 else:
                     curr_model.fit(X_train, y_train)
 
             y_pred = curr_model.predict(X_val)
             rmse = np.sqrt(mean_squared_error(y_val, y_pred))
+            r2 = r2_score(y_val, y_pred)
+            sum_abs_diff = np.sum(np.abs(y_val - y_pred))
+            sum_abs_true = np.sum(np.abs(y_val))
+            wmape = (sum_abs_diff / sum_abs_true) * 100 if sum_abs_true != 0 else 0
 
             append_log(f"       > {name}: RMSE={rmse:.3f}m", log_path, feedback)
+            all_models_p4.append({
+                "Algorithm": name,
+                "Model": curr_model,
+                "RMSE": rmse,
+                "R2": r2,
+                "wMAPE": wmape
+            })
 
             if rmse < best_rmse:
                 best_rmse = rmse
                 best_model = curr_model
                 best_algo_name = name
-                best_r2 = r2_score(y_val, y_pred)
-                sum_abs_diff = np.sum(np.abs(y_val - y_pred))
-                sum_abs_true = np.sum(np.abs(y_val))
-                best_wmape = (
-                    (sum_abs_diff / sum_abs_true) * 100 if sum_abs_true != 0 else 0
-                )
+                best_r2 = r2
+                best_wmape = wmape
 
         except Exception as e:
             append_log(f"Error in {name}: {str(e)}", log_path, feedback)
+
+    if enable_ensemble and len(all_models_p4) >= 2:
+        sorted_p4 = sorted(all_models_p4, key=lambda x: x["RMSE"])
+        top_p4 = sorted_p4[:ensemble_size]
+        estimators_p4 = [(m["Algorithm"], m["Model"]) for m in top_p4]
+        append_log(f"   [Ensemble] Blending top models: {[m['Algorithm'] for m in top_p4]} using {ensemble_method}", log_path, feedback)
+
+        ensemble_model = CustomEnsembleRegressor(estimators=estimators_p4, method=ensemble_method)
+        ensemble_model.fit(X_train, y_train)
+        
+        y_pred = ensemble_model.predict(X_val)
+        ens_rmse = np.sqrt(mean_squared_error(y_val, y_pred))
+        ens_r2 = r2_score(y_val, y_pred)
+        sum_abs_diff = np.sum(np.abs(y_val - y_pred))
+        sum_abs_true = np.sum(np.abs(y_val))
+        ens_wmape = (sum_abs_diff / sum_abs_true) * 100 if sum_abs_true != 0 else 0
+
+        if ens_rmse < best_rmse:
+            append_log(f"      > Ensemble ({ensemble_method}) wins! RMSE={ens_rmse:.3f}m (beats {best_algo_name} with RMSE={best_rmse:.3f}m)", log_path, feedback)
+            best_rmse = ens_rmse
+            best_model = ensemble_model
+            best_algo_name = f"Ensemble ({ensemble_method})"
+            best_r2 = ens_r2
+            best_wmape = ens_wmape
+        else:
+            append_log(f"      > Ensemble ({ensemble_method}) did not beat winner {best_algo_name} (Ensemble RMSE={ens_rmse:.3f}m vs Winner RMSE={best_rmse:.3f}m)", log_path, feedback)
 
     if best_model is None:
         raise QgsProcessingException("All refinement models failed.")

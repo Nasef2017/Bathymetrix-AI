@@ -117,19 +117,14 @@ class SDBModule02(QgsProcessingAlgorithm):
     def shortHelpString(self):
         return """
         <div style="font-family: Arial, sans-serif; line-height: 1.2;">
-            <h2 style="margin-bottom: 5px;">🔬 Filtering Strategy Guide</h2>
-            <p>This module filters noisy ICESat-2 data using one of three statistical methods.</p>
-            <b style="display: block; margin-bottom: 2px;">1. Linear RANSAC</b>
+            <h2 style="margin-bottom: 5px;">🧹 <span style="color: #2E86C1;">SDB Module 02</span>: Robust Data Filtering</h2>
+            <p style="margin-top: 0; margin-bottom: 10px;">Filters noisy ICESat-2 data (or other altimetry) using advanced statistical methods to ensure high-quality training points.</p>
+            
+            <b style="display: block; margin-bottom: 2px;">🧹 Phase 02: Robust Filtering Strategies</b>
             <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li><b>Best for:</b> Data with a clear linear relationship but contaminated with significant, random outliers.</li>
-            </ul>
-            <b style="display: block; margin-bottom: 2px;">2. LS Variance Fit</b>
-            <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li><b>Best for:</b> Data with a non-linear trend where the noise level is expected to be constant across all depths.</li>
-            </ul>
-            <b style="display: block; margin-bottom: 2px;">3. Huber Variance Fit</b>
-            <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li><b>Best for:</b> Complex scenarios where data uncertainty increases with depth (heteroscedasticity).</li>
+                <li><b>Linear RANSAC:</b> Best for data with a clear linear relationship but contaminated with significant, random outliers.</li>
+                <li><b>LS Variance Fit:</b> Best for data with a non-linear trend where noise is constant across depths.</li>
+                <li><b>Huber Variance Fit:</b> Best for complex scenarios where data uncertainty increases with depth.</li>
             </ul>
         </div>
         """

@@ -22,64 +22,84 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 
 def extract_values(vec_layer, depth_field, p3_path, p4_path, feedback):
-    with rasterio.open(p3_path) as src3, rasterio.open(p4_path) as src4:
+    has_p4 = p4_path is not None and str(p4_path).strip() != "" and p4_path != "None" and os.path.exists(p4_path) and p4_path != p3_path
+
+    src4 = None
+    try:
+        src3 = rasterio.open(p3_path)
         band3 = src3.read(1).astype(np.float32)
-        band4 = src4.read(1).astype(np.float32)
         nodata3 = src3.nodata
-        nodata4 = src4.nodata
         height = src3.height
         width = src3.width
 
-        raster_crs = QgsRasterLayer(p3_path).crs()
-        tr = QgsCoordinateTransform(
-            vec_layer.sourceCrs(), raster_crs, QgsProject.instance()
-        )
+        if has_p4:
+            src4 = rasterio.open(p4_path)
+            band4 = src4.read(1).astype(np.float32)
+            nodata4 = src4.nodata
+    except Exception as e:
+        raise QgsProcessingException(f"Failed to open raster: {e}")
 
-        obs, pred3, pred4 = [], [], []
+    raster_crs = QgsRasterLayer(p3_path).crs()
+    tr = QgsCoordinateTransform(
+        vec_layer.sourceCrs(), raster_crs, QgsProject.instance()
+    )
 
-        for feat in vec_layer.getFeatures():
-            raw_depth = feat[depth_field]
-            if raw_depth is None:
-                continue
+    obs, pred3, pred4 = [], [], []
 
-            if not feat.hasGeometry():
-                continue
+    for feat in vec_layer.getFeatures():
+        raw_depth = feat[depth_field]
+        if raw_depth is None:
+            continue
 
-            geom = feat.geometry()
-            if geom.isNull():
-                continue
+        if not feat.hasGeometry():
+            continue
 
-            try:
-                geom.transform(tr)
-                pt = geom.asPoint()
-            except Exception:
-                continue
+        geom = feat.geometry()
+        if geom.isNull():
+            continue
 
-            try:
-                row, col = src3.index(pt.x(), pt.y())
-            except Exception:
-                continue
+        try:
+            geom.transform(tr)
+            pt = geom.asPoint()
+        except Exception:
+            continue
 
-            if not (0 <= row < height and 0 <= col < width):
-                continue
+        try:
+            row, col = src3.index(pt.x(), pt.y())
+        except Exception:
+            continue
 
-            v3 = float(band3[row, col])
+        if not (0 <= row < height and 0 <= col < width):
+            continue
+
+        v3 = float(band3[row, col])
+        if nodata3 is not None and v3 == nodata3:
+            continue
+        if not np.isfinite(v3):
+            continue
+        if v3 <= -9990:
+            continue
+
+        v4 = None
+        if has_p4 and src4 is not None:
             v4 = float(band4[row, col])
-
-            if nodata3 is not None and v3 == nodata3:
-                continue
             if nodata4 is not None and v4 == nodata4:
                 continue
-            if not (np.isfinite(v3) and np.isfinite(v4)):
+            if not np.isfinite(v4):
                 continue
-            if v3 <= -9990 or v4 <= -9990:
+            if v4 <= -9990:
                 continue
 
-            obs.append(float(raw_depth))
-            pred3.append(v3)
+        obs.append(float(raw_depth))
+        pred3.append(v3)
+        if has_p4:
             pred4.append(v4)
 
-    return np.array(obs), np.array(pred3), np.array(pred4)
+    src3.close()
+    if src4 is not None:
+        src4.close()
+
+    return np.array(obs), np.array(pred3), (np.array(pred4) if has_p4 else None)
 
 
 def calc_stats(y_true, y_pred):
@@ -116,21 +136,27 @@ def stratified_analysis(y_true, y_pred, model_name):
 
 
 def write_final_verdict(out_dir, s3, s4, n_val, p3_name, p4_name):
-    imp_rmse = ((s3["RMSE"] - s4["RMSE"]) / s3["RMSE"]) * 100 if s3["RMSE"] != 0 else 0
-    imp_wmape = (
-        ((s3["wMAPE"] - s4["wMAPE"]) / s3["wMAPE"]) * 100 if s3["wMAPE"] != 0 else 0
-    )
-    imp_r2 = (s4["R2"] - s3["R2"]) * 100
+    has_p4 = s4 is not None
 
-    if np.isclose(s4["RMSE"], s3["RMSE"], atol=0.01):
-        winner = "TIE — No significant difference between models"
-        reason = "RMSE difference is within 0.01 m tolerance."
-    elif s4["RMSE"] < s3["RMSE"]:
-        winner = "Phase 04 (Refined / Best Map)"
-        reason = "Lower RMSE confirms improvement from adaptive refinement."
-    else:
+    if not has_p4:
         winner = "Phase 03 (Global Model)"
-        reason = "Phase 04 did not improve RMSE — possible overfitting in adaptive step."
+        reason = "Phase 04 was disabled by the user."
+    else:
+        imp_rmse = ((s3["RMSE"] - s4["RMSE"]) / s3["RMSE"]) * 100 if s3["RMSE"] != 0 else 0
+        imp_wmape = (
+            ((s3["wMAPE"] - s4["wMAPE"]) / s3["wMAPE"]) * 100 if s3["wMAPE"] != 0 else 0
+        )
+        imp_r2 = (s4["R2"] - s3["R2"]) * 100
+
+        if np.isclose(s4["RMSE"], s3["RMSE"], atol=0.01):
+            winner = "TIE — No significant difference between models"
+            reason = "RMSE difference is within 0.01 m tolerance."
+        elif s4["RMSE"] < s3["RMSE"]:
+            winner = "Phase 04 (Refined / Best Map)"
+            reason = "Lower RMSE confirms improvement from adaptive refinement."
+        else:
+            winner = "Phase 03 (Global Model)"
+            reason = "Phase 04 did not improve RMSE — possible overfitting in adaptive step."
 
     sep = "=" * 65
     lines = [
@@ -138,17 +164,37 @@ def write_final_verdict(out_dir, s3, s4, n_val, p3_name, p4_name):
         "           SDB FINAL SCIENTIFIC VALIDATION REPORT          ",
         sep,
         f"  Phase 03 map : {p3_name}",
-        f"  Phase 04 map : {p4_name}",
+    ]
+    if has_p4:
+        lines.append(f"  Phase 04 map : {p4_name}")
+    lines.extend([
         f"  Validation points used : {n_val}",
         "",
         "--- METRICS COMPARISON (VALIDATION SET) ---",
-        f"{'Metric':<12} {'Phase 03 (Global)':>20} {'Phase 04 (Refined)':>20} {'Improvement':>15}",
-        "-" * 70,
-        f"{'RMSE (m)':<12} {s3['RMSE']:>20.4f} {s4['RMSE']:>20.4f} {imp_rmse:>+14.2f}%",
-        f"{'R²':<12} {s3['R2']:>20.4f} {s4['R2']:>20.4f} {imp_r2:>+14.2f} pts",
-        f"{'MAE (m)':<12} {s3['MAE']:>20.4f} {s4['MAE']:>20.4f}",
-        f"{'Bias (m)':<12} {s3['Bias']:>20.4f} {s4['Bias']:>20.4f}",
-        f"{'wMAPE (%)':<12} {s3['wMAPE']:>20.2f} {s4['wMAPE']:>20.2f} {imp_wmape:>+14.2f}%",
+    ])
+
+    if has_p4:
+        lines.extend([
+            f"{'Metric':<12} {'Phase 03 (Global)':>20} {'Phase 04 (Refined)':>20} {'Improvement':>15}",
+            "-" * 70,
+            f"{'RMSE (m)':<12} {s3['RMSE']:>20.4f} {s4['RMSE']:>20.4f} {imp_rmse:>+14.2f}%",
+            f"{'R²':<12} {s3['R2']:>20.4f} {s4['R2']:>20.4f} {imp_r2:>+14.2f} pts",
+            f"{'MAE (m)':<12} {s3['MAE']:>20.4f} {s4['MAE']:>20.4f}",
+            f"{'Bias (m)':<12} {s3['Bias']:>20.4f} {s4['Bias']:>20.4f}",
+            f"{'wMAPE (%)':<12} {s3['wMAPE']:>20.2f} {s4['wMAPE']:>20.2f} {imp_wmape:>+14.2f}%",
+        ])
+    else:
+        lines.extend([
+            f"{'Metric':<12} {'Phase 03 (Global)':>20}",
+            "-" * 40,
+            f"{'RMSE (m)':<12} {s3['RMSE']:>20.4f}",
+            f"{'R²':<12} {s3['R2']:>20.4f}",
+            f"{'MAE (m)':<12} {s3['MAE']:>20.4f}",
+            f"{'Bias (m)':<12} {s3['Bias']:>20.4f}",
+            f"{'wMAPE (%)':<12} {s3['wMAPE']:>20.2f}",
+        ])
+
+    lines.extend([
         "",
         "--- FINAL VERDICT ---",
         f"  WINNER : {winner}",
@@ -157,7 +203,7 @@ def write_final_verdict(out_dir, s3, s4, n_val, p3_name, p4_name):
         "NOTE: wMAPE = Sum(|Error|) / Sum(|Observed|) × 100",
         "      Negative depths are handled correctly (absolute values used in bins).",
         sep,
-    ]
+    ])
 
     report_path = os.path.join(out_dir, "5_FINAL_SUMMARY.txt")
     with open(report_path, "w", encoding="utf-8") as f:
@@ -213,11 +259,16 @@ def _subplot_scatter(ax, obs, pred, stats, title, use_kde):
 
 
 def plot_scatter(obs, p3, p4, s3, s4, out_dir):
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    has_p4 = p4 is not None and s4 is not None
     use_kde = len(obs) <= 5000
 
-    _subplot_scatter(axes[0], obs, p3, s3, "Phase 03: Global Model", use_kde)
-    _subplot_scatter(axes[1], obs, p4, s4, "Phase 04: Refined / Best Map", use_kde)
+    if has_p4:
+        fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+        _subplot_scatter(axes[0], obs, p3, s3, "Phase 03: Global Model", use_kde)
+        _subplot_scatter(axes[1], obs, p4, s4, "Phase 04: Refined / Best Map", use_kde)
+    else:
+        fig, ax = plt.subplots(figsize=(8, 6))
+        _subplot_scatter(ax, obs, p3, s3, "Phase 03: Global Model", use_kde)
 
     plt.suptitle(
         "Observed vs Predicted Depth (Validation Set)",
@@ -232,34 +283,37 @@ def plot_scatter(obs, p3, p4, s3, s4, out_dir):
 
 
 def plot_residuals(obs, p3, p4, out_dir):
+    has_p4 = p4 is not None
     res3 = p3 - obs
-    res4 = p4 - obs
 
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.scatter(
         obs, res3, alpha=0.35, label="Phase 03 Residuals", color="gray", s=15, zorder=2
     )
-    ax.scatter(
-        obs,
-        res4,
-        alpha=0.35,
-        label="Phase 04 Residuals",
-        color="dodgerblue",
-        s=15,
-        zorder=3,
-    )
+    if has_p4:
+        res4 = p4 - obs
+        ax.scatter(
+            obs,
+            res4,
+            alpha=0.35,
+            label="Phase 04 Residuals",
+            color="dodgerblue",
+            s=15,
+            zorder=3,
+        )
     ax.axhline(0, color="red", linestyle="--", lw=2, label="Zero Error")
 
-    rmse4 = np.sqrt(np.mean(res4**2))
-    ax.axhline(rmse4, color="dodgerblue", linestyle=":", lw=1, alpha=0.7)
-    ax.axhline(
-        -rmse4,
-        color="dodgerblue",
-        linestyle=":",
-        lw=1,
-        alpha=0.7,
-        label=f"±RMSE P4 ({rmse4:.2f} m)",
-    )
+    if has_p4:
+        rmse4 = np.sqrt(np.mean(res4**2))
+        ax.axhline(rmse4, color="dodgerblue", linestyle=":", lw=1, alpha=0.7)
+        ax.axhline(
+            -rmse4,
+            color="dodgerblue",
+            linestyle=":",
+            lw=1,
+            alpha=0.7,
+            label=f"±RMSE P4 ({rmse4:.2f} m)",
+        )
 
     ax.set_xlabel("Observed Depth (m)")
     ax.set_ylabel("Residual Error  (Predicted − Observed) [m]")
@@ -273,8 +327,8 @@ def plot_residuals(obs, p3, p4, out_dir):
 
 
 def plot_histograms(obs, p3, p4, out_dir):
+    has_p4 = p4 is not None
     res3 = p3 - obs
-    res4 = p4 - obs
 
     fig, ax = plt.subplots(figsize=(10, 6))
     sns.histplot(
@@ -287,16 +341,18 @@ def plot_histograms(obs, p3, p4, out_dir):
         element="step",
         ax=ax,
     )
-    sns.histplot(
-        res4,
-        color="dodgerblue",
-        label="Phase 04 Error",
-        kde=True,
-        stat="density",
-        alpha=0.4,
-        element="step",
-        ax=ax,
-    )
+    if has_p4:
+        res4 = p4 - obs
+        sns.histplot(
+            res4,
+            color="dodgerblue",
+            label="Phase 04 Error",
+            kde=True,
+            stat="density",
+            alpha=0.4,
+            element="step",
+            ax=ax,
+        )
 
     ax.axvline(0, color="red", linestyle="--", lw=2, label="Zero Error")
     ax.axvline(
@@ -306,13 +362,14 @@ def plot_histograms(obs, p3, p4, out_dir):
         lw=1.5,
         label=f"Bias P3 ({np.mean(res3):+.2f} m)",
     )
-    ax.axvline(
-        np.mean(res4),
-        color="dodgerblue",
-        linestyle=":",
-        lw=1.5,
-        label=f"Bias P4 ({np.mean(res4):+.2f} m)",
-    )
+    if has_p4:
+        ax.axvline(
+            np.mean(res4),
+            color="dodgerblue",
+            linestyle=":",
+            lw=1.5,
+            label=f"Bias P4 ({np.mean(res4):+.2f} m)",
+        )
 
     ax.set_title("Error Distribution (Validation Set)")
     ax.set_xlabel("Error  (Predicted − Observed) [m]")
@@ -346,10 +403,15 @@ def run_phase05_reporting(algorithm, parameters, context, feedback):
         parameters, algorithm.FIELD_VAL_DEPTH, context
     )
 
+    has_p4 = p4_path is not None and str(p4_path).strip() != "" and p4_path != "None" and os.path.exists(p4_path) and p4_path != p3_path
+
     feedback.pushInfo("\n" + "=" * 60)
     feedback.pushInfo(">>> PHASE 05: SCIENTIFIC VALIDATION & REPORTING")
     feedback.pushInfo(f"    P3 map : {os.path.basename(p3_path)}")
-    feedback.pushInfo(f"    P4 map : {os.path.basename(p4_path)}")
+    if has_p4:
+        feedback.pushInfo(f"    P4 map : {os.path.basename(p4_path)}")
+    else:
+        feedback.pushInfo("    P4 map : [Bypassed / Not Generated]")
     feedback.pushInfo("=" * 60)
 
     feedback.pushInfo("\n  [1/5] Sampling rasters at validation points...")
@@ -370,26 +432,27 @@ def run_phase05_reporting(algorithm, parameters, context, feedback):
 
     feedback.pushInfo("\n  [2/5] Calculating statistics...")
     stats_p3 = calc_stats(y_val, val_p3)
-    stats_p4 = calc_stats(y_val, val_p4)
+    stats_p4 = calc_stats(y_val, val_p4) if has_p4 else None
 
     strat_rows = []
     strat_rows.extend(stratified_analysis(y_val, val_p3, "Phase 03 (Global)"))
-    strat_rows.extend(stratified_analysis(y_val, val_p4, "Phase 04 (Refined)"))
+    if has_p4:
+        strat_rows.extend(stratified_analysis(y_val, val_p4, "Phase 04 (Refined)"))
     pd.DataFrame(strat_rows).to_csv(
         os.path.join(out_dir, "5_Stratified_Error_Analysis.csv"), index=False
     )
 
     feedback.pushInfo("\n  [3/5] Exporting raw prediction data...")
-    df_val = pd.DataFrame(
-        {
-            "Set": "Validation",
-            "Observed": y_val,
-            "P3_Pred": val_p3,
-            "P3_Error": val_p3 - y_val,
-            "P4_Pred": val_p4,
-            "P4_Error": val_p4 - y_val,
-        }
-    )
+    df_dict = {
+        "Set": "Validation",
+        "Observed": y_val,
+        "P3_Pred": val_p3,
+        "P3_Error": val_p3 - y_val,
+    }
+    if has_p4:
+        df_dict["P4_Pred"] = val_p4
+        df_dict["P4_Error"] = val_p4 - y_val
+    df_val = pd.DataFrame(df_dict)
     df_val.to_csv(os.path.join(out_dir, "5_Validation_Raw_Data.csv"), index=False)
 
     feedback.pushInfo("\n  [4/5] Generating plots...")
@@ -404,7 +467,7 @@ def run_phase05_reporting(algorithm, parameters, context, feedback):
         stats_p4,
         len(y_val),
         os.path.basename(p3_path),
-        os.path.basename(p4_path),
+        os.path.basename(p4_path) if has_p4 else "None",
     )
 
     feedback.pushInfo(f"\n>>> Phase 05 complete. Reports saved to: {out_dir}")

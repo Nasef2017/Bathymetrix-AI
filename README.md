@@ -39,13 +39,15 @@ To ensure high-quality training data, the tool filters altimetry data to remove 
 **Phase 03: Global Auto-ML & Feature Analysis**
 Instead of using one algorithm, the tool implements an automated machine learning workflow.
 **Feature Analysis:** Optionally drops weak bands based on their Pearson or Spearman correlation with the target depth.
-**Algorithm Benchmarking:** Evaluates 11 different Machine Learning models (e.g., Random Forest, Gradient Boosting, SVR, MLP) to find the best fit for specific coastal areas.
+**Algorithm Benchmarking:** Evaluates 15+ different Machine Learning models (e.g., Random Forest, Gradient Boosting, XGBoost, CatBoost, SVR, MLP) to find the best fit for specific coastal areas.
 **Hyperparameter Optimization:** Automatically tunes model settings via Random Search, Grid Search, or Bayesian Optimization (Bergstra & Bengio, 2012).
+**Spatial Cross-Validation:** Independent spatial block cross-validation control to evaluate base models.
 **Customization:** Fully customizable hyperparameters for precise fine-tuning.
 
 **Phase 04: Adaptive Refinement**
 This phase corrects local errors that global models might miss by analyzing the "residuals" (differences) between predicted and observed depths.  
 **Spatial Error Mapping:** Spatially localized corrections and residual analysis (Alevizos, 2020) to fix local geographic biases.
+**Spatial Cross-Validation:** Independent spatial block cross-validation control to evaluate residual modeling.
 **Adaptive Re-training:** Combines spectral data with error maps to produce a refined, high-accuracy final depth map.
 
 **Phase 05: Validation & Reporting**
@@ -62,7 +64,7 @@ The tool evaluates results using three main standards:
 Open **OSGeo4W Shell** (as Administrator) and run the following command to install all required libraries. This version is optimized for **QGIS 4.0 (Qt6)** and **NumPy 2.0** support:
 
 ```bash
-pip install numpy pandas rasterio matplotlib seaborn scikit-learn>=1.5.0 scipy joblib scikit-optimize sliderule icepyx geopandas parquet netCDF4
+pip install numpy pandas rasterio matplotlib seaborn scikit-learn>=1.5.0 scipy joblib scikit-optimize sliderule icepyx geopandas parquet netCDF4 xgboost lightgbm catboost optuna
 ```
 
 📧 ***Contact & Citations***
@@ -70,7 +72,7 @@ pip install numpy pandas rasterio matplotlib seaborn scikit-learn>=1.5.0 scipy j
 **Author:** Mohamed Aly Nasef  
 **Email:** Eng.m.nasef2017@gmail.com, Nasefm.aly@alexu.edu.eg  
 
-Nasef M.Aly. (2026). Nasef2017/Bathymetrix-AI: Bathymetrix_AI V5.2 (v5.2). Zenodo. https://doi.org/10.5281/zenodo.21128682
+Nasef M.Aly. (2026). Nasef2017/Bathymetrix-AI: Bathymetrix_AI V6.0 (v6.0). Zenodo. https://doi.org/10.5281/zenodo.21128682
 
 🤖 **AI Acknowledgment**  
 The development of the Bathymetrix-AI code, its logical structure, and the technical documentation were significantly enhanced and optimized using Google Gemini. The AI assisted in debugging complex workflows and ensuring the implementation follows best practices in data science.

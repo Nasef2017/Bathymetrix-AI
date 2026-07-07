@@ -84,30 +84,23 @@ class SDBModule05(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         return """
-        <div style="font-family: Arial, sans-serif; line-height: 1.4;">
-            <h2 style="color: #2E86C1;">SDB Phase 05 — Scientific Validation</h2>
-            <p>Compares Phase 03 (global model) vs Phase 04 (best final map) against unseen validation points.</p>
+        <div style="font-family: Arial, sans-serif; line-height: 1.2;">
+            <h2 style="margin-bottom: 5px;">📉 <span style="color: #2E86C1;">SDB Module 05</span>: Scientific Validation</h2>
+            <p style="margin-top: 0; margin-bottom: 10px;">Compares Phase 03 (global model) vs Phase 04 (best final map) against unseen validation points.</p>
 
-            <b>Metrics Calculated:</b>
-            <ul>
-                <li><b>RMSE</b>: Root Mean Square Error (main accuracy metric)</li>
-                <li><b>R²</b>: Coefficient of Determination (goodness of fit)</li>
-                <li><b>MAE</b>: Mean Absolute Error</li>
-                <li><b>Bias</b>: Systematic over/under-estimation</li>
-                <li><b>wMAPE</b>: Weighted Mean Absolute Percentage Error</li>
+            <b style="display: block; margin-bottom: 2px;">📉 Phase 05: Validation Metrics</b>
+            <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
+                <li><b>RMSE:</b> Root Mean Square Error (main accuracy metric).</li>
+                <li><b>R²:</b> Coefficient of Determination (goodness of fit).</li>
+                <li><b>MAE:</b> Mean Absolute Error.</li>
+                <li><b>Bias:</b> Systematic over/under-estimation.</li>
+                <li><b>wMAPE:</b> Weighted Mean Absolute Percentage Error.</li>
             </ul>
 
-            <b>Stratified Analysis:</b>
-            <ul><li>Accuracy broken down by depth zones (0–5m, 5–10m, etc.)</li></ul>
-
-            <b>Output Files:</b>
-            <ul>
-                <li>5_FINAL_SUMMARY.txt — Comparison report and winner verdict</li>
-                <li>5_Validation_Raw_Data.csv — Point-by-point predictions and errors</li>
-                <li>5_Stratified_Error_Analysis.csv — Metrics per depth zone</li>
-                <li>5_Plot_Scatter_Comparison.png</li>
-                <li>5_Plot_Residuals.png</li>
-                <li>5_Plot_Error_Histogram.png</li>
+            <b style="display: block; margin-bottom: 2px;">📊 Detailed Analysis</b>
+            <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
+                <li><b>Stratified Analysis:</b> Accuracy broken down by depth zones (0-5m, 5-10m, etc.).</li>
+                <li><b>Output Plots:</b> Generates Scatter Comparisons, Residuals, and Error Histograms.</li>
             </ul>
         </div>
         """

@@ -23,7 +23,11 @@ class SdbToolsPlugin:
             'icepyx': 'icepyx',
             'geopandas': 'geopandas',
             'pyarrow': 'pyarrow',
-            'netCDF4': 'netCDF4'
+            'netCDF4': 'netCDF4',
+            'xgboost': 'xgboost',
+            'lightgbm': 'lightgbm',
+            'catboost': 'catboost',
+            'optuna': 'optuna'
         }
         missing = []
         for mod, pip_name in required_modules.items():
