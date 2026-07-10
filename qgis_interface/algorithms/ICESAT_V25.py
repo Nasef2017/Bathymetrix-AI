@@ -388,17 +388,26 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
             chunk_parms["output"] = {
                 "path": chunk_output_path,
                 "format": "geoparquet",
-                "open_on_complete": True
+                "open_on_complete": False
             }
 
             feedback.pushInfo(f"[{idx+1}/{len(chunks)}] Requesting {api_endpoint} from SlideRule ({start_chunk.strftime('%Y-%m-%d')} to {end_chunk.strftime('%Y-%m-%d')})...")
             try:
-                gdf_chunk = sr.run(api_endpoint, chunk_parms)
-                if gdf_chunk is None or gdf_chunk.empty:
-                    feedback.pushInfo(f" -> SlideRule returned 0 points.")
+                gdf_chunk_path = sr.run(api_endpoint, chunk_parms)
+                if gdf_chunk_path and os.path.exists(gdf_chunk_path):
+                    import pyarrow.parquet as pq
+                    import shapely
+                    table = pq.read_table(gdf_chunk_path)
+                    if table.num_rows == 0:
+                        feedback.pushInfo(f" -> SlideRule returned 0 points.")
+                    else:
+                        df_chunk = table.to_pandas()
+                        if 'geometry' in df_chunk.columns:
+                            df_chunk['geometry'] = shapely.from_wkb(df_chunk['geometry'])
+                        feedback.pushInfo(f" -> Successfully downloaded {len(df_chunk)} points.")
+                        gdfs_list.append(df_chunk)
                 else:
-                    feedback.pushInfo(f" -> Successfully downloaded {len(gdf_chunk)} points.")
-                    gdfs_list.append(gdf_chunk)
+                    feedback.pushInfo(f" -> SlideRule returned 0 points.")
             except Exception as e:
                 feedback.pushInfo(f" -> SlideRule query failed for this chunk: {e}")
             finally:
@@ -515,15 +524,24 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
                     chunk_parms["output"] = {
                         "path": chunk_output_path,
                         "format": "geoparquet",
-                        "open_on_complete": True
+                        "open_on_complete": False
                     }
                     
                     feedback.pushInfo(f"[{idx+1}/{len(fallback_chunks)}] Fallback Requesting {api_endpoint} from SlideRule ({fs.strftime('%Y-%m-%d')} to {fe.strftime('%Y-%m-%d')})...")
                     try:
-                        gdf_chunk = sr.run(api_endpoint, chunk_parms)
-                        if gdf_chunk is not None and not gdf_chunk.empty:
-                            feedback.pushInfo(f" -> Successfully downloaded {len(gdf_chunk)} points.")
-                            fallback_gdfs.append(gdf_chunk)
+                        gdf_chunk_path = sr.run(api_endpoint, chunk_parms)
+                        if gdf_chunk_path and os.path.exists(gdf_chunk_path):
+                            import pyarrow.parquet as pq
+                            import shapely
+                            table = pq.read_table(gdf_chunk_path)
+                            if table.num_rows > 0:
+                                df_chunk = table.to_pandas()
+                                if 'geometry' in df_chunk.columns:
+                                    df_chunk['geometry'] = shapely.from_wkb(df_chunk['geometry'])
+                                feedback.pushInfo(f" -> Successfully downloaded {len(df_chunk)} points.")
+                                fallback_gdfs.append(df_chunk)
+                            else:
+                                feedback.pushInfo(f" -> SlideRule returned 0 points.")
                         else:
                             feedback.pushInfo(f" -> SlideRule returned 0 points.")
                     except Exception as fallback_err:
