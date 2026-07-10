@@ -72,7 +72,7 @@ pip install numpy pandas rasterio matplotlib seaborn scikit-learn>=1.5.0 scipy j
 **Author:** Mohamed Aly Nasef  
 **Email:** Eng.m.nasef2017@gmail.com, Nasefm.aly@alexu.edu.eg  
 
-
+Nasef M.Aly. (2026). Nasef2017/Bathymetrix-AI: Bathymetrix_AI V6.1 (Version v6.1) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.21298121
 
 🤖 **AI Acknowledgment**  
 The development of the Bathymetrix-AI code, its logical structure, and the technical documentation were significantly enhanced and optimized using Google Gemini. The AI assisted in debugging complex workflows and ensuring the implementation follows best practices in data science.
