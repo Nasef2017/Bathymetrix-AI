@@ -115,6 +115,31 @@ def calc_stats(y_true, y_pred):
     return {"R2": r2, "RMSE": rmse, "MAE": mae, "Bias": bias, "wMAPE": wmape}
 
 
+def compute_iho_details(rmse, mean_depth):
+    d = float(abs(mean_depth))
+    # S-44 TVU Max Formulas
+    tvu_special = np.sqrt(0.25**2 + (0.0075 * d)**2)
+    tvu_order1 = np.sqrt(0.5**2 + (0.013 * d)**2)
+    tvu_order2 = np.sqrt(1.0**2 + (0.023 * d)**2)
+    
+    model_tvu = 1.96 * rmse
+    
+    if model_tvu <= tvu_special:
+        achieved = "Special Order"
+        limit = tvu_special
+    elif model_tvu <= tvu_order1:
+        achieved = "Order 1a/1b"
+        limit = tvu_order1
+    elif model_tvu <= tvu_order2:
+        achieved = "Order 2"
+        limit = tvu_order2
+    else:
+        achieved = "Out of Spec"
+        limit = tvu_order2
+        
+    return achieved, model_tvu, limit
+
+
 def stratified_analysis(y_true, y_pred, model_name):
     bins = [0, 5, 10, 15, 20, 30, 50, 100]
     labels = [f"{bins[i]}-{bins[i + 1]}m" for i in range(len(bins) - 1)]
@@ -123,14 +148,58 @@ def stratified_analysis(y_true, y_pred, model_name):
     rows = []
 
     s = calc_stats(y_true, y_pred)
-    rows.append({"Model": model_name, "Depth_Bin": "GLOBAL", "Count": len(y_true), **s})
+    mean_d = float(np.mean(abs_true)) if len(abs_true) > 0 else 0.0
+    achieved, model_tvu, limit = compute_iho_details(s["RMSE"], mean_d)
+    
+    if achieved == "Special Order":
+        uses = "Navigational safety, under-keel clearance, dredging, harbor engineering, benthic habitat modeling."
+    elif achieved == "Order 1a/1b":
+        uses = "General coastal shipping, marine spatial planning, coastal erosion assessment, habitat mapping, wave modeling."
+    elif achieved == "Order 2":
+        uses = "General bathymetric mapping, pre-survey planning, tsunami/tide modeling, marine resource exploration."
+    else:
+        uses = "Reconnaissance surveys, preliminary coastal planning, general environmental visualization, low-risk modeling."
+
+    rows.append({
+        "Model": model_name,
+        "Depth_Bin": "GLOBAL",
+        "Count": len(y_true),
+        "Mean_Depth": round(mean_d, 2),
+        **s,
+        "Model_TVU_95": round(model_tvu, 3),
+        "IHO_TVU_Limit": round(limit, 3),
+        "IHO_Order": achieved,
+        "Suggested_Uses": uses
+    })
 
     for i in range(len(bins) - 1):
         mask = (abs_true >= bins[i]) & (abs_true < bins[i + 1])
         n = int(np.sum(mask))
         if n >= 5:
             sb = calc_stats(y_true[mask], y_pred[mask])
-            rows.append({"Model": model_name, "Depth_Bin": labels[i], "Count": n, **sb})
+            mean_d_bin = float(np.mean(abs_true[mask]))
+            achieved_bin, model_tvu_bin, limit_bin = compute_iho_details(sb["RMSE"], mean_d_bin)
+            
+            if achieved_bin == "Special Order":
+                uses_bin = "Navigational safety, under-keel clearance, dredging, harbor engineering, benthic habitat modeling."
+            elif achieved_bin == "Order 1a/1b":
+                uses_bin = "General coastal shipping, marine spatial planning, coastal erosion assessment, habitat mapping, wave modeling."
+            elif achieved_bin == "Order 2":
+                uses_bin = "General bathymetric mapping, pre-survey planning, tsunami/tide modeling, marine resource exploration."
+            else:
+                uses_bin = "Reconnaissance surveys, preliminary coastal planning, general environmental visualization, low-risk modeling."
+
+            rows.append({
+                "Model": model_name,
+                "Depth_Bin": labels[i],
+                "Count": n,
+                "Mean_Depth": round(mean_d_bin, 2),
+                **sb,
+                "Model_TVU_95": round(model_tvu_bin, 3),
+                "IHO_TVU_Limit": round(limit_bin, 3),
+                "IHO_Order": achieved_bin,
+                "Suggested_Uses": uses_bin
+            })
 
     return rows
 

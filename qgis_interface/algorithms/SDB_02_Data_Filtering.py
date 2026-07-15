@@ -47,9 +47,18 @@ class SDBModule02(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
+            QgsProcessingParameterEnum(
+                self.FILTER_MODE,
+                "Filtering Strategy",
+                options=self.FILTER_MODES,
+                defaultValue=2,
+            )
+        )
+        
+        self.addParameter(
             QgsProcessingParameterBand(
                 self.BLUE_BAND,
-                "Blue Band Number",
+                "Numerator Band (e.g., Blue)",
                 parentLayerParameterName=self.INPUT_STACK,
                 defaultValue=2,
             )
@@ -57,18 +66,9 @@ class SDBModule02(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterBand(
                 self.GREEN_BAND,
-                "Green Band Number",
+                "Denominator Band (e.g., Green)",
                 parentLayerParameterName=self.INPUT_STACK,
                 defaultValue=3,
-            )
-        )
-
-        self.addParameter(
-            QgsProcessingParameterEnum(
-                self.FILTER_MODE,
-                "Filtering Strategy",
-                options=self.FILTER_MODES,
-                defaultValue=2,
             )
         )
 

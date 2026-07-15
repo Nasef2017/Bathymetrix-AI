@@ -30,6 +30,7 @@ This phase prepares the satellite imagery by isolating the aquatic domain and co
 **Sun-Glint Removal:** Removes surface reflections to reveal the seabed signal (Hedley et al., 2005).  
 **Water Segmentation:** Advanced Water Masking using 3-Indices (NDWI, MNDWI, NWI) alongside adaptive thresholding to accurately isolate the aquatic domain.
 **Deep Water OSW Filtering:** Deep Water Filter customized for ML algorithms, automatically calculating deep water statistical thresholds to isolate the Optically Shallow Water (OSW) zone where bathymetry is valid.
+**OSW Boundary Extraction:** Automatically extracts the Optically Shallow Water footprint as a GPKG vector polygon, inheriting the CRS of the source imagery to eliminate GDAL cutline projection warnings during map clipping.
 **Log-Ratio Features:** Transforms spectral bands into depth-sensitive features based on light attenuation laws, computing physics-based Log-Ratio features.
 
 **Phase 02: Robust Filtering**
@@ -38,7 +39,7 @@ To ensure high-quality training data, the tool filters altimetry data to remove 
 
 **Phase 03: Global Auto-ML & Feature Analysis**
 Instead of using one algorithm, the tool implements an automated machine learning workflow.
-**Feature Analysis:** Optionally drops weak bands based on their Pearson or Spearman correlation with the target depth.
+**Feature Analysis:** Implements advanced feature selection by dropping weak or redundant bands using statistical correlations (Pearson, Spearman) or automated dynamic thresholds (Automatic-RANSAC, Automatic-Random Forest).
 **Algorithm Benchmarking:** Evaluates 15+ different Machine Learning models (e.g., Random Forest, Gradient Boosting, XGBoost, CatBoost, SVR, MLP) to find the best fit for specific coastal areas.
 **Hyperparameter Optimization:** Automatically tunes model settings via Random Search, Grid Search, or Bayesian Optimization (Bergstra & Bengio, 2012).
 **Spatial Cross-Validation:** Independent spatial block cross-validation control to evaluate base models.
@@ -52,6 +53,7 @@ This phase corrects local errors that global models might miss by analyzing the 
 
 **Phase 05: Validation & Reporting**
 **Independent Accuracy Assessment:** Validates the finalized models on unseen test data to ensure robust accuracy reporting and scientific validity.
+**Interactive Validation Dashboard:** Generates a premium HTML dashboard containing comprehensive AutoML leaderboards, validation metrics, and diagnostic plots with a high-performance responsive layout.
 
 📊 **Performance Metrics**
 
@@ -72,7 +74,7 @@ pip install numpy pandas rasterio matplotlib seaborn scikit-learn>=1.5.0 scipy j
 **Author:** Mohamed Aly Nasef  
 **Email:** Eng.m.nasef2017@gmail.com, Nasefm.aly@alexu.edu.eg  
 
-Nasef M.Aly. (2026). Nasef2017/Bathymetrix-AI: Bathymetrix_AI V6.1 (Version v6.1) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.21298121
+Nasef M.Aly. (2026). Nasef2017/Bathymetrix-AI: Bathymetrix_AI V6.2 (Version v6.2) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.21374451
 
 🤖 **AI Acknowledgment**  
 The development of the Bathymetrix-AI code, its logical structure, and the technical documentation were significantly enhanced and optimized using Google Gemini. The AI assisted in debugging complex workflows and ensuring the implementation follows best practices in data science.

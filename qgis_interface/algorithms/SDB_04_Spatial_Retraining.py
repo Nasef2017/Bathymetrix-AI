@@ -25,6 +25,7 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
     INPUT_MASK = "INPUT_MASK"
     INPUT_TRAIN = "INPUT_TRAIN"
     FIELD_TRAIN = "FIELD_TRAIN"
+    STACK_COMPONENTS = "STACK_COMPONENTS"
 
     SELECTED_ALGOS = "SELECTED_ALGOS"
     OPTIMIZER_METHOD = "OPTIMIZER_METHOD"
@@ -66,6 +67,8 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
     KNN_NEIGHBORS = "KNN_NEIGHBORS"
     SPATIAL_CV = "SPATIAL_CV"
 
+    FEATURE_CORR_THRESHOLDS = ["0.0", "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1.0"]
+
     MODEL_LIST = [
         "Linear Regression",
         "Random Forest",
@@ -94,7 +97,7 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
         )
         self.addParameter(
             QgsProcessingParameterRasterLayer(
-                self.INPUT_ORIGINAL_FEAT, "Input Original Feature Stack"
+                self.INPUT_ORIGINAL_FEAT, "Input Feature Stack (Phase 01)"
             )
         )
         self.addParameter(
@@ -113,6 +116,15 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
                 "Depth Field",
                 parentLayerParameterName=self.INPUT_TRAIN,
                 type=QgsProcessingParameterField.Numeric,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.STACK_COMPONENTS,
+                "Features for Retraining",
+                options=["Feature Stack (Phase 01)", "Phase 03 Depth Map", "Residual Error Grid"],
+                allowMultiple=True,
+                defaultValue=[1, 2],
             )
         )
 
@@ -207,15 +219,15 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
             QgsProcessingParameterEnum(
                 self.FEATURE_CORR_METHOD,
                 "Feature Correlation Method",
-                options=["Pearson (Linear)", "Spearman (Rank)"],
-                defaultValue=1,
+                options=["Disabled", "Pearson (Linear)", "Spearman (Rank)", "Automatic-RANSAC", "Automatic-Random Forest"],
+                defaultValue=3,
             )
         )
         self.addParameter(
             QgsProcessingParameterEnum(
                 self.FEATURE_CORR_THRESHOLD,
                 "Feature Correlation Threshold",
-                options=['0.0 (Disable)', '0.1', '0.2', '0.3', '0.4', '0.5', '0.6', '0.7', '0.8', '0.9', '1.0'],
+                options=self.FEATURE_CORR_THRESHOLDS,
                 defaultValue=2,
             )
         )

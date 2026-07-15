@@ -1,13 +1,25 @@
 import datetime
 import os
-
 import processing
+
 from qgis.core import (
     QgsProcessingContext,
     QgsProcessingException,
     QgsProject,
     QgsRasterLayer,
+    QgsProcessingFeedback,
+    QgsProcessingLayerPostProcessorInterface,
 )
+
+class StylePostProcessor(QgsProcessingLayerPostProcessorInterface):
+    def __init__(self, qml_path):
+        super().__init__()
+        self.qml_path = qml_path
+        
+    def postProcessLayer(self, layer, context, feedback):
+        if layer and layer.isValid():
+            layer.loadNamedStyle(self.qml_path)
+            layer.triggerRepaint()
 
 from ..infrastructure.logging import append_log
 from ..infrastructure.raster_io import (
@@ -18,14 +30,544 @@ from ..infrastructure.raster_io import (
 from ..infrastructure.vector_io import filter_by_depth, reproject_layer_if_needed
 
 
+class LoggingFeedback(QgsProcessingFeedback):
+    def __init__(self, original_feedback, log_file_path):
+        super().__init__()
+        self.original = original_feedback
+        self.log_path = log_file_path
+        self.is_logging_feedback = True
+        
+    def setProgressText(self, text):
+        if self.original:
+            self.original.setProgressText(text)
+        self.log_message(f"Progress: {text}")
+        
+    def pushInfo(self, info):
+        if self.original:
+            self.original.pushInfo(info)
+        self.log_message(info)
+        
+    def pushWarning(self, warning):
+        if self.original:
+            self.original.pushWarning(warning)
+        self.log_message(f"[Warning] {warning}")
+        
+    def pushError(self, error):
+        if self.original:
+            self.original.pushError(error)
+        self.log_message(f"[ERROR] {error}")
+        
+    def reportError(self, error, fatal=False):
+        if self.original:
+            self.original.reportError(error, fatal)
+        self.log_message(f"[CRITICAL ERROR] {error}")
+        
+    def setProgress(self, progress):
+        if self.original:
+            self.original.setProgress(progress)
+            
+    def isCanceled(self):
+        if self.original:
+            return self.original.isCanceled()
+        return super().isCanceled()
+        
+    def log_message(self, message):
+        if self.log_path:
+            try:
+                with open(self.log_path, "a", encoding="utf-8") as f:
+                    f.write(message + "\n")
+            except Exception:
+                pass
+
+
+def get_raster_min_max(raster_path):
+    try:
+        from osgeo import gdal
+        ds = gdal.Open(raster_path)
+        if ds:
+            band = ds.GetRasterBand(1)
+            stats = band.GetStatistics(0, 1) # Force statistics computation
+            min_val = stats[0]
+            max_val = stats[1]
+            if min_val is None or max_val is None:
+                min_val = band.GetMinimum()
+                max_val = band.GetMaximum()
+            
+            import numpy as np
+            if min_val is not None and not np.isnan(min_val):
+                return float(min_val), float(max_val) if max_val is not None else 0.0
+    except Exception:
+        pass
+    return -30.0, 0.0
+
+
+def write_qml_style(tif_path):
+    if not tif_path or not os.path.exists(tif_path):
+        return
+    
+    qml_path = os.path.splitext(tif_path)[0] + ".qml"
+    min_d, max_d = get_raster_min_max(tif_path)
+    
+    step = (max_d - min_d) / 8.0
+    
+    qml_content = f"""<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
+<qgis version="3.28.0" hasScaleBasedVisibilityFlag="0" minScale="1e+08" maxScale="0">
+  <pipe>
+    <provider>
+      <resampling zoomedOutResamplingMethod="nearestNeighbour" maxOversampling="2" zoomedInResamplingMethod="nearestNeighbour" enabled="false"/>
+    </provider>
+    <rasterrenderer opacity="1" classificationMin="{min_d}" nodataColor="" alphaBand="-1" classificationMax="{max_d}" band="1" type="singlebandpseudocolor">
+      <rasterTransparency/>
+      <minMaxOrigin>
+        <limits>None</limits>
+        <extent>WholeRaster</extent>
+        <statAccuracy>Estimated</statAccuracy>
+        <cumulativeCutLower>0.02</cumulativeCutLower>
+        <cumulativeCutUpper>0.98</cumulativeCutUpper>
+        <stdDevFactor>2</stdDevFactor>
+      </minMaxOrigin>
+      <rastershader>
+        <colorrampshader classificationMode="1" colorRampType="INTERPOLATED" labelPrecision="4" clip="0">
+          <item alpha="255" value="{min_d}" label="{min_d:.2f}" color="#08306b"/>
+          <item alpha="255" value="{min_d + step * 1}" label="{(min_d + step * 1):.2f}" color="#08519c"/>
+          <item alpha="255" value="{min_d + step * 2}" label="{(min_d + step * 2):.2f}" color="#2171b5"/>
+          <item alpha="255" value="{min_d + step * 3}" label="{(min_d + step * 3):.2f}" color="#4292c6"/>
+          <item alpha="255" value="{min_d + step * 4}" label="{(min_d + step * 4):.2f}" color="#6baed6"/>
+          <item alpha="255" value="{min_d + step * 5}" label="{(min_d + step * 5):.2f}" color="#9ecae1"/>
+          <item alpha="255" value="{min_d + step * 6}" label="{(min_d + step * 6):.2f}" color="#c6dbef"/>
+          <item alpha="255" value="{min_d + step * 7}" label="{(min_d + step * 7):.2f}" color="#deebf7"/>
+          <item alpha="255" value="{max_d}" label="{max_d:.2f}" color="#f7fbff"/>
+        </colorrampshader>
+      </rastershader>
+    </rasterrenderer>
+    <brightnesscontrast brightness="0" contrast="0"/>
+    <huesaturation colorizeGreen="128" colorizeStrength="100" saturation="0" colorizeOn="0" grayscaleMode="0" colorizeRed="255" colorizeBlue="128"/>
+    <rasterresampler maxOversampling="2"/>
+  </pipe>
+  <blendMode>0</blendMode>
+</qgis>
+"""
+    try:
+        with open(qml_path, "w", encoding="utf-8") as f:
+            f.write(qml_content)
+    except Exception:
+        pass
+
+
+def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, spatial_cv_p4=True):
+    benchmark_csv = os.path.join(p3_dir, "3_All_Algorithms_Benchmark.csv")
+    p4_benchmark_csv = os.path.join(p4_dir, "4_All_Algorithms_Benchmark.csv") if p4_dir else None
+    
+    cv_type_p3 = "Spatial K-Fold Cross Validation" if spatial_cv_p3 else "Standard Random K-Fold Cross Validation"
+    cv_type_p4 = "Spatial K-Fold Cross Validation" if spatial_cv_p4 else "Standard Random K-Fold Cross Validation"
+    
+    folder_name = os.path.basename(out_dir)
+    folder_url = f"file:///{out_dir.replace(chr(92), '/')}"
+    
+    rows_p3_html = ""
+    rows_p4_html = ""
+    rows_strat_html = ""
+    has_strat = False
+    all_models = []
+    
+    best_algo = "N/A"
+    best_r2 = -9999.0
+    best_rmse = 9999.0
+    
+    import csv
+    
+    # Read Phase 3
+    if os.path.exists(benchmark_csv):
+        try:
+            with open(benchmark_csv, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    algo = row.get("Algorithm", "Unknown")
+                    r2 = float(row.get("R2", 0.0))
+                    rmse = float(row.get("RMSE", 0.0))
+                    wmape = float(row.get("wMAPE", 0.0))
+                    
+                    if r2 > best_r2:
+                        best_r2 = r2
+                        best_algo = algo
+                        best_rmse = rmse
+                        
+                    all_models.append({
+                        "Phase": "Phase 03: Initial Modeling",
+                        "Algorithm": algo,
+                        "R2": r2,
+                        "RMSE": rmse,
+                        "wMAPE": wmape
+                    })
+                    
+                    rows_p3_html += f"""
+                    <tr class="hover:bg-slate-700/50 transition-colors border-b border-slate-700/30">
+                        <td class="px-6 py-4 text-sm font-semibold text-slate-200">{algo}</td>
+                        <td class="px-6 py-4 text-sm font-medium text-emerald-400">{r2:.4f}</td>
+                        <td class="px-6 py-4 text-sm font-medium text-blue-400">{rmse:.2f}m</td>
+                        <td class="px-6 py-4 text-sm font-medium text-indigo-400">{wmape:.2f}%</td>
+                        <td class="px-6 py-4 text-sm">
+                            <a href="Phase_03_Initial_Modeling/{algo.replace(" ", "_")}/Validation_Scatter_Plot.png" target="_blank" class="text-xs text-sky-400 hover:text-sky-300 font-semibold underline">View Plot</a>
+                        </td>
+                    </tr>
+                    """
+        except Exception:
+            pass
+
+    # Read Phase 4
+    has_p4 = False
+    if p4_benchmark_csv and os.path.exists(p4_benchmark_csv):
+        has_p4 = True
+        try:
+            with open(p4_benchmark_csv, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    algo = row.get("Algorithm", "Unknown")
+                    r2 = float(row.get("R2", 0.0))
+                    rmse = float(row.get("RMSE", 0.0))
+                    wmape = float(row.get("wMAPE", 0.0))
+                    
+                    if r2 > best_r2:
+                        best_r2 = r2
+                        best_algo = algo
+                        best_rmse = rmse
+                        
+                    all_models.append({
+                        "Phase": "Phase 04: Adaptive Refinement",
+                        "Algorithm": algo,
+                        "R2": r2,
+                        "RMSE": rmse,
+                        "wMAPE": wmape
+                    })
+                    
+                    rows_p4_html += f"""
+                    <tr class="hover:bg-slate-700/50 transition-colors border-b border-slate-700/30">
+                        <td class="px-6 py-4 text-sm font-semibold text-slate-200">{algo}</td>
+                        <td class="px-6 py-4 text-sm font-medium text-emerald-400">{r2:.4f}</td>
+                        <td class="px-6 py-4 text-sm font-medium text-blue-400">{rmse:.2f}m</td>
+                        <td class="px-6 py-4 text-sm font-medium text-indigo-400">{wmape:.2f}%</td>
+                    </tr>
+                    """
+        except Exception:
+            pass
+
+    # Sort all models to find top 3
+    all_models.sort(key=lambda x: (-x["R2"], x["RMSE"]))
+    top_3_models = all_models[:3]
+    
+    top_3_html = ""
+    medals = ["🥇 First", "🥈 Second", "🥉 Third"]
+    medals_colors = ["text-amber-400", "text-slate-300", "text-amber-600"]
+    medals_bg = [
+        "bg-amber-500/10 border-amber-500/20",
+        "bg-slate-400/10 border-slate-400/20",
+        "bg-amber-700/10 border-amber-700/20"
+    ]
+    
+    for i, m in enumerate(top_3_models):
+        medal = medals[i] if i < len(medals) else f"#{i+1}"
+        color_class = medals_colors[i] if i < len(medals_colors) else "text-slate-400"
+        bg_class = medals_bg[i] if i < len(medals_bg) else "bg-slate-800/10 border-slate-800/20"
+        
+        top_3_html += f"""
+        <div class="flex items-center justify-between p-4 rounded-xl border {bg_class} transition-all hover:scale-[1.01]">
+            <div class="flex items-center space-x-4">
+                <span class="text-xl font-bold {color_class}">{medal}</span>
+                <div>
+                    <h4 class="font-bold text-slate-100">{m['Algorithm']}</h4>
+                    <p class="text-xs text-slate-400">{m['Phase']}</p>
+                </div>
+            </div>
+            <div class="flex items-center space-x-6 text-right">
+                <div>
+                    <span class="text-xs text-slate-400 block uppercase tracking-wider">R² Score</span>
+                    <span class="text-sm font-bold text-emerald-400">{m['R2']:.4f}</span>
+                </div>
+                <div>
+                    <span class="text-xs text-slate-400 block uppercase tracking-wider">RMSE</span>
+                    <span class="text-sm font-bold text-blue-400">{m['RMSE']:.2f}m</span>
+                </div>
+                <div>
+                    <span class="text-xs text-slate-400 block uppercase tracking-wider">wMAPE</span>
+                    <span class="text-sm font-bold text-indigo-400">{m['wMAPE']:.2f}%</span>
+                </div>
+            </div>
+        </div>
+        """
+
+    if not top_3_html:
+        top_3_html = '<p class="text-sm text-slate-400">No model results found.</p>'
+
+    stratified_csv = os.path.join(out_dir, "5_Stratified_Error_Analysis.csv")
+    if os.path.exists(stratified_csv):
+        has_strat = True
+        try:
+            with open(stratified_csv, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    model = row.get("Model", "Unknown")
+                    depth_bin = row.get("Depth_Bin", "Unknown")
+                    count = row.get("Count", "0")
+                    mean_depth = float(row.get("Mean_Depth", 0.0))
+                    rmse = float(row.get("RMSE", 0.0))
+                    model_tvu = float(row.get("Model_TVU_95", 0.0))
+                    iho_limit = float(row.get("IHO_TVU_Limit", 0.0))
+                    iho_order = row.get("IHO_Order", "Unknown")
+                    uses = row.get("Suggested_Uses", "")
+                    
+                    if iho_order == "Special Order":
+                        order_badge = '<span class="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Special Order</span>'
+                    elif iho_order == "Order 1a/1b":
+                        order_badge = '<span class="px-2 py-0.5 rounded text-xs font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20">Order 1a/1b</span>'
+                    elif iho_order == "Order 2":
+                        order_badge = '<span class="px-2 py-0.5 rounded text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">Order 2</span>'
+                    else:
+                        order_badge = '<span class="px-2 py-0.5 rounded text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">Out of Spec</span>'
+                        
+                    rows_strat_html += f"""
+                    <tr class="hover:bg-slate-700/50 transition-colors border-b border-slate-700/30">
+                        <td class="px-6 py-4 text-xs font-semibold text-slate-300">{model}</td>
+                        <td class="px-6 py-4 text-xs font-medium text-slate-200">{depth_bin}</td>
+                        <td class="px-6 py-4 text-xs text-slate-400">{count}</td>
+                        <td class="px-6 py-4 text-xs text-slate-400">{mean_depth:.2f}m</td>
+                        <td class="px-6 py-4 text-xs text-slate-400">{rmse:.3f}m</td>
+                        <td class="px-6 py-4 text-xs font-semibold text-sky-400">{model_tvu:.3f}m</td>
+                        <td class="px-6 py-4 text-xs text-slate-500">{iho_limit:.3f}m</td>
+                        <td class="px-6 py-4 text-xs">{order_badge}</td>
+                        <td class="px-6 py-4 text-xs text-slate-400 max-w-xs truncate" title="{uses}">{uses}</td>
+                    </tr>
+                    """
+        except Exception:
+            pass
+
+    html_strat_section = ""
+    if has_strat:
+        html_strat_section = f"""
+        <!-- IHO S-44 Standards Compliance & B-13 Applications -->
+        <div class="bg-slate-800/30 border border-slate-700/30 rounded-2xl p-6 mt-8">
+            <div class="flex items-center justify-between mb-4 border-b border-slate-800 pb-4">
+                <div>
+                    <h2 class="text-lg font-bold text-slate-100">🌊 IHO S-44 Hydrographic Standards & Industrial Uses</h2>
+                    <p class="text-xs text-slate-400 mt-1">Conformity analysis of prediction uncertainty against International Hydrographic Organization (IHO) orders</p>
+                </div>
+            </div>
+            
+            <!-- Legal Disclaimer Warning Box -->
+            <div class="p-4 bg-amber-500/10 border border-amber-500/20 text-amber-300 rounded-xl mb-6 text-xs leading-relaxed">
+                <strong>⚠️ IMPORTANT LEGAL DISCLAIMER:</strong>
+                This analysis, including IHO S-44 conformity assessment and recommended industrial applications, is generated automatically for reference, planning, and scientific guidance purposes only. It does not constitute official hydrographic data or a certified navigational product. This information <strong>must not</strong> be used for direct vessel navigation, marine safety operations, or any legal hydrographic charting applications. Always consult official charts published by authorized national hydrographic authorities.
+            </div>
+            
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-800 text-left">
+                    <thead class="bg-slate-800/20 text-slate-400 text-xs font-semibold uppercase tracking-wider">
+                        <tr>
+                            <th class="px-6 py-3">Model</th>
+                            <th class="px-6 py-3">Depth Bin</th>
+                            <th class="px-6 py-3">Samples</th>
+                            <th class="px-6 py-3">Mean Depth</th>
+                            <th class="px-6 py-3">RMSE</th>
+                            <th class="px-6 py-3">Model TVU (95%)</th>
+                            <th class="px-6 py-3">IHO Limit (95%)</th>
+                            <th class="px-6 py-3">Achieved Order</th>
+                            <th class="px-6 py-3">Suggested Applications</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-800 bg-transparent text-xs text-slate-300">
+                        {rows_strat_html}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        """
+
+    has_val_plots = os.path.exists(os.path.join(out_dir, "5_Plot_Scatter_Comparison.png"))
+    main_grid_col_class = "lg:col-span-2" if has_val_plots else "lg:col-span-3"
+    best_r2_str = f"{best_r2:.4f}" if best_r2 != -9999.0 else "N/A"
+    best_rmse_str = f"{best_rmse:.2f}m" if best_rmse != 9999.0 else "N/A"
+
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bathymetrix-AI Project Validation Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {{
+            background-color: #0f172a;
+        }}
+    </style>
+</head>
+<body class="text-slate-100 font-sans antialiased min-h-screen">
+    <div class="max-w-6xl mx-auto px-4 py-8">
+        <!-- Header -->
+        <header class="flex items-center justify-between mb-8 pb-6 border-b border-slate-800">
+            <div>
+                <h1 class="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-sky-400 to-blue-500 bg-clip-text text-transparent">🛰&nbsp;Bathymetrix-AI</h1>
+                <p class="text-slate-400 mt-1 text-sm font-medium">Satellite-Derived Bathymetry (SDB) Project Dashboard</p>
+                <div class="mt-2 text-xs text-slate-400">
+                    Project Folder: <a href="{folder_url}" target="_blank" class="text-sky-400 hover:underline font-mono text-sm font-semibold">{folder_name}</a>
+                </div>
+            </div>
+            <div class="text-right flex flex-col items-end">
+                <div class="text-xs text-slate-400 mb-1.5 font-medium">
+                    Tool: <span class="text-sky-400 font-bold">SDB MasterFlow</span> | Developer: <span class="text-slate-200 font-semibold">Mohamed Aly Nasef</span>
+                </div>
+                <span class="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 w-fit">Pipeline Completed</span>
+            </div>
+        </header>
+
+        <!-- Quick Metrics -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <div class="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-6 backdrop-blur-sm">
+                <h3 class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2">Best Performing Algorithm</h3>
+                <div class="text-2xl font-bold text-slate-100">{best_algo}</div>
+            </div>
+            <div class="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-6 backdrop-blur-sm">
+                <h3 class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2">AutoML Best R² Score</h3>
+                <div class="text-2xl font-bold text-emerald-400">{best_r2_str}</div>
+            </div>
+            <div class="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-6 backdrop-blur-sm">
+                <h3 class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2">AutoML Best RMSE</h3>
+                <div class="text-2xl font-bold text-blue-400">{best_rmse_str}</div>
+            </div>
+        </div>
+
+        <!-- Main Grid -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <!-- Left Column: Leaderboards -->
+            <div class="{main_grid_col_class} space-y-8">
+                <!-- Phase 03 Leaderboard -->
+                <div class="bg-slate-800/30 border border-slate-700/30 rounded-2xl overflow-hidden">
+                    <div class="px-6 py-5 border-b border-slate-800 bg-slate-800/50 flex justify-between items-center flex-wrap gap-2">
+                        <div>
+                            <h2 class="text-lg font-bold text-slate-100">🏆 Phase 03: Initial Modeling Leaderboard</h2>
+                            <p class="text-xs text-slate-400 mt-1">Cross-Validation performance of benchmarked algorithms</p>
+                        </div>
+                        <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20">{cv_type_p3}</span>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-slate-800 text-left">
+                            <thead class="bg-slate-800/20 text-slate-400 text-xs font-semibold uppercase tracking-wider">
+                                <tr>
+                                    <th class="px-6 py-3">Algorithm</th>
+                                    <th class="px-6 py-3">R² Score</th>
+                                    <th class="px-6 py-3">RMSE</th>
+                                    <th class="px-6 py-3">wMAPE</th>
+                                    <th class="px-6 py-3">Details</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-800 bg-transparent">
+                                {rows_p3_html if rows_p3_html else '<tr><td colspan="5" class="px-6 py-4 text-center text-slate-400 text-sm">No Phase 03 results found.</td></tr>'}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Phase 04 Leaderboard (Conditionally Shown) -->
+                {f'''<div class="bg-slate-800/30 border border-slate-700/30 rounded-2xl overflow-hidden">
+                    <div class="px-6 py-5 border-b border-slate-800 bg-slate-800/50 flex justify-between items-center flex-wrap gap-2">
+                        <div>
+                            <h2 class="text-lg font-bold text-slate-100">⚡ Phase 04: Adaptive Refinement Leaderboard</h2>
+                            <p class="text-xs text-slate-400 mt-1">Cross-Validation/Retraining performance after adaptive refinement</p>
+                        </div>
+                        <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-violet-500/10 text-violet-400 border border-violet-500/20">{cv_type_p4}</span>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-slate-800 text-left">
+                            <thead class="bg-slate-800/20 text-slate-400 text-xs font-semibold uppercase tracking-wider">
+                                <tr>
+                                    <th class="px-6 py-3">Algorithm</th>
+                                    <th class="px-6 py-3">R² Score</th>
+                                    <th class="px-6 py-3">RMSE</th>
+                                    <th class="px-6 py-3">wMAPE</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-800 bg-transparent">
+                                {rows_p4_html if rows_p4_html else '<tr><td colspan="4" class="px-6 py-4 text-center text-slate-400 text-sm">No Phase 04 results found.</td></tr>'}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>''' if has_p4 else ''}
+
+                <!-- Top 3 Best Performing Models -->
+                <div class="bg-slate-800/30 border border-slate-700/30 rounded-2xl p-6">
+                    <h2 class="text-lg font-bold text-slate-100 mb-2">⭐ Top 3 Best Performing Models</h2>
+                    <p class="text-xs text-slate-400 mb-4">Overall top 3 model runs across both initial modeling and adaptive refinement phases</p>
+                    <div class="space-y-3">
+                        {top_3_html}
+                    </div>
+                </div>
+            </div>
+
+            {f'''<!-- Right Column: Final Validation Outputs -->
+            <div class="space-y-6">
+                <div class="bg-slate-800/30 border border-slate-700/30 rounded-2xl p-6">
+                    <h2 class="text-lg font-bold text-slate-100 mb-4">📈 Phase 05 Validation Plots</h2>
+                    
+                    <div class="space-y-4">
+                           <div>
+                               <h4 class="text-sm font-semibold text-slate-300 mb-2">Density Scatter Plot</h4>
+                               <div class="bg-slate-900 rounded-lg overflow-hidden border border-slate-800">
+                                   <a href="5_Plot_Scatter_Comparison.png" target="_blank">
+                                       <img src="5_Plot_Scatter_Comparison.png" alt="Density Scatter Plot" class="w-full h-auto hover:opacity-90 transition-opacity" onerror="this.src='https://placehold.co/400x300/1e293b/94a3b8?text=Scatter+Plot+Not+Found'"/>
+                                   </a>
+                               </div>
+                           </div>
+                           
+                           <div>
+                               <h4 class="text-sm font-semibold text-slate-300 mb-2">Error Distribution Histogram</h4>
+                               <div class="bg-slate-900 rounded-lg overflow-hidden border border-slate-800">
+                                   <a href="5_Plot_Error_Histogram.png" target="_blank">
+                                       <img src="5_Plot_Error_Histogram.png" alt="Error Histogram" class="w-full h-auto hover:opacity-90 transition-opacity" onerror="this.src='https://placehold.co/400x300/1e293b/94a3b8?text=Histogram+Not+Found'"/>
+                                   </a>
+                               </div>
+                           </div>
+                    </div>
+                </div>
+            </div>''' if has_val_plots else ''}
+        </div>
+        
+        {html_strat_section}
+        
+        <!-- Footer -->
+        <footer class="mt-16 pt-6 border-t border-slate-800 text-center text-slate-500 text-xs">
+            <p>Generated by SDB MasterFlow | Developer: Mohamed Aly Nasef</p>
+        </footer>
+    </div>
+</body>
+</html>
+"""
+    try:
+        dashboard_path = os.path.join(out_dir, "SDB_Validation_Dashboard.html")
+        with open(dashboard_path, "w", encoding="utf-8") as f:
+            f.write(html_content)
+    except Exception:
+        pass
+
+
 def run_master_pipeline(algorithm, parameters, context, feedback):
     """Execute SDB Master orchestration; `algorithm` is SDBMasterOrchestrator."""
     out_dir = algorithm.parameterAsString(parameters, algorithm.OUTPUT_FOLDER, context)
     os.makedirs(out_dir, exist_ok=True)
 
     log_path = os.path.join(out_dir, "SDB_Full_Log.txt")
+    
+    p1_dir = os.path.join(out_dir, "Phase_01_Preprocessing")
+    p2_dir = os.path.join(out_dir, "Phase_02_Filtering")
+    p3_dir = os.path.join(out_dir, "Phase_03_Initial_Modeling")
+    p4_dir = os.path.join(out_dir, "Phase_04_Adaptive_Refinement")
+    
+    os.makedirs(p1_dir, exist_ok=True)
+    os.makedirs(p2_dir, exist_ok=True)
+    os.makedirs(p3_dir, exist_ok=True)
+    os.makedirs(p4_dir, exist_ok=True)
+
     with open(log_path, "w", encoding="utf-8") as f:
         f.write(f"SDB LOG - {datetime.datetime.now()}\n\n")
+
+    feedback = LoggingFeedback(feedback, log_path)
 
     append_log(">>> Workflow Started...", log_path, feedback)
 
@@ -33,6 +575,20 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
         parameters, algorithm.INPUT_RASTER, context
     )
     target_crs = input_raster.crs()
+    crs_id = target_crs.authid() if (target_crs and target_crs.isValid() and target_crs.authid()) else target_crs.toWkt()
+    
+    corr_thresh_opt = ["0.0", "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1.0"]
+    corr_thresh_p4_opt = ["Use Phase 03 (-1.0)", "0.0", "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1.0"]
+    
+    p3_thresh_val = parameters.get(algorithm.FEATURE_CORR_THRESHOLD, 2)
+    if isinstance(p3_thresh_val, (int, float)) and not isinstance(p3_thresh_val, bool):
+        if isinstance(p3_thresh_val, float):
+            p3_thresh = p3_thresh_val
+        else:
+            p3_thresh = float(corr_thresh_opt[p3_thresh_val]) if 0 <= p3_thresh_val < len(corr_thresh_opt) else 0.2
+    else:
+        p3_thresh = 0.2
+        
     final_water_mask = None
 
     max_depth = algorithm.parameterAsDouble(
@@ -62,12 +618,12 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
             feedback,
         )
 
-        temp_mask_path = os.path.join(out_dir, "temp_water_mask.gpkg")
+        temp_mask_path = os.path.join(p1_dir, "temp_water_mask.gpkg")
         final_water_mask = reproject_layer_if_needed(
             water_mask_poly, target_crs, temp_mask_path, context, feedback
         )
 
-        fixed_mask_path = os.path.join(out_dir, "temp_water_mask_fixed.gpkg")
+        fixed_mask_path = os.path.join(p1_dir, "temp_water_mask_fixed.gpkg")
         fix_res = processing.run(
             "native:fixgeometries",
             {"INPUT": final_water_mask, "OUTPUT": fixed_mask_path},
@@ -83,7 +639,7 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
                 log_path,
                 feedback,
             )
-            shrunk_path = os.path.join(out_dir, "temp_water_mask_shrunk.gpkg")
+            shrunk_path = os.path.join(p1_dir, "temp_water_mask_shrunk.gpkg")
             buffer_res = processing.run(
                 "native:buffer",
                 {
@@ -107,7 +663,7 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
     field_depth = algorithm.parameterAsString(
         parameters, algorithm.FIELD_DEPTH, context
     )
-    temp_train = os.path.join(out_dir, "temp_reprojected_train.gpkg")
+    temp_train = os.path.join(p2_dir, "temp_reprojected_train.gpkg")
 
     final_train = reproject_layer_if_needed(
         algorithm.parameterAsVectorLayer(parameters, algorithm.INPUT_TRAIN, context),
@@ -146,43 +702,54 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
         else:
             enable_val = False
 
-    append_log("\n>>> Phase 01: Pre-processing...", log_path, feedback)
-    p1 = processing.run(
-        "sdb_tools:sdb_phase1_preprocessing",
-        {
-            "INPUT_RASTER": input_raster,
-            "COASTAL_BAND": parameters[algorithm.COASTAL_BAND],
-            "BLUE_BAND": parameters[algorithm.BLUE_BAND],
-            "GREEN_BAND": parameters[algorithm.GREEN_BAND],
-            "RED_BAND": parameters[algorithm.RED_BAND],
-            "NIR_BAND": parameters[algorithm.NIR_BAND],
-            "SWIR_BAND": parameters[algorithm.SWIR_BAND],
-            "APPLY_SUNGLINT": parameters[algorithm.APPLY_SUNGLINT],
-            "NIR_BAND_SUNGLINT": parameters[algorithm.NIR_BAND_SUNGLINT],
-            "SUNGLINT_PERCENTILE": parameters[algorithm.SUNGLINT_PERCENTILE],
-            "INPUT_WATER_POLY": final_water_mask if water_mask_poly else None,
-            "ENABLE_MASKING": parameters[algorithm.ENABLE_MASKING],
-            "MASKING_METHOD": parameters[algorithm.MASKING_METHOD],
-            "MANUAL_THRESHOLD": parameters[algorithm.MANUAL_THRESHOLD],
-            "OTSU_ADJUSTMENT": parameters[algorithm.OTSU_ADJUSTMENT],
-            "MASK_KERNEL_SIZE": parameters[algorithm.MASK_KERNEL_SIZE],
-            "FEATURE_SELECTION": parameters[algorithm.FEATURE_SELECTION],
-            "ENABLE_BAND_CALC": parameters[algorithm.ENABLE_BAND_CALC],
-            "BAND_MATH_FORMULA": parameters[algorithm.BAND_MATH_FORMULA],
-            "APPLY_DEEPWATER": parameters[algorithm.APPLY_DEEPWATER],
-            "DEEPWATER_METHOD": parameters[algorithm.DEEPWATER_METHOD],
-            "DEEPWATER_ROI": parameters.get(algorithm.DEEPWATER_ROI, None),
-            "NIR_PERCENTILE_OSW": parameters[algorithm.NIR_PERCENTILE_OSW],
-            "OSW_MEDIAN_SIZE": parameters[algorithm.OSW_MEDIAN_SIZE],
-            "FILL_INTERNAL_HOLES": parameters.get(algorithm.FILL_INTERNAL_HOLES, True),
-            "EXTRACT_POLYGON": parameters.get(algorithm.EXTRACT_POLYGON, True),
-            "NUM_THREADS": parameters[algorithm.NUM_THREADS],
-            "OUTPUT_FOLDER": out_dir,
-        },
-        context=context,
-        feedback=feedback,
-        is_child_algorithm=True,
+    enable_preproc = algorithm.parameterAsBool(
+        parameters, algorithm.ENABLE_PREPROCESSING, context
     )
+
+    if enable_preproc:
+        append_log("\n>>> Phase 01: Pre-processing...", log_path, feedback)
+        p1 = processing.run(
+            "sdb_tools:sdb_phase1_preprocessing",
+            {
+                "INPUT_RASTER": input_raster,
+                "COASTAL_BAND": parameters[algorithm.COASTAL_BAND],
+                "BLUE_BAND": parameters[algorithm.BLUE_BAND],
+                "GREEN_BAND": parameters[algorithm.GREEN_BAND],
+                "RED_BAND": parameters[algorithm.RED_BAND],
+                "NIR_BAND": parameters[algorithm.NIR_BAND],
+                "SWIR_BAND": parameters[algorithm.SWIR_BAND],
+                "APPLY_SUNGLINT": parameters[algorithm.APPLY_SUNGLINT],
+                "SUNGLINT_PERCENTILE": parameters[algorithm.SUNGLINT_PERCENTILE],
+                "INPUT_WATER_POLY": final_water_mask if water_mask_poly else None,
+                "ENABLE_MASKING": parameters[algorithm.ENABLE_MASKING],
+                "MASKING_METHOD": parameters[algorithm.MASKING_METHOD],
+                "MANUAL_THRESHOLD": parameters[algorithm.MANUAL_THRESHOLD],
+                "OTSU_ADJUSTMENT": parameters[algorithm.OTSU_ADJUSTMENT],
+                "MASK_KERNEL_SIZE": parameters[algorithm.MASK_KERNEL_SIZE],
+                "FEATURE_SELECTION": parameters[algorithm.FEATURE_SELECTION],
+                "ENABLE_BAND_CALC": parameters[algorithm.ENABLE_BAND_CALC],
+                "BAND_MATH_FORMULA": parameters[algorithm.BAND_MATH_FORMULA],
+                "APPLY_DEEPWATER": parameters[algorithm.APPLY_DEEPWATER],
+                "DEEPWATER_METHOD": parameters[algorithm.DEEPWATER_METHOD],
+                "DEEPWATER_ROI": parameters.get(algorithm.DEEPWATER_ROI, None),
+                "NIR_PERCENTILE_OSW": parameters[algorithm.NIR_PERCENTILE_OSW],
+                "OSW_MEDIAN_SIZE": parameters[algorithm.OSW_MEDIAN_SIZE],
+                "FILL_INTERNAL_HOLES": parameters.get(algorithm.FILL_INTERNAL_HOLES, True),
+                "EXTRACT_POLYGON": parameters.get(algorithm.EXTRACT_POLYGON, True),
+                "NUM_THREADS": parameters[algorithm.NUM_THREADS],
+                "OUTPUT_FOLDER": p1_dir,
+            },
+            context=context,
+            feedback=feedback,
+            is_child_algorithm=True,
+        )
+    else:
+        append_log("\n>>> Phase 01: Pre-processing Skipped by User.", log_path, feedback)
+        p1 = {
+            "OUTPUT_FEATURES": input_raster.source(),
+            "OUTPUT_MASK": None,
+            "OUTPUT_OSW_POLY": None
+        }
 
 
     path_clean = final_train
@@ -194,12 +761,12 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
                 "INPUT_STACK": p1["OUTPUT_FEATURES"],
                 "INPUT_POINTS": final_train,
                 "FIELD_DEPTH": field_depth,
-                "BLUE_BAND": parameters[algorithm.BLUE_BAND],
-                "GREEN_BAND": parameters[algorithm.GREEN_BAND],
+                "BLUE_BAND": parameters.get(getattr(algorithm, "FILTER_NUMERATOR_BAND", "BLUE_BAND"), parameters.get("BLUE_BAND")),
+                "GREEN_BAND": parameters.get(getattr(algorithm, "FILTER_DENOMINATOR_BAND", "GREEN_BAND"), parameters.get("GREEN_BAND")),
                 "FILTER_MODE": parameters[algorithm.FILTER_MODE],
                 "RESIDUAL_THRESHOLD": parameters[algorithm.RANSAC_THRESHOLD],
                 "RANSAC_MAX_TRIALS": parameters[algorithm.RANSAC_MAX_TRIALS],
-                "OUTPUT_FOLDER": out_dir,
+                "OUTPUT_FOLDER": p2_dir,
             },
             context=context,
             feedback=feedback,
@@ -220,9 +787,9 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
         "COLLISION_HANDLING": parameters[algorithm.COLLISION_HANDLING],
         "N_ITERATIONS": parameters[algorithm.N_ITERATIONS],
         "MEDIAN_SIZE": parameters[algorithm.MEDIAN_SIZE],
-        "FEATURE_CORR_THRESHOLD": parameters.get(algorithm.FEATURE_CORR_THRESHOLD, 2),
-        "FEATURE_CORR_METHOD": parameters.get(algorithm.FEATURE_CORR_METHOD, 0),
-        "OUTPUT_FOLDER": out_dir,
+        "FEATURE_CORR_THRESHOLD": p3_thresh,
+        "FEATURE_CORR_METHOD": parameters.get(algorithm.FEATURE_CORR_METHOD, 3),
+        "OUTPUT_FOLDER": p3_dir,
         "LOG_FILE": log_path,
         "PARAM_RF": parameters[algorithm.PARAM_RF],
         "PARAM_GB": parameters[algorithm.PARAM_GB],
@@ -268,7 +835,7 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
         ad_layer = algorithm.parameterAsVectorLayer(
             parameters, algorithm.INPUT_ADAPTIVE_TRAIN, context
         )
-        temp_adapt = os.path.join(out_dir, "temp_reprojected_adaptive.gpkg")
+        temp_adapt = os.path.join(p4_dir, "temp_reprojected_adaptive.gpkg")
         final_ad = reproject_layer_if_needed(
             ad_layer, target_crs, temp_adapt, context, feedback
         )
@@ -279,19 +846,35 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
             final_ad, field_ad_depth, max_depth, context, feedback
         )
 
+        p4_thresh_idx = parameters.get(algorithm.FEATURE_CORR_THRESHOLD_P4, 0)
+        p4_method = parameters.get(algorithm.FEATURE_CORR_METHOD_P4, 3)
+        
+        if isinstance(p4_thresh_idx, (int, float)) and not isinstance(p4_thresh_idx, bool):
+            if isinstance(p4_thresh_idx, float):
+                p4_thresh = p4_thresh_idx
+            else:
+                p4_thresh = -1.0 if p4_thresh_idx == 0 else float(corr_thresh_p4_opt[p4_thresh_idx])
+        else:
+            p4_thresh = -1.0
+
+        if p4_thresh < 0:
+            p4_thresh = p3_thresh
+            p4_method = parameters.get(algorithm.FEATURE_CORR_METHOD, 3)
+
         p4_params = {
             "INPUT_GLOBAL_RASTER": p3["OUTPUT_DEPTH_MAP"],
             "INPUT_ORIGINAL_FEAT": p1["OUTPUT_FEATURES"],
             "INPUT_TRAIN": final_ad,
             "FIELD_TRAIN": field_ad_depth,
+            "STACK_COMPONENTS": parameters.get(algorithm.STACK_COMPONENTS_P4, [0, 1, 2]),
             "SELECTED_ALGOS": parameters[algorithm.SELECTED_ALGOS],
             "OPTIMIZER_METHOD": parameters[algorithm.OPTIMIZER_METHOD],
             "COLLISION_HANDLING": parameters[algorithm.COLLISION_HANDLING],
             "N_ITERATIONS": parameters[algorithm.N_ITERATIONS],
             "MEDIAN_SIZE": parameters[algorithm.MEDIAN_SIZE],
-            "FEATURE_CORR_THRESHOLD": parameters.get(algorithm.FEATURE_CORR_THRESHOLD, 2),
-            "FEATURE_CORR_METHOD": parameters.get(algorithm.FEATURE_CORR_METHOD, 0),
-            "OUTPUT_FOLDER": out_dir,
+            "FEATURE_CORR_THRESHOLD": p4_thresh,
+            "FEATURE_CORR_METHOD": p4_method,
+            "OUTPUT_FOLDER": p4_dir,
             "LOG_FILE": log_path,
             "PARAM_RF": parameters[algorithm.PARAM_RF],
             "PARAM_GB": parameters[algorithm.PARAM_GB],
@@ -336,13 +919,13 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
     feat_stack = p1["OUTPUT_FEATURES"]
 
     if p3.get("OUTPUT_DEPTH_MAP") and os.path.exists(p3["OUTPUT_DEPTH_MAP"]):
-        p3_clamped = os.path.join(out_dir, "Phase3_Depth_Cleaned.tif")
+        p3_clamped = os.path.join(p3_dir, "Phase3_Depth_Cleaned.tif")
         clean_depth_map(
             p3["OUTPUT_DEPTH_MAP"], feat_stack, max_depth, p3_clamped, context, feedback
         )
 
         if remove_positives_flag:
-            p3_no_pos = os.path.join(out_dir, "Phase03_Depth_Final_NoPositives.tif")
+            p3_no_pos = os.path.join(p3_dir, "Phase03_Depth_Final_NoPositives.tif")
             remove_positive_pixels(p3_clamped, p3_no_pos, feedback)
             current_p3 = p3_no_pos
         else:
@@ -350,14 +933,14 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
 
         if p1.get("OUTPUT_OSW_POLY") and os.path.exists(p1["OUTPUT_OSW_POLY"]):
             append_log("\n>>> Clipping Phase 03 Map with OSW Polygon...", log_path, feedback)
-            p3_osw_clipped = os.path.join(out_dir, "Phase03_Depth_OSW_Clipped.tif")
+            p3_osw_clipped = os.path.join(p3_dir, "Phase03_Depth_OSW_Clipped.tif")
             processing.run(
                 "gdal:cliprasterbymasklayer",
                 {
                     "INPUT": current_p3,
                     "MASK": p1["OUTPUT_OSW_POLY"],
-                    "SOURCE_CRS": target_crs,
-                    "TARGET_CRS": target_crs,
+                    "SOURCE_CRS": crs_id,
+                    "TARGET_CRS": crs_id,
                     "NODATA": -9999.0,
                     "ALPHA_BAND": False,
                     "CROP_TO_CUTLINE": False,
@@ -373,15 +956,16 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
                 current_p3 = p3_osw_clipped
 
         p3["OUTPUT_DEPTH_MAP"] = current_p3
+        write_qml_style(current_p3)
 
     if path_refined and os.path.exists(path_refined):
-        p4_clamped = os.path.join(out_dir, "Final_Depth_Cleaned.tif")
+        p4_clamped = os.path.join(p4_dir, "Final_Depth_Cleaned.tif")
         clean_depth_map(
             path_refined, feat_stack, max_depth, p4_clamped, context, feedback
         )
 
         if apply_slope_filter:
-            slope_filtered = os.path.join(out_dir, "Final_Depth_SlopeFiltered.tif")
+            slope_filtered = os.path.join(p4_dir, "Final_Depth_SlopeFiltered.tif")
             path_refined = slope_filter_depth(
                 p4_clamped,
                 slope_threshold=slope_threshold_val,
@@ -393,20 +977,20 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
             path_refined = p4_clamped
 
         if remove_positives_flag:
-            p4_no_pos = os.path.join(out_dir, "Phase04_Final_Depth_NoPositives.tif")
+            p4_no_pos = os.path.join(p4_dir, "Phase04_Final_Depth_NoPositives.tif")
             remove_positive_pixels(path_refined, p4_no_pos, feedback)
             path_refined = p4_no_pos
 
         if p1.get("OUTPUT_OSW_POLY") and os.path.exists(p1["OUTPUT_OSW_POLY"]):
             append_log("\n>>> Clipping Phase 04 Map with OSW Polygon...", log_path, feedback)
-            p4_osw_clipped = os.path.join(out_dir, "Phase04_Final_Depth_OSW_Clipped.tif")
+            p4_osw_clipped = os.path.join(p4_dir, "Phase04_Final_Depth_OSW_Clipped.tif")
             processing.run(
                 "gdal:cliprasterbymasklayer",
                 {
                     "INPUT": path_refined,
                     "MASK": p1["OUTPUT_OSW_POLY"],
-                    "SOURCE_CRS": target_crs,
-                    "TARGET_CRS": target_crs,
+                    "SOURCE_CRS": crs_id,
+                    "TARGET_CRS": crs_id,
                     "NODATA": -9999.0,
                     "ALPHA_BAND": False,
                     "CROP_TO_CUTLINE": False,
@@ -420,6 +1004,9 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
             )
             if os.path.exists(p4_osw_clipped):
                 path_refined = p4_osw_clipped
+
+        if path_refined:
+            write_qml_style(path_refined)
 
     if enable_val and final_test:
         append_log("\n>>> Phase 05: Validation...", log_path, feedback)
@@ -445,14 +1032,23 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
         details_init = QgsProcessingContext.LayerDetails(
             "Initial SDB Map [Phase 03]", QgsProject.instance(), "Initial SDB"
         )
+        qml_path_p3 = os.path.splitext(p3["OUTPUT_DEPTH_MAP"])[0] + ".qml"
+        if os.path.exists(qml_path_p3):
+            details_init.setPostProcessor(StylePostProcessor(qml_path_p3))
         context.addLayerToLoadOnCompletion(p3["OUTPUT_DEPTH_MAP"], details_init)
 
     if path_refined and os.path.exists(path_refined):
         details_ref = QgsProcessingContext.LayerDetails(
             "Refined SDB Map [Phase 04]", QgsProject.instance(), "Refined SDB"
         )
+        qml_path_p4 = os.path.splitext(path_refined)[0] + ".qml"
+        if os.path.exists(qml_path_p4):
+            details_ref.setPostProcessor(StylePostProcessor(qml_path_p4))
         context.addLayerToLoadOnCompletion(path_refined, details_ref)
 
+    spatial_cv_p3 = algorithm.parameterAsBool(parameters, algorithm.SPATIAL_CV_P3, context)
+    spatial_cv_p4 = algorithm.parameterAsBool(parameters, algorithm.SPATIAL_CV_P4, context)
+    generate_html_dashboard(out_dir, p3_dir, p4_dir, spatial_cv_p3, spatial_cv_p4)
     append_log("\n>>> Workflow Complete.", log_path, feedback)
 
     return {}

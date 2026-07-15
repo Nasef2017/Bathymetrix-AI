@@ -250,6 +250,7 @@ def run_hedley(in_f, out_f, nir_idx, target_bands_idx, mask_f, percentile, fb):
 
         with rasterio.open(out_f, "w", **prof) as dst:
             dst.write(out_data)
+            dst.descriptions = src.descriptions
 
 
 def run_manual_mask(in_f, out_f, g_idx, n_idx, threshold, k_size, fb):
@@ -402,17 +403,39 @@ def generate_features(
         }
 
         final_stack = []
+        final_descriptions = []
 
         if 0 in selected_indices:
             fb.pushInfo(f"      Adding {nbands} raw bands to stack...")
+            
+            # Map index to name based on user inputs
+            band_names = {}
+            if c > 0: band_names[c] = "Coastal"
+            if b > 0: band_names[b] = "Blue"
+            if g > 0: band_names[g] = "Green"
+            if r > 0: band_names[r] = "Red"
+            if n > 0: band_names[n] = "NIR"
+            
             for i in range(1, nbands + 1):
                 raw_band_data = s.read(i).astype("float32")
                 raw_band_data[~mask_valid] = -9999.0
                 final_stack.append(raw_band_data)
+                
+                # Assign a sensible name
+                if i in band_names:
+                    band_name_str = f"Raw_{band_names[i]}"
+                else:
+                    existing_desc = s.descriptions[i-1]
+                    if existing_desc:
+                        band_name_str = existing_desc
+                    else:
+                        band_name_str = f"B{i}"
+                final_descriptions.append(band_name_str)
+                
                 p_ind = s.profile
                 p_ind.update(count=1, dtype="float32", nodata=-9999.0)
                 with rasterio.open(
-                    os.path.join(review_dir, f"Raw_Band_{i}.tif"), "w", **p_ind
+                    os.path.join(review_dir, f"{band_name_str}.tif"), "w", **p_ind
                 ) as dst:
                     dst.write(raw_band_data, 1)
 
@@ -425,11 +448,15 @@ def generate_features(
                 final_stack.append(data)
                 name = (
                     FEATURE_OPTIONS[idx]
-                    .replace("[", "")
-                    .replace("]", "")
-                    .replace(" ", "_")
-                    .replace("/", "")
+                    .replace("[Log] ", "")
+                    .replace("[Ratio] ", "Ratio_")
+                    .replace("[Custom] ", "")
+                    .replace(" ", "")
+                    .replace("/", "_")
+                    .replace("(", "")
+                    .replace(")", "")
                 )
+                final_descriptions.append(name)
                 p_ind = s.profile
                 p_ind.update(count=1, dtype="float32", nodata=-9999.0)
                 with rasterio.open(
@@ -446,6 +473,7 @@ def generate_features(
         prof.update(count=len(final_stack), dtype="float32", nodata=-9999.0)
         with rasterio.open(out_f, "w", **prof) as dst:
             dst.write(stack_arr)
+            dst.descriptions = tuple(final_descriptions)
 
 
 def apply_deepwater_mask(
@@ -578,11 +606,36 @@ def apply_deepwater_mask(
             'EIGHT_CONNECTEDNESS': False,
             'OUTPUT': 'TEMPORARY_OUTPUT'
         }, context=context, feedback=feedback, is_child_algorithm=True)
-        processing.run("native:extractbyexpression", {
+        
+        extracted = processing.run("native:extractbyexpression", {
             'INPUT': poly_res['OUTPUT'],
             'EXPRESSION': '"DN" = 1',
-            'OUTPUT': osw_poly_path
+            'OUTPUT': 'TEMPORARY_OUTPUT'
         }, context=context, feedback=feedback, is_child_algorithm=True)
+        
+        crs_wkt = None
+        try:
+            with rasterio.open(base_img_path) as src:
+                crs_wkt = src.crs.to_wkt() if src.crs else None
+        except Exception:
+            pass
+            
+        from qgis.core import QgsCoordinateReferenceSystem
+        qgis_crs = QgsCoordinateReferenceSystem.fromWkt(crs_wkt) if crs_wkt else None
+        
+        if qgis_crs and qgis_crs.isValid():
+            processing.run("native:reprojectlayer", {
+                'INPUT': extracted['OUTPUT'],
+                'TARGET_CRS': qgis_crs,
+                'OUTPUT': osw_poly_path
+            }, context=context, feedback=feedback, is_child_algorithm=True)
+        else:
+            processing.run("native:extractbyexpression", {
+                'INPUT': poly_res['OUTPUT'],
+                'EXPRESSION': '"DN" = 1',
+                'OUTPUT': osw_poly_path
+            }, context=context, feedback=feedback, is_child_algorithm=True)
+            
         feedback.pushInfo(f"      Saved OSW Polygon to: {osw_poly_path}")
 
     return osw_poly_path
@@ -666,8 +719,8 @@ def run_phase01_preprocessing(algorithm, parameters, context, feedback):
         final_mask_path = None
 
     if algorithm.parameterAsBool(parameters, algorithm.APPLY_SUNGLINT, context):
-        nir_g = algorithm.parameterAsInt(
-            parameters, algorithm.NIR_BAND_SUNGLINT, context
+        nir_band_idx = algorithm.parameterAsInt(
+            parameters, algorithm.NIR_BAND, context
         )
         perc = algorithm.parameterAsDouble(
             parameters, algorithm.SUNGLINT_PERCENTILE, context
@@ -679,7 +732,7 @@ def run_phase01_preprocessing(algorithm, parameters, context, feedback):
             f"   [2/3] Sunglint Correction (Float64 Math | Target: {mask_status})..."
         )
         run_hedley(
-            curr_img, p_glint, nir_g, target_bands_idx, final_mask_path, perc, feedback
+            curr_img, p_glint, nir_band_idx, target_bands_idx, final_mask_path, perc, feedback
         )
         curr_img = p_glint
     else:

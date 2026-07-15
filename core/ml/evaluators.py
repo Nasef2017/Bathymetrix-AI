@@ -386,15 +386,18 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
     col_mode = 0
     
     try:
-        corr_idx = algorithm.parameterAsEnum(parameters, algorithm.FEATURE_CORR_THRESHOLD, context)
-        corr_threshold = float(corr_idx) / 10.0
+        val_idx = algorithm.parameterAsEnum(parameters, algorithm.FEATURE_CORR_THRESHOLD, context)
+        corr_threshold = val_idx * 0.1
     except:
-        corr_threshold = 0.2
+        try:
+            corr_threshold = algorithm.parameterAsDouble(parameters, algorithm.FEATURE_CORR_THRESHOLD, context)
+        except:
+            corr_threshold = 0.2
 
     try:
         corr_method_idx = algorithm.parameterAsEnum(parameters, algorithm.FEATURE_CORR_METHOD, context)
     except:
-        corr_method_idx = 1
+        corr_method_idx = 3
 
     append_log(
         f"MODULE 04 START: Refinement Phase | Opt={OPTIMIZER_LIST[opt_idx]}",
@@ -491,12 +494,140 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
 
     with rasterio.open(feat_path) as f:
         orig_bands = f.read()
+        try:
+            feat_names = []
+            for i, d in enumerate(f.descriptions):
+                if d and str(d).strip():
+                    feat_names.append(str(d).strip())
+                else:
+                    feat_names.append(f"Band_{i+1}")
+        except Exception:
+            feat_names = [f"Band_{i+1}" for i in range(orig_bands.shape[0])]
     with rasterio.open(global_path) as g:
         p3_map = g.read(1)
 
-    stack = np.concatenate(
-        [orig_bands, p3_map[np.newaxis, :, :], residual_grid[np.newaxis, :, :]], axis=0
-    )
+    try:
+        stack_comps = algorithm.parameterAsEnums(parameters, "STACK_COMPONENTS", context)
+    except Exception:
+        stack_comps = [0, 1, 2]
+
+    stack_layers = []
+    stack_names = []
+    if 0 in stack_comps:
+        stack_layers.append(orig_bands)
+        stack_names.extend(feat_names)
+    if 1 in stack_comps:
+        stack_layers.append(p3_map[np.newaxis, :, :])
+        stack_names.append("Phase03_Global_Depth")
+    if 2 in stack_comps:
+        stack_layers.append(residual_grid[np.newaxis, :, :])
+        stack_names.append("Residual_Error_Grid")
+
+    if not stack_layers:
+        raise QgsProcessingException("No features selected for Phase 04 retraining! Please select at least one component in Advanced Parameters.")
+
+    if 0 not in stack_comps:
+        append_log("\n   [Notice] Feature Stack (Phase 01) is not selected. Bypassing ML Refinement...", log_path, feedback)
+        append_log("   Computing final depth purely using Spatial Addition (Phase 03 Map + Residual Grid).", log_path, feedback)
+        
+        final_map = np.full((h, w), -9999.0, dtype="float32")
+        valid_mask = p3_map != -9999.0
+        
+        if 1 in stack_comps and 2 in stack_comps:
+            final_map[valid_mask] = p3_map[valid_mask] + residual_grid[valid_mask]
+        elif 1 in stack_comps:
+            final_map[valid_mask] = p3_map[valid_mask]
+        elif 2 in stack_comps:
+            final_map[valid_mask] = residual_grid[valid_mask]
+            
+        if med_size > 0 and scipy_is_available:
+            temp = final_map.copy()
+            temp[~valid_mask] = np.nan
+            filtered = median_filter(temp, size=med_size)
+            final_map[valid_mask] = filtered[valid_mask]
+
+        nodata_val = -9999.0
+        if output_format == "uint16":
+            final_map[valid_mask] = np.clip(final_map[valid_mask], 0, None)
+            final_map[~valid_mask] = 65535
+            final_map = final_map.astype("uint16")
+            nodata_val = 65535.0
+
+        p_depth = os.path.join(out_dir, "Phase4_Adaptive_Depth.tif")
+        meta.update(count=1, dtype=final_map.dtype, nodata=nodata_val)
+        with rasterio.open(p_depth, "w", **meta) as dst:
+            dst.write(final_map, 1)
+
+        p_uncert = os.path.join(out_dir, "Phase4_Uncertainty.tif")
+        uncert_map = np.full((h, w), -9999.0, dtype="float32")
+        uncert_map[valid_mask] = 0.0
+        meta.update(count=1, dtype="float32", nodata=-9999.0)
+        with rasterio.open(p_uncert, "w", **meta) as dst:
+            dst.write(uncert_map, 1)
+
+        # Extract values for metrics and scatter plot
+        X_val_math, y_val_math, _ = extract_values(
+            p_depth, train_lyr, train_fld, col_mode, log_path, feedback
+        )
+        y_pred = X_val_math[:, 0].flatten()
+        y_true = y_val_math.flatten()
+        
+        rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+        r2 = r2_score(y_true, y_pred)
+        sum_abs_diff = np.sum(np.abs(y_true - y_pred))
+        sum_abs_true = np.sum(np.abs(y_true))
+        wmape = (sum_abs_diff / sum_abs_true) * 100 if sum_abs_true != 0 else 0
+        
+        append_log(f"   [Math Mode] RMSE: {rmse:.2f}m | R2: {r2:.3f} | wMAPE: {wmape:.1f}%", log_path, feedback)
+        
+        scatter_path = os.path.join(out_dir, "4_Phase04_Refined_Scatter.png")
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+            from scipy.stats import gaussian_kde
+            
+            fig, ax = plt.subplots(figsize=(8, 6))
+            use_kde = len(y_true) <= 5000
+            if use_kde:
+                try:
+                    xy = np.vstack([y_true, y_pred])
+                    z = gaussian_kde(xy)(xy)
+                    sc = ax.scatter(y_true, y_pred, c=z, s=20, cmap="viridis", edgecolors="none")
+                    plt.colorbar(sc, ax=ax, label="Point Density")
+                except Exception:
+                    ax.scatter(y_true, y_pred, c="navy", alpha=0.4, s=15)
+            else:
+                ax.scatter(y_true, y_pred, c="navy", alpha=0.3, s=10)
+            
+            min_val = min(np.min(y_true), np.min(y_pred))
+            max_val = max(np.max(y_true), np.max(y_pred))
+            ax.plot([min_val, max_val], [min_val, max_val], "r--", lw=2, label="1:1 Line")
+            ax.set_xlim(min_val, max_val)
+            ax.set_ylim(min_val, max_val)
+            ax.set_aspect("equal", adjustable="box")
+            
+            ax.set_title("Phase 04: Refined / Math Addition", fontsize=11, fontweight="bold")
+            ax.set_xlabel("Observed Depth (m)")
+            ax.set_ylabel("Predicted Depth (m)")
+            ax.grid(True, alpha=0.3)
+            ax.legend(fontsize=9)
+            
+            plt.tight_layout()
+            plt.savefig(scatter_path, dpi=150, bbox_inches="tight")
+            plt.close(fig)
+        except Exception as e:
+            append_log(f"   [Warning] Could not generate scatter plot: {e}", log_path, feedback)
+
+        return {
+            "OUTPUT_FINAL": p_depth,
+            "OUTPUT_UNCERT": p_uncert,
+            "BEST_RMSE": rmse,
+            "BEST_R2": r2,
+            "BEST_WMAPE": wmape,
+        }
+
+    stack = np.concatenate(stack_layers, axis=0)
     p_stack = os.path.join(out_dir, "Phase4_Input_Stack.tif")
     meta.update(count=stack.shape[0], dtype="float32")
     with rasterio.open(p_stack, "w", **meta) as dst:
@@ -508,18 +639,86 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
     y_final = y_final.flatten()
 
     selected_indices = None
-    if corr_threshold > 0.0:
+    if corr_method_idx == 3:
+        append_log(f"   [Feature Analysis] Running Automatic-RANSAC Selection...", log_path, feedback)
+        num_bands = X_final.shape[1]
+        correlations = []
+        method_name = "Automatic-RANSAC (Robust Pearson)"
+        
+        try:
+            from sklearn.linear_model import RANSACRegressor, LinearRegression
+        except ImportError:
+            append_log(f"   [Warning] sklearn not found. Falling back to Pearson.", log_path, feedback)
+            corr_method_idx = 1
+            
+    if corr_method_idx == 4:
+        append_log(f"   [Feature Analysis] Running Automatic-Random Forest Selection...", log_path, feedback)
+        num_bands = X_final.shape[1]
+        method_name = "Automatic-Random Forest (Importance)"
+        
+        try:
+            from sklearn.ensemble import RandomForestRegressor
+        except ImportError:
+            append_log(f"   [Warning] sklearn not found. Falling back to Pearson.", log_path, feedback)
+            corr_method_idx = 1
+            
+    if corr_method_idx == 3:
+        for b in range(num_bands):
+            X_b = X_final[:, b].reshape(-1, 1)
+            try:
+                ransac = RANSACRegressor(estimator=LinearRegression(), random_state=42)
+                ransac.fit(X_b, y_final)
+                inlier_mask = ransac.inlier_mask_
+                
+                if np.sum(inlier_mask) > 1:
+                    r = np.corrcoef(X_final[inlier_mask, b], y_final[inlier_mask])[0, 1]
+                else:
+                    r = 0.0
+            except Exception:
+                r = 0.0
+                
+            if np.isnan(r):
+                r = 0.0
+            correlations.append(r)
+            
+        correlations = np.array(correlations)
+        abs_correlations = np.abs(correlations)
+        plot_scores = abs_correlations
+        
+        valid_scores = abs_correlations[abs_correlations > 0]
+        if len(valid_scores) > 0:
+            mean_score = float(np.mean(valid_scores))
+            std_score = float(np.std(valid_scores))
+            corr_threshold = max(0.3, mean_score - std_score)
+        else:
+            corr_threshold = 0.0
+            
+        append_log(f"   [Feature Analysis] Auto-Calculated Threshold = {corr_threshold:.3f}", log_path, feedback)
+        
+        selected_indices = np.where(abs_correlations >= corr_threshold)[0]
+        
+    elif corr_method_idx == 4:
+        rf = RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=-1)
+        rf.fit(X_final, y_final)
+        plot_scores = rf.feature_importances_
+        correlations = plot_scores
+        
+        corr_threshold = max(0.02, 1.0 / (num_bands * 2))
+        append_log(f"   [Feature Analysis] Auto-Calculated RF Threshold = {corr_threshold:.3f}", log_path, feedback)
+        selected_indices = np.where(plot_scores >= corr_threshold)[0]
+            
+    elif corr_method_idx in [1, 2] and corr_threshold > 0.0:
         append_log(f"   [Feature Analysis] Running with threshold >= {corr_threshold}", log_path, feedback)
         num_bands = X_final.shape[1]
         correlations = []
-        method_name = "Spearman" if corr_method_idx == 1 else "Pearson"
+        method_name = "Spearman" if corr_method_idx == 2 else "Pearson"
         
-        if corr_method_idx == 1:
+        if corr_method_idx == 2:
             try:
                 from scipy.stats import spearmanr
             except ImportError:
                 method_name = "Pearson (Fallback)"
-                corr_method_idx = 0
+                corr_method_idx = 1
                 
         for b in range(num_bands):
             std_X = np.std(X_final[:, b])
@@ -527,7 +726,7 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
             if std_X == 0 or std_y == 0:
                 r = 0.0
             else:
-                if corr_method_idx == 1:
+                if corr_method_idx == 2:
                     r = spearmanr(X_final[:, b], y_final)[0]
                 else:
                     r = np.corrcoef(X_final[:, b], y_final)[0, 1]
@@ -535,11 +734,14 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
                 r = 0.0
             correlations.append(r)
         
-        abs_correlations = np.abs(np.array(correlations))
+        correlations = np.array(correlations)
+        abs_correlations = np.abs(correlations)
+        plot_scores = abs_correlations
         selected_indices = np.where(abs_correlations >= corr_threshold)[0]
         
+    if corr_method_idx > 0 and (corr_threshold > 0.0 or corr_method_idx in [3, 4]):
         if len(selected_indices) == 0:
-            append_log(f"   [Warning] No bands met threshold {corr_threshold}. Using all bands.", log_path, feedback)
+            append_log(f"   [Warning] No bands met threshold {corr_threshold:.3f}. Using all bands.", log_path, feedback)
             selected_indices = np.arange(num_bands)
         else:
             append_log(f"   [Feature Analysis] Selected {len(selected_indices)} bands: {list(selected_indices)}", log_path, feedback)
@@ -547,11 +749,37 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
             
         report_path = os.path.join(out_dir, "4_Feature_Analysis_Report.txt")
         with open(report_path, "w") as f:
-            f.write(f"Phase 04 Feature Analysis - {method_name} Correlation with Depth\n")
+            f.write(f"Phase 04 Feature Analysis - {method_name}\n")
+            if corr_method_idx in [3, 4]:
+                f.write(f"Automatically Calculated Threshold: {corr_threshold:.3f}\n")
             f.write("-" * 50 + "\n")
             for b in range(num_bands):
                 status = "Selected" if b in selected_indices else "Discarded"
-                f.write(f"Feature_{b+1}: r = {correlations[b]:.4f}  | abs(r) = {abs_correlations[b]:.4f}  [{status}]\n")
+                fname = stack_names[b] if b < len(stack_names) else f"Feature_{b+1}"
+                score_label = "Importance" if corr_method_idx == 4 else "abs(r)"
+                f.write(f"{fname}: {score_label} = {plot_scores[b]:.4f} [{status}]\n")
+ 
+        try:
+            import matplotlib.pyplot as plt
+            plt.figure(figsize=(10, 6))
+            bars = plt.bar(range(1, num_bands + 1), plot_scores, color='skyblue')
+            plt.axhline(y=corr_threshold, color='r', linestyle='--', label=f'Threshold ({corr_threshold:.3f})')
+            for i, b_bar in enumerate(bars):
+                if i not in selected_indices:
+                    b_bar.set_color('lightgray')
+            plt.xlabel('Feature Number')
+            y_label = "Feature Importance" if corr_method_idx == 4 else f"Absolute {method_name} Correlation (|r|)"
+            plt.ylabel(y_label)
+            plt.title(f'Phase 04 Feature Analysis: {method_name}')
+            x_labels = [stack_names[i] if i < len(stack_names) else f"F{i+1}" for i in range(num_bands)]
+            plt.xticks(range(1, num_bands + 1), x_labels, rotation=45, ha='right')
+            plt.legend()
+            plt.grid(axis='y', linestyle='--', alpha=0.7)
+            plt.tight_layout()
+            plt.savefig(os.path.join(out_dir, "4_Feature_Correlation_Plot.png"), dpi=150)
+            plt.close()
+        except Exception as e:
+            append_log(f"   [Warning] Failed to generate correlation plot: {e}", log_path, feedback)
 
     groups_tr = None
     if spatial_cv and coords_tr is not None:
@@ -758,6 +986,22 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
     if best_model is None:
         raise QgsProcessingException("All refinement models failed.")
 
+    try:
+        from .trainers import export_feature_importance
+        export_feature_importance(
+            best_model,
+            best_algo_name,
+            X_val,
+            y_val,
+            out_dir,
+            log_path,
+            feedback,
+            selected_indices,
+            feature_names=stack_names
+        )
+    except Exception as e:
+        append_log(f"   [Warning] Failed to generate feature importance: {e}", log_path, feedback)
+
     append_log(f"   Predicting Final Map using {best_algo_name}...", log_path, feedback)
     X_map = stack[:, water_indices[0], water_indices[1]].T
     X_map = np.nan_to_num(X_map, nan=0.0)
@@ -793,6 +1037,29 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
     meta.update(count=1, dtype=output_format, nodata=nodata_val)
     with rasterio.open(p_final, "w", **meta) as dst:
         dst.write(final_map, 1)
+
+    try:
+        import pandas as pd
+        rows_p4 = []
+        for m in all_models_p4:
+            rows_p4.append({
+                "Algorithm": m["Algorithm"],
+                "R2": m["R2"],
+                "RMSE": m["RMSE"],
+                "wMAPE": m["wMAPE"]
+            })
+        if enable_ensemble and len(all_models_p4) >= 2:
+            rows_p4.append({
+                "Algorithm": f"Ensemble ({ensemble_method})",
+                "R2": ens_r2,
+                "RMSE": ens_rmse,
+                "wMAPE": ens_wmape
+            })
+        pd.DataFrame(rows_p4).to_csv(
+            os.path.join(out_dir, "4_All_Algorithms_Benchmark.csv"), index=False
+        )
+    except Exception as e:
+        append_log(f"   [Warning] Failed to write Phase 04 benchmark CSV: {e}", log_path, feedback)
 
     return {
         "OUTPUT_FINAL": p_final,

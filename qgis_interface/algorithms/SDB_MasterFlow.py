@@ -30,6 +30,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
     NUM_THREADS = "NUM_THREADS"
 
     # [1] Pre-processing (Bands, Sunglint, Masking, Features)
+    ENABLE_PREPROCESSING = "ENABLE_PREPROCESSING"
     COASTAL_BAND = "COASTAL_BAND"
     BLUE_BAND = "BLUE_BAND"
     GREEN_BAND = "GREEN_BAND"
@@ -38,7 +39,6 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
     SWIR_BAND = "SWIR_BAND"
 
     APPLY_SUNGLINT = "APPLY_SUNGLINT"
-    NIR_BAND_SUNGLINT = "NIR_BAND_SUNGLINT"
     SUNGLINT_PERCENTILE = "SUNGLINT_PERCENTILE"
 
     WATER_MASK_POLY = "WATER_MASK_POLY"
@@ -70,6 +70,8 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
 
     ENABLE_RANSAC = "ENABLE_RANSAC"
     FILTER_MODE = "FILTER_MODE"
+    FILTER_NUMERATOR_BAND = "FILTER_NUMERATOR_BAND"
+    FILTER_DENOMINATOR_BAND = "FILTER_DENOMINATOR_BAND"
     RANSAC_THRESHOLD = "RANSAC_THRESHOLD"
     RANSAC_MAX_TRIALS = "RANSAC_MAX_TRIALS"
 
@@ -116,6 +118,9 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
     ENSEMBLE_SIZE_P4 = "ENSEMBLE_SIZE_P4"
     INPUT_ADAPTIVE_TRAIN = "INPUT_ADAPTIVE_TRAIN"
     FIELD_ADAPTIVE_DEPTH = "FIELD_ADAPTIVE_DEPTH"
+    STACK_COMPONENTS_P4 = "STACK_COMPONENTS_P4"
+    FEATURE_CORR_METHOD_P4 = "FEATURE_CORR_METHOD_P4"
+    FEATURE_CORR_THRESHOLD_P4 = "FEATURE_CORR_THRESHOLD_P4"
 
     # [5] Validation & Output Cleanup
     ENABLE_VALIDATION = "ENABLE_VALIDATION"
@@ -157,6 +162,8 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
     ]
     MASK_METHODS_NAMES = ["Otsu (Automatic NDWI)", "Manual NDWI Threshold", "3 Indices Equation (NDWI, MNDWI, NWI)"]
     OSW_METHODS_NAMES = ["Manual Polygon ROI", "Automatic (Lowest NIR Percentile)"]
+    FEATURE_CORR_THRESHOLDS = ["0.0", "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1.0"]
+    FEATURE_CORR_THRESHOLDS_P4 = ["Use Phase 03 (-1.0)", "0.0", "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1.0"]
     FEATURE_OPTIONS_NAMES = [
         "[All Raw] All Bands from Input Image",
         "[Log] Log(Coastal)",
@@ -194,44 +201,45 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
             <h2 style="margin-bottom: 5px;">🛰️ <span style="color: #2E86C1;">Bathymetrix-AI</span>: Master SDB Workflow</h2>
             <p style="margin-top: 0; margin-bottom: 10px;">An advanced 5-phase pipeline for high-precision Satellite-Derived Bathymetry with Auto-ML.</p>
 
-            <b style="display: block; margin-bottom: 2px;">🌊 Phase 01: Advanced Pre-processing</b>
+            <b style="display: block; margin-bottom: 2px;">🌊 Phase 01: Advanced Pre-processing & Masking</b>
             <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li>Sun-glint correction <i>(Hedley et al., 2005)</i>.</li>
-                <li>Advanced Water Masking</li>
-                <li>Physics-based Log-Ratio features computation.</li>
-                <li>Deep Water Filter (OSW Mask)</li>
+                <li><b>Glint Correction:</b> Sun-glint correction using Hedley's method.</li>
+                <li><b>Automated Masking:</b> NDWI, MNDWI, or 3-Indices equations with water edge shrink.</li>
+                <li><b>Deep Water Filter:</b> Automatic (lowest NIR percentile) or manual polygon OSW mask.</li>
+                <li><b>Custom Calculator:</b> Build custom features with band math formulas.</li>
             </ul>
 
-            <b style="display: block; margin-bottom: 2px;">🎯 Phase 02: Robust Filtering</b>
+            <b style="display: block; margin-bottom: 2px;">🎯 Phase 02: Robust Altimetry Filtering</b>
             <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li>Noise removal using <b>Linear RANSAC</b>, <b>LS Variance Fit</b>, or <b>Huber Variance Fit</b> <i>(Zhang et al., 2021)</i>.</li>
+                <li><b>Outlier Rejection:</b> Aggressively clean altimetry noise using Linear RANSAC, LS Variance Fit, or Huber Variance Fit.</li>
             </ul>
 
             <b style="display: block; margin-bottom: 2px;">🤖 Phase 03: Global Auto-ML & Feature Analysis</b>
             <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li><b>Feature Analysis:</b> Optionally drop weak bands based on their Pearson or Spearman correlation with the target depth.</li>
-                <li>Benchmarks 15+ algorithms (RF, GBM, MLP, SVR, etc.).</li>
-                <li>Optimization via <b>Random Search</b>, Grid Search, or Bayesian <i>(Bergstra & Bengio, 2012)</i>.</li>
-                <li><b>Spatial Cross-Validation:</b> Independent control of spatial block validation for base models.</li>
-                <li>Fully <b>Customizable Hyperparameters</b> for fine-tuning.</li>
+                <li><b>Benchmarking:</b> Ranks 15+ machine learning algorithms (RF, GB, MLP, SVR, etc.).</li>
+                <li><b>Hyperparameter Tuning:</b> Optimization via Random, Grid, or Bayesian Search.</li>
+                <li><b>Feature Analysis:</b> Drop weak bands using dropdown threshold selection (default: Automatic-RANSAC, with Disabled option).</li>
+                <li><b>Spatial Block CV:</b> Independent control of spatial validation block settings.</li>
             </ul>
 
-            <b style="display: block; margin-bottom: 2px;">📍 Phase 04: Adaptive Refinement</b>
+            <b style="display: block; margin-bottom: 2px;">📍 Phase 04: Localized Adaptive Refinement</b>
             <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li>Spatially localized corrections & <b>Residual Analysis</b> <i>(Alevizos, 2020)</i> using Standard KNN, Robust KNN, or Gaussian Process (Kriging).</li>
-                <li><b>Spatial Cross-Validation:</b> Independent control of spatial block validation for residual modeling.</li>
-                <li>Optional model ensemble blending for localized refinement.</li>
+                <li><b>Residual Modeling:</b> Map local errors using Standard KNN, Robust KNN (Huber), or Kriging/GPR.</li>
+                <li><b>Flexible Refinement Stack:</b> Retrain on depth map, error grid, or full feature stack (unchecked by default).</li>
+                <li><b>Ensemble Blending:</b> Blend top models for localized spatial corrections.</li>
             </ul>
 
-            <b style="display: block; margin-bottom: 2px;">📉 Phase 05: Validation & Reporting</b>
+            <b style="display: block; margin-bottom: 2px;">📉 Phase 05: Scientific Validation</b>
             <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li>Independent accuracy assessment on unseen test data.</li>
+                <li><b>Accuracy Reports:</b> Computes RMSE, R², MAE, and wMAPE against unseen validation points.</li>
+                <li><b>Visual Diagnostics:</b> Auto-generates density scatter, residuals, and error histogram plots.</li>
             </ul>
 
-            <b style="display: block; margin-bottom: 2px;">⚙️ Pipeline Architecture & UI Standards</b>
+            <b style="display: block; margin-bottom: 2px;">🧽 Output Cleanup & Formats</b>
             <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li><b>Structured UI:</b> Advanced parameters grouped clearly into <i>[Phase 03]</i>, <i>[Phase 04]</i>, <i>[Phase 03 & 04]</i>, <i>[General ML]</i>, and <i>[General]</i>.</li>
-
+                <li><b>Post-processing:</b> Positive depth removal and physical slope spike filtering.</li>
+                <li><b>Format Support:</b> Outputs float32, float64, or uint16 rasters.</li>
+            </ul>
 
             <p style="margin-top: 10px; border-top: 1px solid #ccc; padding-top: 5px;">
                 <b>Developer:</b> Mohamed Aly Nasef
@@ -281,6 +289,13 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         # -------------------------------------------------------------------
         # [1] Phase 01: Advanced Pre-processing
         # -------------------------------------------------------------------
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.ENABLE_PREPROCESSING,
+                "⚙️ [1] Enable Phase 01 Pre-processing",
+                defaultValue=True,
+            )
+        )
         self.addParameter(
             QgsProcessingParameterBand(
                 self.COASTAL_BAND,
@@ -337,14 +352,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
                 defaultValue=True,
             )
         )
-        self.addParameter(
-            QgsProcessingParameterBand(
-                self.NIR_BAND_SUNGLINT,
-                "☀️ [1.2] Sunglint NIR Band",
-                parentLayerParameterName=self.INPUT_RASTER,
-                defaultValue=8,
-            )
-        )
+
         self.addParameter(
             QgsProcessingParameterNumber(
                 self.SUNGLINT_PERCENTILE,
@@ -546,6 +554,22 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
+            QgsProcessingParameterBand(
+                self.FILTER_NUMERATOR_BAND,
+                "🧹 [2.2] Log-Ratio Numerator Band",
+                parentLayerParameterName=self.INPUT_RASTER,
+                defaultValue=2,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterBand(
+                self.FILTER_DENOMINATOR_BAND,
+                "🧹 [2.2] Log-Ratio Denominator Band",
+                parentLayerParameterName=self.INPUT_RASTER,
+                defaultValue=3,
+            )
+        )
+        self.addParameter(
             QgsProcessingParameterNumber(
                 self.RANSAC_THRESHOLD,
                 "🧹 [2.2] Threshold / Sigma Multiplier",
@@ -642,15 +666,15 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
             QgsProcessingParameterEnum(
                 self.FEATURE_CORR_METHOD,
                 "🤖 [3] Feature Correlation Method",
-                options=["Pearson (Linear)", "Spearman (Rank)"],
-                defaultValue=1,
+                options=["Disabled", "Pearson (Linear)", "Spearman (Rank)", "Automatic-RANSAC", "Automatic-Random Forest"],
+                defaultValue=3,
             )
         )
         self.addParameter(
             QgsProcessingParameterEnum(
                 self.FEATURE_CORR_THRESHOLD,
                 "🤖 [3] Feature Correlation Threshold",
-                options=['0.0 (Disable)', '0.1', '0.2', '0.3', '0.4', '0.5', '0.6', '0.7', '0.8', '0.9', '1.0'],
+                options=self.FEATURE_CORR_THRESHOLDS,
                 defaultValue=2,
             )
         )
@@ -737,7 +761,32 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
             QgsProcessingParameterBoolean(
                 self.ENABLE_ADAPTIVE,
                 "🎯 [4] Enable Adaptive Refinement",
-                defaultValue=True,
+                defaultValue=False,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.STACK_COMPONENTS_P4,
+                "🎯 [4] Features for Retraining",
+                options=["Feature Stack (Phase 01)", "Phase 03 Depth Map", "Residual Error Grid"],
+                allowMultiple=True,
+                defaultValue=[1, 2],
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.FEATURE_CORR_METHOD_P4,
+                "🤖 [4] Feature Correlation Method",
+                options=["Disabled", "Pearson (Linear)", "Spearman (Rank)", "Automatic-RANSAC", "Automatic-Random Forest"],
+                defaultValue=3,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.FEATURE_CORR_THRESHOLD_P4,
+                "🤖 [4] Feature Correlation Threshold",
+                options=self.FEATURE_CORR_THRESHOLDS_P4,
+                defaultValue=0,
             )
         )
         self.addParameter(
@@ -813,7 +862,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         # -------------------------------------------------------------------
         self.addParameter(
             QgsProcessingParameterBoolean(
-                self.ENABLE_VALIDATION, "📉 [5] Enable Validation", defaultValue=True
+                self.ENABLE_VALIDATION, "📉 [5] Enable Validation", defaultValue=False
             )
         )
         self.addParameter(

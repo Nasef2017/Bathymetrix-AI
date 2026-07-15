@@ -157,7 +157,7 @@ def convert_to_bayes(params_dict):
     return bayes_params
 
 
-def save_training_points(out_path, coords, depths, weights, X_data, ref_raster, crs):
+def save_training_points(out_path, coords, depths, weights, X_data, ref_raster, crs, feature_names=None):
     fields = QgsFields()
     fields.append(QgsField("Depth_Used", QVariant.Double))
     fields.append(QgsField("Weight_Used", QVariant.Double))
@@ -166,7 +166,8 @@ def save_training_points(out_path, coords, depths, weights, X_data, ref_raster, 
 
     num_bands = X_data.shape[1]
     for b in range(num_bands):
-        fields.append(QgsField(f"Band_{b + 1}", QVariant.Double))
+        name = feature_names[b] if feature_names and b < len(feature_names) else f"Band_{b + 1}"
+        fields.append(QgsField(name[:10], QVariant.Double))
 
     writer = QgsVectorFileWriter(
         out_path, "UTF-8", fields, QgsWkbTypes.Point, crs, "ESRI Shapefile"
@@ -294,6 +295,32 @@ def save_algo_artifacts(y_t, y_p, pct, name, folder, r2, rmse, mape, params):
         f.write(
             f"Algo: {name}\nR2: {r2:.4f}\nRMSE: {rmse:.4f}\nwMAPE: {mape:.2f}%\nParams: {params}"
         )
+
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import numpy as np
+        
+        plt.figure(figsize=(8, 6))
+        # Plot predictions vs actuals
+        plt.scatter(y_t, y_p, color='#1f77b4', alpha=0.6, edgecolors='none', s=20, label='Validation Points')
+        
+        # Perfect fit line
+        min_val = min(float(np.min(y_t)), float(np.min(y_p)))
+        max_val = max(float(np.max(y_t)), float(np.max(y_p)))
+        plt.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2, label='1:1 Line')
+        
+        plt.title(f'{name} - Validation Scatter Plot\nR² = {r2:.3f} | RMSE = {rmse:.2f}m | wMAPE = {mape:.2f}%', fontsize=11, fontweight='bold', pad=10)
+        plt.xlabel('Observed Depth (m)', fontsize=10)
+        plt.ylabel('Predicted Depth (m)', fontsize=10)
+        plt.grid(True, linestyle='--', alpha=0.5)
+        plt.legend(loc='upper left')
+        plt.tight_layout()
+        plt.savefig(os.path.join(folder, "Validation_Scatter_Plot.png"), dpi=150)
+        plt.close()
+    except Exception:
+        pass
 
 
 def get_model_and_params(index, opt_idx=0, random_state=42, n_jobs=-1):
@@ -516,7 +543,7 @@ def run_optuna_search(base_model, name, param_distributions, X, y, fit_params, n
     return best_model, best_params
 
 
-def export_feature_importance(model, win_name, X_val, y_val, out_dir, log_path, feedback, selected_indices=None):
+def export_feature_importance(model, win_name, X_val, y_val, out_dir, log_path, feedback, selected_indices=None, feature_names=None):
     """
     Extracts, plots, and saves feature importances (or coefficients/permutation importance)
     for the winning model or ensemble.
@@ -525,10 +552,16 @@ def export_feature_importance(model, win_name, X_val, y_val, out_dir, log_path, 
     import pandas as pd
     
     num_features = X_val.shape[1]
-    feature_names = [f"Band_{i+1}" for i in range(num_features)]
-    if selected_indices is not None:
-        feature_names = [f"Band_{idx+1}" for idx in selected_indices]
-        
+    if feature_names is not None:
+        if selected_indices is not None and len(feature_names) > len(selected_indices):
+            final_names = [feature_names[idx] for idx in selected_indices]
+        else:
+            final_names = feature_names
+    else:
+        final_names = [f"Band_{i+1}" for i in range(num_features)]
+        if selected_indices is not None:
+            final_names = [f"Band_{idx+1}" for idx in selected_indices]
+            
     importances = None
     method_used = "Feature Importance"
     
@@ -575,7 +608,7 @@ def export_feature_importance(model, win_name, X_val, y_val, out_dir, log_path, 
         
     # Save report
     df_imp = pd.DataFrame({
-        "Feature": feature_names,
+        "Feature": final_names,
         "Importance": importances
     }).sort_values(by="Importance", ascending=False)
     
@@ -602,7 +635,7 @@ def export_feature_importance(model, win_name, X_val, y_val, out_dir, log_path, 
 def run_benchmarking(
     X, y, weights, indices, n_iter, out_dir, feedback, opt_idx, log_path, custom_params,
     test_size=0.2, random_state=42, n_jobs=-1, enable_ensemble=False, ensemble_method="Average",
-    spatial_cv=False, coords=None, selected_indices=None, ensemble_size=3
+    spatial_cv=False, coords=None, selected_indices=None, ensemble_size=3, feature_names=None
 ):
     X = np.nan_to_num(X, nan=0.0)
     
@@ -895,7 +928,8 @@ def run_benchmarking(
             out_dir,
             log_path,
             feedback,
-            selected_indices
+            selected_indices,
+            feature_names
         )
     except Exception as e:
         append_log(f"   [Warning] Failed to generate feature importance plot: {e}", log_path, feedback)
@@ -1047,15 +1081,18 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
     )
     
     try:
-        corr_idx = algorithm.parameterAsEnum(parameters, algorithm.FEATURE_CORR_THRESHOLD, context)
-        corr_threshold = float(corr_idx) / 10.0
+        val_idx = algorithm.parameterAsEnum(parameters, algorithm.FEATURE_CORR_THRESHOLD, context)
+        corr_threshold = val_idx * 0.1
     except:
-        corr_threshold = 0.2
+        try:
+            corr_threshold = algorithm.parameterAsDouble(parameters, algorithm.FEATURE_CORR_THRESHOLD, context)
+        except:
+            corr_threshold = 0.2
 
     try:
         corr_method_idx = algorithm.parameterAsEnum(parameters, algorithm.FEATURE_CORR_METHOD, context)
     except:
-        corr_method_idx = 1
+        corr_method_idx = 3
 
     append_log(
         f"MODULE 03 START: Optimizer = {OPTIMIZER_LIST[opt_idx]}", log_path, feedback
@@ -1069,6 +1106,23 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
     append_log(f"   Extracted {len(y)} training pixels.", log_path, feedback)
 
     actual_pts_path = os.path.join(out_dir, "3_Actual_Model_Input_Points.shp")
+    
+    # Try to extract feature names
+    feature_names = []
+    try:
+        import rasterio
+        with rasterio.open(stack_path) as src:
+            for i, desc in enumerate(src.descriptions):
+                if desc and str(desc).strip():
+                    feature_names.append(str(desc).strip())
+                else:
+                    feature_names.append(f"Band_{i+1}")
+    except Exception:
+        feature_names = [f"Band_{i+1}" for i in range(X.shape[1])]
+    
+    if not feature_names or len(feature_names) != X.shape[1]:
+        feature_names = [f"Band_{i+1}" for i in range(X.shape[1])]
+
     save_training_points(
         actual_pts_path,
         coords,
@@ -1077,21 +1131,89 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
         X,
         stack_path,
         points_layer.sourceCrs(),
+        feature_names
     )
     
     selected_indices = None
-    if corr_threshold > 0.0:
+    if corr_method_idx == 3:
+        append_log(f"   [Feature Analysis] Running Automatic-RANSAC Selection...", log_path, feedback)
+        num_bands = X.shape[1]
+        correlations = []
+        method_name = "Automatic-RANSAC (Robust Pearson)"
+        
+        try:
+            from sklearn.linear_model import RANSACRegressor, LinearRegression
+        except ImportError:
+            append_log(f"   [Warning] sklearn not found. Falling back to Pearson.", log_path, feedback)
+            corr_method_idx = 1
+            
+    if corr_method_idx == 4:
+        append_log(f"   [Feature Analysis] Running Automatic-Random Forest Selection...", log_path, feedback)
+        num_bands = X.shape[1]
+        method_name = "Automatic-Random Forest (Importance)"
+        
+        try:
+            from sklearn.ensemble import RandomForestRegressor
+        except ImportError:
+            append_log(f"   [Warning] sklearn not found. Falling back to Pearson.", log_path, feedback)
+            corr_method_idx = 1
+
+    if corr_method_idx == 3:
+        for b in range(num_bands):
+            X_b = X[:, b].reshape(-1, 1)
+            try:
+                ransac = RANSACRegressor(estimator=LinearRegression(), random_state=42)
+                ransac.fit(X_b, y)
+                inlier_mask = ransac.inlier_mask_
+                
+                if np.sum(inlier_mask) > 1:
+                    r = np.corrcoef(X[inlier_mask, b], y[inlier_mask])[0, 1]
+                else:
+                    r = 0.0
+            except Exception:
+                r = 0.0
+                
+            if np.isnan(r):
+                r = 0.0
+            correlations.append(r)
+            
+        correlations = np.array(correlations)
+        abs_correlations = np.abs(correlations)
+        plot_scores = abs_correlations
+        
+        valid_scores = abs_correlations[abs_correlations > 0]
+        if len(valid_scores) > 0:
+            mean_score = float(np.mean(valid_scores))
+            std_score = float(np.std(valid_scores))
+            corr_threshold = max(0.3, mean_score - std_score)
+        else:
+            corr_threshold = 0.0
+            
+        append_log(f"   [Feature Analysis] Auto-Calculated Threshold = {corr_threshold:.3f}", log_path, feedback)
+        selected_indices = np.where(abs_correlations >= corr_threshold)[0]
+        
+    elif corr_method_idx == 4:
+        rf = RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=-1)
+        rf.fit(X, y)
+        plot_scores = rf.feature_importances_
+        correlations = plot_scores
+        
+        corr_threshold = max(0.02, 1.0 / (num_bands * 2))
+        append_log(f"   [Feature Analysis] Auto-Calculated RF Threshold = {corr_threshold:.3f}", log_path, feedback)
+        selected_indices = np.where(plot_scores >= corr_threshold)[0]
+
+    elif corr_method_idx in [1, 2] and corr_threshold > 0.0:
         append_log(f"   [Feature Analysis] Running with threshold >= {corr_threshold}", log_path, feedback)
         num_bands = X.shape[1]
         correlations = []
-        method_name = "Spearman" if corr_method_idx == 1 else "Pearson"
+        method_name = "Spearman" if corr_method_idx == 2 else "Pearson"
         
-        if corr_method_idx == 1:
+        if corr_method_idx == 2:
             try:
                 from scipy.stats import spearmanr
             except ImportError:
                 method_name = "Pearson (Fallback)"
-                corr_method_idx = 0
+                corr_method_idx = 1
                 
         for b in range(num_bands):
             std_X = np.std(X[:, b])
@@ -1099,7 +1221,7 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
             if std_X == 0 or std_y == 0:
                 r = 0.0
             else:
-                if corr_method_idx == 1:
+                if corr_method_idx == 2:
                     r = spearmanr(X[:, b], y)[0]
                 else:
                     r = np.corrcoef(X[:, b], y)[0, 1]
@@ -1109,10 +1231,12 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
         
         correlations = np.array(correlations)
         abs_correlations = np.abs(correlations)
+        plot_scores = abs_correlations
         selected_indices = np.where(abs_correlations >= corr_threshold)[0]
         
+    if corr_method_idx > 0 and (corr_threshold > 0.0 or corr_method_idx in [3, 4]):
         if len(selected_indices) == 0:
-            append_log(f"   [Warning] No bands met threshold {corr_threshold}. Using all bands.", log_path, feedback)
+            append_log(f"   [Warning] No bands met threshold {corr_threshold:.3f}. Using all bands.", log_path, feedback)
             selected_indices = np.arange(num_bands)
         else:
             append_log(f"   [Feature Analysis] Selected {len(selected_indices)} bands: {list(selected_indices)}", log_path, feedback)
@@ -1120,24 +1244,29 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
             
         report_path = os.path.join(out_dir, "3_Feature_Analysis_Report.txt")
         with open(report_path, "w") as f:
-            f.write(f"Feature Analysis - {method_name} Correlation with Depth\n")
+            f.write(f"Feature Analysis - {method_name}\n")
+            if corr_method_idx in [3, 4]:
+                f.write(f"Automatically Calculated Threshold: {corr_threshold:.3f}\n")
             f.write("-" * 50 + "\n")
             for b in range(num_bands):
                 status = "Selected" if b in selected_indices else "Discarded"
-                f.write(f"Band_{b+1}: r = {correlations[b]:.4f}  | abs(r) = {abs_correlations[b]:.4f}  [{status}]\n")
-                
+                fname = feature_names[b]
+                score_label = "Importance" if corr_method_idx == 4 else "abs(r)"
+                f.write(f"{fname}: {score_label} = {plot_scores[b]:.4f} [{status}]\n")
+
         try:
             import matplotlib.pyplot as plt
             plt.figure(figsize=(10, 6))
-            bars = plt.bar(range(1, num_bands + 1), abs_correlations, color='skyblue')
-            plt.axhline(y=corr_threshold, color='r', linestyle='--', label=f'Threshold ({corr_threshold})')
-            for i, b in enumerate(bars):
+            bars = plt.bar(range(1, num_bands + 1), plot_scores, color='skyblue')
+            plt.axhline(y=corr_threshold, color='r', linestyle='--', label=f'Threshold ({corr_threshold:.3f})')
+            for i, b_bar in enumerate(bars):
                 if i not in selected_indices:
-                    b.set_color('lightgray')
+                    b_bar.set_color('lightgray')
             plt.xlabel('Band Number')
-            plt.ylabel(f'Absolute {method_name} Correlation (|r|)')
-            plt.title(f'Feature Correlation with Depth ({method_name})')
-            plt.xticks(range(1, num_bands + 1))
+            y_label = "Feature Importance" if corr_method_idx == 4 else f"Absolute {method_name} Correlation (|r|)"
+            plt.ylabel(y_label)
+            plt.title(f'Feature Analysis: {method_name}')
+            plt.xticks(range(1, num_bands + 1), feature_names, rotation=45, ha='right')
             plt.legend()
             plt.grid(axis='y', linestyle='--', alpha=0.7)
             plt.tight_layout()
@@ -1191,7 +1320,8 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
         spatial_cv,
         coords,
         selected_indices,
-        ensemble_size
+        ensemble_size,
+        feature_names
     )
     results_df.to_csv(
         os.path.join(out_dir, "3_All_Algorithms_Benchmark.csv"), index=False

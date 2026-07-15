@@ -49,7 +49,6 @@ class SDBPhase1Preprocessing(QgsProcessingAlgorithm):
     MASK_KERNEL_SIZE = "MASK_KERNEL_SIZE"
 
     APPLY_SUNGLINT = "APPLY_SUNGLINT"
-    NIR_BAND_SUNGLINT = "NIR_BAND_SUNGLINT"
     SUNGLINT_PERCENTILE = "SUNGLINT_PERCENTILE"
 
     FEATURE_SELECTION = "FEATURE_SELECTION"
@@ -200,14 +199,6 @@ class SDBPhase1Preprocessing(QgsProcessingAlgorithm):
                 self.APPLY_SUNGLINT,
                 "2. Apply Sunglint Correction (Hedley)",
                 defaultValue=True,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterBand(
-                self.NIR_BAND_SUNGLINT,
-                "Sunglint NIR Band",
-                parentLayerParameterName=self.INPUT_RASTER,
-                defaultValue=8,
             )
         )
         self.addParameter(
