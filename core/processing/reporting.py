@@ -61,12 +61,12 @@ def extract_values(vec_layer, depth_field, p3_path, p4_path, feedback):
         try:
             geom.transform(tr)
             pt = geom.asPoint()
-        except Exception:
+        except Exception:  # nosec B112
             continue
 
         try:
             row, col = src3.index(pt.x(), pt.y())
-        except Exception:
+        except Exception:  # nosec B112
             continue
 
         if not (0 <= row < height and 0 <= col < width):

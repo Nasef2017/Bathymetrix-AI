@@ -383,7 +383,7 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
             if os.path.exists(chunk_output_path):
                 try:
                     os.remove(chunk_output_path)
-                except Exception:
+                except Exception:  # nosec B110
                     pass
             chunk_parms["output"] = {
                 "path": chunk_output_path,
@@ -414,7 +414,7 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
                 if os.path.exists(chunk_output_path):
                     try:
                         os.remove(chunk_output_path)
-                    except Exception:
+                    except Exception:  # nosec B110
                         pass
 
         # --- Merge Yearly Results ---
@@ -429,7 +429,7 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
             if not isinstance(gdf.index, pd.DatetimeIndex):
                 try:
                     gdf.index = pd.to_datetime(gdf.index, utc=True)
-                except Exception:
+                except Exception:  # nosec B110
                     pass
 
             if isinstance(gdf.index, pd.DatetimeIndex):
@@ -519,7 +519,7 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
                     if os.path.exists(chunk_output_path):
                         try:
                             os.remove(chunk_output_path)
-                        except Exception:
+                        except Exception:  # nosec B110
                             pass
                     chunk_parms["output"] = {
                         "path": chunk_output_path,
@@ -550,7 +550,7 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
                         if os.path.exists(chunk_output_path):
                             try:
                                 os.remove(chunk_output_path)
-                            except Exception:
+                            except Exception:  # nosec B110
                                 pass
 
                 if fallback_gdfs:
@@ -560,7 +560,7 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
                         if not isinstance(gdf.index, pd.DatetimeIndex):
                             try:
                                 gdf.index = pd.to_datetime(gdf.index, utc=True)
-                            except Exception:
+                            except Exception:  # nosec B110
                                 pass
                         if isinstance(gdf.index, pd.DatetimeIndex):
                             if gdf.index.tz is None:

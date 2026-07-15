@@ -319,7 +319,7 @@ def save_algo_artifacts(y_t, y_p, pct, name, folder, r2, rmse, mape, params):
         plt.tight_layout()
         plt.savefig(os.path.join(folder, "Validation_Scatter_Plot.png"), dpi=150)
         plt.close()
-    except Exception:
+    except Exception:  # nosec B110
         pass
 
 

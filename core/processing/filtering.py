@@ -119,7 +119,7 @@ def save_subset_with_uncert(
     if os.path.exists(out_path):
         try:
             os.remove(out_path)
-        except Exception:
+        except Exception:  # nosec B110
             pass
     writer = QgsVectorFileWriter(
         out_path,

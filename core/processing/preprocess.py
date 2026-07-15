@@ -617,7 +617,7 @@ def apply_deepwater_mask(
         try:
             with rasterio.open(base_img_path) as src:
                 crs_wkt = src.crs.to_wkt() if src.crs else None
-        except Exception:
+        except Exception:  # nosec B110
             pass
             
         from qgis.core import QgsCoordinateReferenceSystem

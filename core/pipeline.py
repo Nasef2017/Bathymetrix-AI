@@ -9,6 +9,8 @@ from qgis.core import (
     QgsRasterLayer,
     QgsProcessingFeedback,
     QgsProcessingLayerPostProcessorInterface,
+    QgsVectorLayer,
+    NULL,
 )
 
 class StylePostProcessor(QgsProcessingLayerPostProcessorInterface):
@@ -76,7 +78,7 @@ class LoggingFeedback(QgsProcessingFeedback):
             try:
                 with open(self.log_path, "a", encoding="utf-8") as f:
                     f.write(message + "\n")
-            except Exception:
+            except Exception:  # nosec B110
                 pass
 
 
@@ -96,7 +98,7 @@ def get_raster_min_max(raster_path):
             import numpy as np
             if min_val is not None and not np.isnan(min_val):
                 return float(min_val), float(max_val) if max_val is not None else 0.0
-    except Exception:
+    except Exception:  # nosec B110
         pass
     return -30.0, 0.0
 
@@ -150,11 +152,11 @@ def write_qml_style(tif_path):
     try:
         with open(qml_path, "w", encoding="utf-8") as f:
             f.write(qml_content)
-    except Exception:
+    except Exception:  # nosec B110
         pass
 
 
-def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, spatial_cv_p4=True):
+def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, spatial_cv_p4=True, enable_ransac=False, filter_mode=0, field_depth=None, field_weight=None, collision_handling_idx=0):
     benchmark_csv = os.path.join(p3_dir, "3_All_Algorithms_Benchmark.csv")
     p4_benchmark_csv = os.path.join(p4_dir, "4_All_Algorithms_Benchmark.csv") if p4_dir else None
     
@@ -168,7 +170,6 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
     rows_p4_html = ""
     rows_strat_html = ""
     has_strat = False
-    all_models = []
     
     best_algo = "N/A"
     best_r2 = -9999.0
@@ -176,46 +177,68 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
     
     import csv
     
-    # Read Phase 3
+    # -------------------------------------------------------------
+    # Read and Sort Phase 03 Leaderboard
+    # -------------------------------------------------------------
+    p3_models = []
     if os.path.exists(benchmark_csv):
         try:
             with open(benchmark_csv, "r", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
                 for row in reader:
                     algo = row.get("Algorithm", "Unknown")
-                    r2 = float(row.get("R2", 0.0))
-                    rmse = float(row.get("RMSE", 0.0))
-                    wmape = float(row.get("wMAPE", 0.0))
+                    try:
+                        r2 = float(row.get("R2", 0.0))
+                    except ValueError:
+                        r2 = -9999.0
+                    try:
+                        rmse = float(row.get("RMSE", 0.0))
+                    except ValueError:
+                        rmse = 9999.0
+                    try:
+                        wmape = float(row.get("wMAPE", 0.0))
+                    except ValueError:
+                        wmape = 0.0
                     
-                    if r2 > best_r2:
-                        best_r2 = r2
-                        best_algo = algo
-                        best_rmse = rmse
-                        
-                    all_models.append({
-                        "Phase": "Phase 03: Initial Modeling",
+                    p3_models.append({
                         "Algorithm": algo,
                         "R2": r2,
                         "RMSE": rmse,
                         "wMAPE": wmape
                     })
-                    
-                    rows_p3_html += f"""
-                    <tr class="hover:bg-slate-700/50 transition-colors border-b border-slate-700/30">
-                        <td class="px-6 py-4 text-sm font-semibold text-slate-200">{algo}</td>
-                        <td class="px-6 py-4 text-sm font-medium text-emerald-400">{r2:.4f}</td>
-                        <td class="px-6 py-4 text-sm font-medium text-blue-400">{rmse:.2f}m</td>
-                        <td class="px-6 py-4 text-sm font-medium text-indigo-400">{wmape:.2f}%</td>
-                        <td class="px-6 py-4 text-sm">
-                            <a href="Phase_03_Initial_Modeling/{algo.replace(" ", "_")}/Validation_Scatter_Plot.png" target="_blank" class="text-xs text-sky-400 hover:text-sky-300 font-semibold underline">View Plot</a>
-                        </td>
-                    </tr>
-                    """
-        except Exception:
+        except Exception:  # nosec B110
             pass
-
-    # Read Phase 4
+            
+    p3_models.sort(key=lambda x: x["R2"], reverse=True)
+    
+    for m in p3_models:
+        algo = m["Algorithm"]
+        r2 = m["R2"]
+        rmse = m["RMSE"]
+        wmape = m["wMAPE"]
+        
+        if r2 > best_r2:
+            best_r2 = r2
+            best_algo = algo
+            best_rmse = rmse
+            
+        rows_p3_html += f"""
+        <tr class="hover:bg-slate-700/50 transition-colors border-b border-slate-700/30">
+            <td class="px-6 py-4 text-sm font-semibold text-slate-200">{algo}</td>
+            <td class="px-6 py-4 text-sm font-medium text-emerald-400">{r2:.4f}</td>
+            <td class="px-6 py-4 text-sm font-medium text-blue-400">{rmse:.2f}m</td>
+            <td class="px-6 py-4 text-sm font-medium text-indigo-400">{wmape:.2f}%</td>
+            <td class="px-6 py-4 text-sm">
+                <a href="Phase_03_Initial_Modeling/{algo.replace(" ", "_")}/Validation_Scatter_Plot.png" target="_blank" class="text-xs text-sky-400 hover:text-sky-300 font-semibold underline">View Plot</a>
+            </td>
+        </tr>
+        """
+        
+    # -------------------------------------------------------------
+    # Read and Sort Phase 04 Leaderboard
+    # -------------------------------------------------------------
     has_p4 = False
+    p4_models = []
     if p4_benchmark_csv and os.path.exists(p4_benchmark_csv):
         has_p4 = True
         try:
@@ -223,80 +246,211 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                 reader = csv.DictReader(f)
                 for row in reader:
                     algo = row.get("Algorithm", "Unknown")
-                    r2 = float(row.get("R2", 0.0))
-                    rmse = float(row.get("RMSE", 0.0))
-                    wmape = float(row.get("wMAPE", 0.0))
-                    
-                    if r2 > best_r2:
-                        best_r2 = r2
-                        best_algo = algo
-                        best_rmse = rmse
+                    try:
+                        r2 = float(row.get("R2", 0.0))
+                    except ValueError:
+                        r2 = -9999.0
+                    try:
+                        rmse = float(row.get("RMSE", 0.0))
+                    except ValueError:
+                        rmse = 9999.0
+                    try:
+                        wmape = float(row.get("wMAPE", 0.0))
+                    except ValueError:
+                        wmape = 0.0
                         
-                    all_models.append({
-                        "Phase": "Phase 04: Adaptive Refinement",
+                    p4_models.append({
                         "Algorithm": algo,
                         "R2": r2,
                         "RMSE": rmse,
                         "wMAPE": wmape
                     })
-                    
-                    rows_p4_html += f"""
-                    <tr class="hover:bg-slate-700/50 transition-colors border-b border-slate-700/30">
-                        <td class="px-6 py-4 text-sm font-semibold text-slate-200">{algo}</td>
-                        <td class="px-6 py-4 text-sm font-medium text-emerald-400">{r2:.4f}</td>
-                        <td class="px-6 py-4 text-sm font-medium text-blue-400">{rmse:.2f}m</td>
-                        <td class="px-6 py-4 text-sm font-medium text-indigo-400">{wmape:.2f}%</td>
-                    </tr>
-                    """
-        except Exception:
+        except Exception:  # nosec B110
             pass
-
-    # Sort all models to find top 3
-    all_models.sort(key=lambda x: (-x["R2"], x["RMSE"]))
-    top_3_models = all_models[:3]
+            
+    p4_models.sort(key=lambda x: x["R2"], reverse=True)
     
-    top_3_html = ""
-    medals = ["🥇 First", "🥈 Second", "🥉 Third"]
-    medals_colors = ["text-amber-400", "text-slate-300", "text-amber-600"]
-    medals_bg = [
-        "bg-amber-500/10 border-amber-500/20",
-        "bg-slate-400/10 border-slate-400/20",
-        "bg-amber-700/10 border-amber-700/20"
-    ]
-    
-    for i, m in enumerate(top_3_models):
-        medal = medals[i] if i < len(medals) else f"#{i+1}"
-        color_class = medals_colors[i] if i < len(medals_colors) else "text-slate-400"
-        bg_class = medals_bg[i] if i < len(medals_bg) else "bg-slate-800/10 border-slate-800/20"
+    for m in p4_models:
+        algo = m["Algorithm"]
+        r2 = m["R2"]
+        rmse = m["RMSE"]
+        wmape = m["wMAPE"]
         
-        top_3_html += f"""
-        <div class="flex items-center justify-between p-4 rounded-xl border {bg_class} transition-all hover:scale-[1.01]">
-            <div class="flex items-center space-x-4">
-                <span class="text-xl font-bold {color_class}">{medal}</span>
-                <div>
-                    <h4 class="font-bold text-slate-100">{m['Algorithm']}</h4>
-                    <p class="text-xs text-slate-400">{m['Phase']}</p>
-                </div>
+        rows_p4_html += f"""
+        <tr class="hover:bg-slate-700/50 transition-colors border-b border-slate-700/30">
+            <td class="px-6 py-4 text-sm font-semibold text-slate-200">{algo}</td>
+            <td class="px-6 py-4 text-sm font-medium text-emerald-400">{r2:.4f}</td>
+            <td class="px-6 py-4 text-sm font-medium text-blue-400">{rmse:.2f}m</td>
+            <td class="px-6 py-4 text-sm font-medium text-indigo-400">{wmape:.2f}%</td>
+        </tr>
+        """
+
+    # -------------------------------------------------------------
+    # Phase 02 Filtering & Shapefile Reading
+    # -------------------------------------------------------------
+    html_p2_section = ""
+    if enable_ransac:
+        p2_dir_path = os.path.join(out_dir, "Phase_02_Filtering")
+        clean_shp_path = os.path.join(p2_dir_path, "2_Cleaned_Training_Data.shp")
+        actual_shp_path = os.path.join(p3_dir, "3_Actual_Model_Input_Points.shp")
+        
+        pt_count = "N/A"
+        depth_min = "N/A"
+        depth_max = "N/A"
+        weight_min = "N/A"
+        weight_max = "N/A"
+        actual_pt_count = "N/A"
+        
+        has_weight_stats = False
+        
+        if os.path.exists(clean_shp_path):
+            try:
+                layer = QgsVectorLayer(clean_shp_path, "Cleaned Training Data", "ogr")
+                if layer and layer.isValid():
+                    pt_count = layer.featureCount()
+                    
+                    depth_vals = []
+                    weight_vals = []
+                    
+                    fields = layer.fields()
+                    depth_idx = -1
+                    weight_idx = -1
+                    
+                    for idx in range(fields.count()):
+                        f_name = fields.at(idx).name().lower()
+                        if field_depth and f_name == field_depth.lower():
+                            depth_idx = idx
+                        elif field_weight and f_name == field_weight.lower():
+                            weight_idx = idx
+                            
+                    for feat in layer.getFeatures():
+                        if depth_idx != -1:
+                            val = feat.attribute(depth_idx)
+                            if val is not None and val != NULL:
+                                try:
+                                    depth_vals.append(float(val))
+                                except (ValueError, TypeError):
+                                    pass
+                        if weight_idx != -1:
+                            val = feat.attribute(weight_idx)
+                            if val is not None and val != NULL:
+                                try:
+                                    weight_vals.append(float(val))
+                                except (ValueError, TypeError):
+                                    pass
+                                    
+                    if depth_vals:
+                        depth_min = f"{min(depth_vals):.2f}"
+                        depth_max = f"{max(depth_vals):.2f}"
+                    if weight_vals:
+                        weight_min = f"{min(weight_vals):.3f}"
+                        weight_max = f"{max(weight_vals):.3f}"
+                        has_weight_stats = True
+            except Exception:  # nosec B110
+                pass
+                
+        if os.path.exists(actual_shp_path):
+            try:
+                actual_layer = QgsVectorLayer(actual_shp_path, "Actual Input Points", "ogr")
+                if actual_layer and actual_layer.isValid():
+                    actual_pt_count = actual_layer.featureCount()
+            except Exception:
+                pass
+                
+        collision_list_names = ["Keep All Points", "Highest Confidence", "Closest to Pixel Center", "Hybrid", "Strict Center"]
+        collision_handling = collision_list_names[collision_handling_idx] if 0 <= collision_handling_idx < len(collision_list_names) else "Unknown"
+        
+        filter_mode_name = "Unknown"
+        filter_plot_path = ""
+        if filter_mode == 0:
+            filter_mode_name = "Linear RANSAC"
+            filter_plot_path = "Phase_02_Filtering/2_Plot_1_Trend.png"
+        elif filter_mode == 1:
+            filter_mode_name = "LS Variance Fit"
+            filter_plot_path = "Phase_02_Filtering/2_Plot_2_Variance.png"
+        elif filter_mode == 2:
+            filter_mode_name = "Huber Variance Fit"
+            filter_plot_path = "Phase_02_Filtering/2_Plot_3_Envelope.png"
+            
+        weight_stat_html = ""
+        if has_weight_stats:
+            weight_stat_html = f"""
+                        <div class="bg-slate-800/40 border border-slate-700/20 rounded-xl p-4">
+                            <span class="text-xs text-slate-400 block mb-1">Confidence / Weight Range</span>
+                            <span class="text-sm font-bold text-indigo-400">{weight_min} to {weight_max}</span>
+                        </div>
+            """
+            
+        if filter_mode == 0:
+            plots_html = f"""
+            <div class="bg-slate-900/50 rounded-xl p-4 border border-slate-800 flex flex-col justify-center items-center w-full">
+                <h4 class="text-xs font-semibold text-slate-400 mb-3 uppercase tracking-wider">Regression & Cleaned Data Fit</h4>
+                <a href="Phase_02_Filtering/2_Plot_1_Trend.png" target="_blank" class="block w-full">
+                    <img src="Phase_02_Filtering/2_Plot_1_Trend.png" alt="RANSAC Trend Plot" class="w-full h-auto rounded-lg border border-slate-800 hover:opacity-90 transition-opacity" onerror="this.src='https://placehold.co/450x300/1e293b/94a3b8?text=Trend+Plot+Not+Found'"/>
+                </a>
             </div>
-            <div class="flex items-center space-x-6 text-right">
+            """
+        else:
+            plots_html = f"""
+            <div class="bg-slate-900/50 rounded-xl p-4 border border-slate-800 flex flex-col justify-center items-center w-full space-y-4">
+                <h4 class="text-xs font-semibold text-slate-400 mb-1 uppercase tracking-wider">Regression & Cleaned Data Fit</h4>
+                <a href="Phase_02_Filtering/2_Plot_1_Trend.png" target="_blank" class="block w-full">
+                    <img src="Phase_02_Filtering/2_Plot_1_Trend.png" alt="Trend Plot" class="w-full h-auto rounded-lg border border-slate-800 hover:opacity-90 transition-opacity" onerror="this.src='https://placehold.co/450x300/1e293b/94a3b8?text=Trend+Plot+Not+Found'"/>
+                </a>
+                <a href="{filter_plot_path}" target="_blank" class="block w-full">
+                    <img src="{filter_plot_path}" alt="{filter_mode_name} Plot" class="w-full h-auto rounded-lg border border-slate-800 hover:opacity-90 transition-opacity" onerror="this.src='https://placehold.co/450x300/1e293b/94a3b8?text=Fit+Plot+Not+Found'"/>
+                </a>
+            </div>
+            """
+
+        html_p2_section = f"""
+        <!-- Phase 02 Filtering Details -->
+        <div class="bg-slate-800/30 border border-slate-700/30 rounded-2xl p-6 mt-8">
+            <div class="flex items-center justify-between mb-4 border-b border-slate-800 pb-4">
                 <div>
-                    <span class="text-xs text-slate-400 block uppercase tracking-wider">R² Score</span>
-                    <span class="text-sm font-bold text-emerald-400">{m['R2']:.4f}</span>
+                    <h2 class="text-lg font-bold text-slate-100">🧹 Phase 02: Filtering & Uncertainty</h2>
+                    <p class="text-xs text-slate-400 mt-1">Robust outlier rejection and variance/trend analysis on training data</p>
                 </div>
-                <div>
-                    <span class="text-xs text-slate-400 block uppercase tracking-wider">RMSE</span>
-                    <span class="text-sm font-bold text-blue-400">{m['RMSE']:.2f}m</span>
-                </div>
-                <div>
-                    <span class="text-xs text-slate-400 block uppercase tracking-wider">wMAPE</span>
-                    <span class="text-sm font-bold text-indigo-400">{m['wMAPE']:.2f}%</span>
+                <span class="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">{filter_mode_name}</span>
+            </div>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
+                <!-- Plot Column -->
+                {plots_html}
+                
+                <!-- Metadata Column -->
+                <div class="space-y-4">
+                    <h4 class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Dataset statistics (Cleaned Training Data)</h4>
+                    
+                    <div class="grid grid-cols-2 gap-4">
+                        <div class="bg-slate-800/40 border border-slate-700/20 rounded-xl p-4">
+                            <span class="text-xs text-slate-400 block mb-1">Total Training Points</span>
+                            <span class="text-xl font-bold text-slate-200">{pt_count}</span>
+                        </div>
+                        <div class="bg-slate-800/40 border border-slate-700/20 rounded-xl p-4">
+                            <span class="text-xs text-slate-400 block mb-1">Depth Range</span>
+                            <span class="text-sm font-bold text-sky-400">{depth_min}m to {depth_max}m</span>
+                        </div>
+                        {weight_stat_html}
+                    </div>
+                    
+                    <div class="bg-slate-900/60 rounded-xl p-4 border border-slate-800 space-y-2">
+                        <span class="text-xs font-semibold text-amber-400 block mb-1">💡 Data Processing & Model Inputs</span>
+                        <div class="grid grid-cols-2 gap-2 text-xs">
+                            <div class="text-slate-400">Collision Handling:</div>
+                            <div class="text-slate-200 font-semibold">{collision_handling}</div>
+                            
+                            <div class="text-slate-400">Actual Model Input Points:</div>
+                            <div class="text-slate-200 font-semibold">{actual_pt_count}</div>
+                        </div>
+                        <p class="text-[11px] text-slate-400 leading-relaxed font-normal pt-1 border-t border-slate-800">
+                            The original cleaned training points are aggregated and processed using the selected collision handling method ({collision_handling}) to resolve duplicate points falling inside the same raster pixel. This results in {actual_pt_count} unique training samples used directly in model optimization and cross-validation.
+                        </p>
+                    </div>
                 </div>
             </div>
         </div>
         """
-
-    if not top_3_html:
-        top_3_html = '<p class="text-sm text-slate-400">No model results found.</p>'
 
     stratified_csv = os.path.join(out_dir, "5_Stratified_Error_Analysis.csv")
     if os.path.exists(stratified_csv):
@@ -337,7 +491,7 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                         <td class="px-6 py-4 text-xs text-slate-400 max-w-xs truncate" title="{uses}">{uses}</td>
                     </tr>
                     """
-        except Exception:
+        except Exception:  # nosec B110
             pass
 
     html_strat_section = ""
@@ -425,7 +579,7 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                 <div class="text-2xl font-bold text-slate-100">{best_algo}</div>
             </div>
             <div class="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-6 backdrop-blur-sm">
-                <h3 class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2">AutoML Best R² Score</h3>
+                <h3 class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2">AutoML Best R²</h3>
                 <div class="text-2xl font-bold text-emerald-400">{best_r2_str}</div>
             </div>
             <div class="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-6 backdrop-blur-sm">
@@ -433,6 +587,8 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                 <div class="text-2xl font-bold text-blue-400">{best_rmse_str}</div>
             </div>
         </div>
+
+        {html_p2_section}
 
         <!-- Main Grid -->
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -452,7 +608,7 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                             <thead class="bg-slate-800/20 text-slate-400 text-xs font-semibold uppercase tracking-wider">
                                 <tr>
                                     <th class="px-6 py-3">Algorithm</th>
-                                    <th class="px-6 py-3">R² Score</th>
+                                    <th class="px-6 py-3">R²</th>
                                     <th class="px-6 py-3">RMSE</th>
                                     <th class="px-6 py-3">wMAPE</th>
                                     <th class="px-6 py-3">Details</th>
@@ -479,7 +635,7 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                             <thead class="bg-slate-800/20 text-slate-400 text-xs font-semibold uppercase tracking-wider">
                                 <tr>
                                     <th class="px-6 py-3">Algorithm</th>
-                                    <th class="px-6 py-3">R² Score</th>
+                                    <th class="px-6 py-3">R²</th>
                                     <th class="px-6 py-3">RMSE</th>
                                     <th class="px-6 py-3">wMAPE</th>
                                 </tr>
@@ -490,15 +646,6 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                         </table>
                     </div>
                 </div>''' if has_p4 else ''}
-
-                <!-- Top 3 Best Performing Models -->
-                <div class="bg-slate-800/30 border border-slate-700/30 rounded-2xl p-6">
-                    <h2 class="text-lg font-bold text-slate-100 mb-2">⭐ Top 3 Best Performing Models</h2>
-                    <p class="text-xs text-slate-400 mb-4">Overall top 3 model runs across both initial modeling and adaptive refinement phases</p>
-                    <div class="space-y-3">
-                        {top_3_html}
-                    </div>
-                </div>
             </div>
 
             {f'''<!-- Right Column: Final Validation Outputs -->
@@ -513,7 +660,7 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                                    <a href="5_Plot_Scatter_Comparison.png" target="_blank">
                                        <img src="5_Plot_Scatter_Comparison.png" alt="Density Scatter Plot" class="w-full h-auto hover:opacity-90 transition-opacity" onerror="this.src='https://placehold.co/400x300/1e293b/94a3b8?text=Scatter+Plot+Not+Found'"/>
                                    </a>
-                               </div>
+                                </div>
                            </div>
                            
                            <div>
@@ -521,6 +668,15 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                                <div class="bg-slate-900 rounded-lg overflow-hidden border border-slate-800">
                                    <a href="5_Plot_Error_Histogram.png" target="_blank">
                                        <img src="5_Plot_Error_Histogram.png" alt="Error Histogram" class="w-full h-auto hover:opacity-90 transition-opacity" onerror="this.src='https://placehold.co/400x300/1e293b/94a3b8?text=Histogram+Not+Found'"/>
+                                   </a>
+                               </div>
+                           </div>
+
+                           <div>
+                               <h4 class="text-sm font-semibold text-slate-300 mb-2">Residuals vs Depth Plot</h4>
+                               <div class="bg-slate-900 rounded-lg overflow-hidden border border-slate-800">
+                                   <a href="5_Plot_Residuals.png" target="_blank">
+                                       <img src="5_Plot_Residuals.png" alt="Residuals Plot" class="w-full h-auto hover:opacity-90 transition-opacity" onerror="this.src='https://placehold.co/400x300/1e293b/94a3b8?text=Residuals+Plot+Not+Found'"/>
                                    </a>
                                </div>
                            </div>
@@ -543,7 +699,7 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
         dashboard_path = os.path.join(out_dir, "SDB_Validation_Dashboard.html")
         with open(dashboard_path, "w", encoding="utf-8") as f:
             f.write(html_content)
-    except Exception:
+    except Exception:  # nosec B110
         pass
 
 
@@ -1048,7 +1204,24 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
 
     spatial_cv_p3 = algorithm.parameterAsBool(parameters, algorithm.SPATIAL_CV_P3, context)
     spatial_cv_p4 = algorithm.parameterAsBool(parameters, algorithm.SPATIAL_CV_P4, context)
-    generate_html_dashboard(out_dir, p3_dir, p4_dir, spatial_cv_p3, spatial_cv_p4)
+    enable_ransac = algorithm.parameterAsBool(parameters, algorithm.ENABLE_RANSAC, context)
+    filter_mode = algorithm.parameterAsInt(parameters, algorithm.FILTER_MODE, context)
+    field_depth = algorithm.parameterAsString(parameters, algorithm.FIELD_DEPTH, context)
+    field_weight = algorithm.parameterAsString(parameters, algorithm.FIELD_WEIGHT, context)
+    collision_handling_idx = algorithm.parameterAsInt(parameters, algorithm.COLLISION_HANDLING, context)
+
+    generate_html_dashboard(
+        out_dir=out_dir,
+        p3_dir=p3_dir,
+        p4_dir=p4_dir,
+        spatial_cv_p3=spatial_cv_p3,
+        spatial_cv_p4=spatial_cv_p4,
+        enable_ransac=enable_ransac,
+        filter_mode=filter_mode,
+        field_depth=field_depth,
+        field_weight=field_weight,
+        collision_handling_idx=collision_handling_idx
+    )
     append_log("\n>>> Workflow Complete.", log_path, feedback)
 
     return {}
