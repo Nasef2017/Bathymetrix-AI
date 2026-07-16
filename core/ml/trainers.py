@@ -1345,8 +1345,26 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
     # The output is returned to the processing framework instead.
     # QgsProject.instance().addMapLayer(QgsRasterLayer(p_map, f"3_Initial_Global_Depth ({win_name})"))
 
+    p_uncert_map = os.path.join(out_dir, "3_Initial_Global_Uncertainty.tif")
+    try:
+        append_log("   Fitting Phase 03 uncertainty model (Empirical Residual Regressor)...", log_path, feedback)
+        y_train_pred = best_algo_data["model"].predict(X)
+        abs_residuals = np.abs(y - y_train_pred)
+        uncert_y = abs_residuals * 1.96
+        
+        from sklearn.ensemble import RandomForestRegressor
+        uncertainty_model = RandomForestRegressor(n_estimators=50, max_depth=6, random_state=random_state, n_jobs=n_jobs)
+        uncertainty_model.fit(X, uncert_y)
+        
+        append_log("   Generating Phase 03 uncertainty prediction map...", log_path, feedback)
+        predict_map(uncertainty_model, stack_path, mask_path, p_uncert_map, med_size, "float32", selected_indices)
+    except Exception as e:
+        append_log(f"   [Warning] Failed to generate Phase 03 uncertainty map: {e}", log_path, feedback)
+        p_uncert_map = None
+
     return {
         "OUTPUT_DEPTH_MAP": p_map,
+        "OUTPUT_UNCERT_MAP": p_uncert_map,
         "OUTPUT_MODEL_PKL": os.path.join(out_dir, "3_Best_Global_Model.pkl"),
         "BEST_R2": best_algo_data["r2"],
         "BEST_RMSE": best_algo_data["rmse"],

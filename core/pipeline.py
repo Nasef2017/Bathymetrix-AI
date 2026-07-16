@@ -84,20 +84,17 @@ class LoggingFeedback(QgsProcessingFeedback):
 
 def get_raster_min_max(raster_path):
     try:
-        from osgeo import gdal
-        ds = gdal.Open(raster_path)
-        if ds:
-            band = ds.GetRasterBand(1)
-            stats = band.GetStatistics(0, 1) # Force statistics computation
-            min_val = stats[0]
-            max_val = stats[1]
-            if min_val is None or max_val is None:
-                min_val = band.GetMinimum()
-                max_val = band.GetMaximum()
-            
-            import numpy as np
-            if min_val is not None and not np.isnan(min_val):
-                return float(min_val), float(max_val) if max_val is not None else 0.0
+        import rasterio
+        import numpy as np
+        with rasterio.open(raster_path) as src:
+            data = src.read(1).astype(float)
+            nodata = src.nodata
+            if nodata is not None:
+                data[data == nodata] = np.nan
+            data[~np.isfinite(data)] = np.nan
+            valid = data[np.isfinite(data)]
+            if len(valid) > 0:
+                return float(np.nanmin(valid)), float(np.nanmax(valid))
     except Exception:  # nosec B110
         pass
     return -30.0, 0.0
@@ -156,7 +153,124 @@ def write_qml_style(tif_path):
         pass
 
 
-def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, spatial_cv_p4=True, enable_ransac=False, filter_mode=0, field_depth=None, field_weight=None, collision_handling_idx=0):
+def generate_3d_seabed_png(raster_path, out_png_path, feedback=None):
+    if feedback:
+        feedback.pushInfo(f"--- Generating static 3D Seabed Plot: {out_png_path}")
+    try:
+        import rasterio
+        from rasterio.enums import Resampling
+        import numpy as np
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from mpl_toolkits.mplot3d import Axes3D
+        
+        grid_size = 150
+        with rasterio.open(raster_path) as src:
+            data = src.read(
+                1,
+                out_shape=(grid_size, grid_size),
+                resampling=Resampling.bilinear
+            )
+            nodata = src.nodata if src.nodata is not None else -9999.0
+            transform = src.transform
+            bounds = src.bounds
+            
+            # Real-world extents in meters
+            x_extent = bounds.right - bounds.left
+            y_extent = bounds.top - bounds.bottom
+            
+            data_float = data.astype(float)
+            data_float[data_float == nodata] = np.nan
+            
+            # Create real-world coordinate grids (meters from origin)
+            x_coords = np.linspace(0, x_extent, grid_size)
+            y_coords = np.linspace(0, y_extent, grid_size)
+            X, Y = np.meshgrid(x_coords, y_coords)
+            masked_Z = np.ma.masked_invalid(data_float)
+            
+            # Auto-calculate Vertical Exaggeration for visual clarity
+            valid_z = data_float[np.isfinite(data_float)]
+            if len(valid_z) > 0:
+                z_range = float(np.nanmax(valid_z) - np.nanmin(valid_z))
+                z_range = max(z_range, 0.1)
+                horizontal_extent = max(x_extent, y_extent)
+                # Target: Z should visually appear as ~35% of the longest horizontal axis
+                target_z_fraction = 0.35
+                ve = (target_z_fraction * horizontal_extent) / z_range
+                ve = max(2.0, ve)  # minimum VE = 2x
+            else:
+                ve = 3.0
+                z_range = 1.0
+                horizontal_extent = max(x_extent, y_extent)
+            
+            fig = plt.figure(figsize=(12, 9), facecolor='#020617')
+            ax = fig.add_subplot(111, projection='3d', facecolor='#020617')
+            
+            surf = ax.plot_surface(
+                X, Y, masked_Z,
+                cmap='Spectral_r',
+                linewidth=0,
+                antialiased=True,
+                alpha=0.92,
+                rcount=120, ccount=120
+            )
+            
+            # Set normalized box aspect: x_norm, y_norm relative to max_h, z = target fraction
+            max_h = max(x_extent, y_extent)
+            try:
+                ax.set_box_aspect([x_extent / max_h, y_extent / max_h, target_z_fraction])
+            except AttributeError:
+                pass
+            
+            ve_label = f"VE ≈ {ve:.1f}x"
+            ax.set_title(f"3D Seabed Topography Model\n", color='white', fontsize=14, fontweight='bold', pad=15)
+            ax.text2D(0.5, 0.93, ve_label, transform=ax.transAxes, ha='center', va='top',
+                      fontsize=9, color='#60a5fa',
+                      bbox=dict(boxstyle='round,pad=0.3', facecolor='#1e293b', edgecolor='#334155', alpha=0.85))
+            
+            # Format axis labels with real units
+            if x_extent > 2000:
+                ax.set_xlabel(f"Easting ({x_extent/1000:.1f} km)", color='#94a3b8', labelpad=10, fontsize=9)
+            else:
+                ax.set_xlabel(f"Easting ({x_extent:.0f} m)", color='#94a3b8', labelpad=10, fontsize=9)
+            if y_extent > 2000:
+                ax.set_ylabel(f"Northing ({y_extent/1000:.1f} km)", color='#94a3b8', labelpad=10, fontsize=9)
+            else:
+                ax.set_ylabel(f"Northing ({y_extent:.0f} m)", color='#94a3b8', labelpad=10, fontsize=9)
+            ax.set_zlabel("Depth (m)", color='#94a3b8', labelpad=10, fontsize=9)
+            
+            ax.tick_params(colors='#94a3b8', labelsize=7)
+            ax.xaxis.line.set_color('#334155')
+            ax.yaxis.line.set_color('#334155')
+            ax.zaxis.line.set_color('#334155')
+            ax.xaxis.pane.fill = False
+            ax.yaxis.pane.fill = False
+            ax.zaxis.pane.fill = False
+            ax.xaxis.pane.set_edgecolor('#1e293b')
+            ax.yaxis.pane.set_edgecolor('#1e293b')
+            ax.zaxis.pane.set_edgecolor('#1e293b')
+            ax.grid(True, color='#1e293b', linestyle='--', alpha=0.3)
+            
+            cbar = fig.colorbar(surf, ax=ax, shrink=0.55, aspect=14, pad=0.08)
+            cbar.set_label('Depth (m)', color='white', fontsize=10, labelpad=10)
+            cbar.ax.yaxis.set_tick_params(colors='#94a3b8', labelsize=8)
+            cbar.ax.yaxis.label.set_color('white')
+            
+            ax.view_init(elev=30, azim=-55)
+            
+            plt.savefig(out_png_path, dpi=150, facecolor=fig.get_facecolor(), bbox_inches='tight')
+            plt.close(fig)
+            if feedback:
+                feedback.pushInfo(f"Static 3D Seabed Plot generated successfully. {ve_label}")
+            return True
+    except Exception as e:
+        if feedback:
+            feedback.pushWarning(f"Failed to generate static 3D Seabed PNG: {str(e)}")
+        return False
+
+
+def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, spatial_cv_p4=True, enable_ransac=False, filter_mode=0, field_depth=None, field_weight=None, collision_handling_idx=0, log_path=None, feedback=None, raster_name="Sentinel-2 MSI", train_name="ICESat-2 (ATL24) LiDAR", test_name="In-situ Echosounder Surveys"):
     benchmark_csv = os.path.join(p3_dir, "3_All_Algorithms_Benchmark.csv")
     p4_benchmark_csv = os.path.join(p4_dir, "4_All_Algorithms_Benchmark.csv") if p4_dir else None
     
@@ -166,10 +280,103 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
     folder_name = os.path.basename(out_dir)
     folder_url = f"file:///{out_dir.replace(chr(92), '/')}"
     
+    # Downsample final depth map for 3D web rendering
+    import json
+    import numpy as np
+    import rasterio
+    from rasterio.enums import Resampling
+    
+    final_raster_path = None
+    if p4_dir:
+        for candidate in ["Phase04_Final_Depth_OSW_Clipped.tif", "Final_Depth_Cleaned.tif"]:
+            test_path = os.path.join(p4_dir, candidate)
+            if os.path.exists(test_path):
+                final_raster_path = test_path
+                break
+    if not final_raster_path:
+        for candidate in ["Phase03_Depth_OSW_Clipped.tif", "Phase3_Depth_Cleaned.tif", "3_Initial_Global_Depth.tif"]:
+            test_path = os.path.join(p3_dir, candidate)
+            if os.path.exists(test_path):
+                final_raster_path = test_path
+                break
+
+    z_data_json = "[]"
+    x_coords_json = "[]"
+    y_coords_json = "[]"
+    plotly_aspect_json = "{}"
+    plotly_x_title = "X (Grid)"
+    plotly_y_title = "Y (Grid)"
+    if final_raster_path and os.path.exists(final_raster_path):
+        try:
+            grid_size = 100
+            with rasterio.open(final_raster_path) as src:
+                data = src.read(
+                    1,
+                    out_shape=(grid_size, grid_size),
+                    resampling=Resampling.bilinear
+                )
+                nodata = src.nodata if src.nodata is not None else -9999.0
+                bounds = src.bounds
+                x_extent = bounds.right - bounds.left
+                y_extent = bounds.top - bounds.bottom
+                
+                data_float = data.astype(float)
+                data_float[data_float == nodata] = np.nan
+                grid_list = [[(val if np.isfinite(val) else None) for val in row] for row in data_float]
+                z_data_json = json.dumps(grid_list)
+                
+                # Real-world coordinate arrays
+                x_arr = np.linspace(0, x_extent, grid_size).tolist()
+                y_arr = np.linspace(0, y_extent, grid_size).tolist()
+                x_coords_json = json.dumps([round(v, 1) for v in x_arr])
+                y_coords_json = json.dumps([round(v, 1) for v in y_arr])
+                
+                # Auto Vertical Exaggeration & Plotly aspect ratio
+                target_z_fraction = 0.35
+                valid_z = data_float[np.isfinite(data_float)]
+                if len(valid_z) > 0:
+                    z_range = float(np.nanmax(valid_z) - np.nanmin(valid_z))
+                    z_range = max(z_range, 0.1)
+                    horizontal_extent = max(x_extent, y_extent)
+                    ve = (target_z_fraction * horizontal_extent) / z_range
+                    ve = max(2.0, ve)
+                else:
+                    z_range = 1.0
+                    ve = 3.0
+                    
+                # Normalize aspect: longest horizontal side = 1, Z = target fraction
+                max_h = max(x_extent, y_extent)
+                aspect = {"x": round(x_extent / max_h, 4), "y": round(y_extent / max_h, 4), "z": round(target_z_fraction, 4)}
+                plotly_aspect_json = json.dumps(aspect)
+                
+                if x_extent > 2000:
+                    plotly_x_title = f"Easting ({x_extent/1000:.1f} km)"
+                else:
+                    plotly_x_title = f"Easting ({x_extent:.0f} m)"
+                if y_extent > 2000:
+                    plotly_y_title = f"Northing ({y_extent/1000:.1f} km)"
+                else:
+                    plotly_y_title = f"Northing ({y_extent:.0f} m)"
+        except Exception as e:
+            if feedback:
+                feedback.pushWarning(f"Failed to extract 3D Seabed data for dashboard: {str(e)}")
+
     rows_p3_html = ""
     rows_p4_html = ""
     rows_strat_html = ""
     has_strat = False
+    
+    # Declare defaults for filtering stats (used in PDF report)
+    pt_count = "N/A"
+    depth_min = "N/A"
+    depth_max = "N/A"
+    weight_min = "N/A"
+    weight_max = "N/A"
+    actual_pt_count = "N/A"
+    collision_handling = "Bypassed"
+    filter_mode_name = "Disabled"
+    has_weight_stats = False
+    strat_rows = []
     
     best_algo = "N/A"
     best_r2 = -9999.0
@@ -408,7 +615,7 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
         <div class="bg-slate-800/30 border border-slate-700/30 rounded-2xl p-6 mt-8">
             <div class="flex items-center justify-between mb-4 border-b border-slate-800 pb-4">
                 <div>
-                    <h2 class="text-lg font-bold text-slate-100">🧹 Phase 02: Filtering & Uncertainty</h2>
+                    <h2 class="text-lg font-bold text-slate-100">🧹 Phase 02: Training Dataset Filtering & Uncertainty</h2>
                     <p class="text-xs text-slate-400 mt-1">Robust outlier rejection and variance/trend analysis on training data</p>
                 </div>
                 <span class="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">{filter_mode_name}</span>
@@ -469,12 +676,24 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                     iho_order = row.get("IHO_Order", "Unknown")
                     uses = row.get("Suggested_Uses", "")
                     
+                    strat_rows.append({
+                        "Model": model,
+                        "Depth_Bin": depth_bin,
+                        "Count": count,
+                        "Mean_Depth": mean_depth,
+                        "RMSE": rmse,
+                        "Model_TVU_95": model_tvu,
+                        "IHO_TVU_Limit": iho_limit,
+                        "IHO_Order": iho_order,
+                        "Suggested_Uses": uses
+                    })
+                    
                     if iho_order == "Special Order":
                         order_badge = '<span class="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Special Order</span>'
                     elif iho_order == "Order 1a/1b":
                         order_badge = '<span class="px-2 py-0.5 rounded text-xs font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20">Order 1a/1b</span>'
                     elif iho_order == "Order 2":
-                        order_badge = '<span class="px-2 py-0.5 rounded text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20">Order 2</span>'
+                        order_badge = '<span class="px-2 py-0.5 rounded text-xs font-semibold bg-amber-500/10 text-amber-400 border border-emerald-500/20">Order 2</span>'
                     else:
                         order_badge = '<span class="px-2 py-0.5 rounded text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20">Out of Spec</span>'
                         
@@ -669,7 +888,7 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                                    <a href="5_Plot_Error_Histogram.png" target="_blank">
                                        <img src="5_Plot_Error_Histogram.png" alt="Error Histogram" class="w-full h-auto hover:opacity-90 transition-opacity" onerror="this.src='https://placehold.co/400x300/1e293b/94a3b8?text=Histogram+Not+Found'"/>
                                    </a>
-                               </div>
+                                </div>
                            </div>
 
                            <div>
@@ -685,6 +904,26 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
             </div>''' if has_val_plots else ''}
         </div>
         
+        <!-- 3D Seabed Viewer & Plot Section -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-8">
+            <!-- Left: Interactive 3D Viewer -->
+            <div class="bg-slate-800/30 border border-slate-700/30 rounded-2xl p-6">
+                <h2 class="text-lg font-bold text-slate-100 mb-2">🔮 Interactive 3D Seabed Viewer</h2>
+                <p class="text-xs text-slate-400 mb-4">Click and drag to rotate, scroll to zoom. Double click to reset view.</p>
+                <div id="seabed-3d-viewer" style="width: 100%; height: 450px;" class="rounded-xl overflow-hidden bg-slate-950 border border-slate-800"></div>
+            </div>
+            <!-- Right: Static 3D Seabed Plot (PNG) -->
+            <div class="bg-slate-800/30 border border-slate-700/30 rounded-2xl p-6">
+                <h2 class="text-lg font-bold text-slate-100 mb-2">📷 Static 3D Seabed Elevation Model</h2>
+                <p class="text-xs text-slate-400 mb-4">High-resolution 3D surface plot generated using Spectral reversed colormap.</p>
+                <div class="bg-slate-900 rounded-xl overflow-hidden border border-slate-800 h-[450px] flex items-center justify-center">
+                    <a href="5_Plot_3D_Seabed.png" target="_blank" class="w-full h-full flex items-center justify-center p-2">
+                        <img src="5_Plot_3D_Seabed.png" alt="Static 3D Seabed Plot" class="max-w-full max-h-full object-contain hover:opacity-95 transition-opacity" onerror="this.src='https://placehold.co/500x400/020617/94a3b8?text=3D+Seabed+Plot+Not+Found'"/>
+                    </a>
+                </div>
+            </div>
+        </div>
+        
         {html_strat_section}
         
         <!-- Footer -->
@@ -692,6 +931,50 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
             <p>Generated by SDB MasterFlow | Developer: Mohamed Aly Nasef</p>
         </footer>
     </div>
+    <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
+    <script>
+        try {{
+            var zData = {z_data_json};
+            var xCoords = {x_coords_json};
+            var yCoords = {y_coords_json};
+            var aspectRatio = {plotly_aspect_json};
+            if (zData && zData.length > 0) {{
+                var data = [{{
+                    z: zData,
+                    x: xCoords.length > 0 ? xCoords : undefined,
+                    y: yCoords.length > 0 ? yCoords : undefined,
+                    type: 'surface',
+                    colorscale: 'Spectral',
+                    reversescale: true,
+                    colorbar: {{ title: 'Depth (m)', titlefont: {{ color: '#94a3b8' }}, tickfont: {{ color: '#94a3b8' }} }},
+                    contours: {{
+                        z: {{ show: true, usecolormap: true, highlightcolor: "#ffffff", project: {{ z: true }} }}
+                    }}
+                }}];
+                var sceneConfig = {{
+                    xaxis: {{ title: '{plotly_x_title}', color: '#94a3b8', gridcolor: '#1e293b' }},
+                    yaxis: {{ title: '{plotly_y_title}', color: '#94a3b8', gridcolor: '#1e293b' }},
+                    zaxis: {{ title: 'Depth (m)', color: '#94a3b8', gridcolor: '#1e293b' }}
+                }};
+                if (aspectRatio && aspectRatio.x) {{
+                    sceneConfig.aspectmode = 'manual';
+                    sceneConfig.aspectratio = {{ x: aspectRatio.x, y: aspectRatio.y, z: aspectRatio.z }};
+                }}
+                var layout = {{
+                    margin: {{ l: 0, r: 0, b: 0, t: 0 }},
+                    paper_bgcolor: '#020617',
+                    plot_bgcolor: '#020617',
+                    scene: sceneConfig
+                }};
+                Plotly.newPlot('seabed-3d-viewer', data, layout);
+            }} else {{
+                document.getElementById('seabed-3d-viewer').innerHTML = '<div class="flex items-center justify-center h-full text-slate-500 text-sm">3D Seabed Data Not Available</div>';
+            }}
+        }} catch (e) {{
+            console.error(e);
+            document.getElementById('seabed-3d-viewer').innerHTML = '<div class="flex items-center justify-center h-full text-rose-500 text-sm">Failed to render 3D Viewer</div>';
+        }}
+    </script>
 </body>
 </html>
 """
@@ -701,6 +984,41 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
             f.write(html_content)
     except Exception:  # nosec B110
         pass
+
+    # Generate HTML Technical Report
+    try:
+        generate_pdf_report(
+            out_dir=out_dir,
+            p3_models=p3_models,
+            p4_models=p4_models,
+            has_p4=has_p4,
+            enable_ransac=enable_ransac,
+            pt_count=pt_count,
+            depth_min=depth_min,
+            depth_max=depth_max,
+            has_weight_stats=has_weight_stats,
+            weight_min=weight_min,
+            weight_max=weight_max,
+            actual_pt_count=actual_pt_count,
+            collision_handling=collision_handling,
+            filter_mode_name=filter_mode_name,
+            strat_rows=strat_rows,
+            log_path=log_path,
+            feedback=feedback,
+            raster_name=raster_name,
+            train_name=train_name,
+            test_name=test_name
+        )
+    except Exception as e:
+        msg = f"Failed to invoke HTML report generation: {str(e)}"
+        if feedback is not None:
+            feedback.pushWarning(msg)
+        elif log_path:
+            try:
+                with open(log_path, "a", encoding="utf-8") as f:
+                    f.write(f"[Warning] {msg}\n")
+            except Exception:
+                pass
 
 
 def run_master_pipeline(algorithm, parameters, context, feedback):
@@ -1114,6 +1432,40 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
         p3["OUTPUT_DEPTH_MAP"] = current_p3
         write_qml_style(current_p3)
 
+        p3_uncert = p3.get("OUTPUT_UNCERT_MAP")
+        p3_uncert_clamped = None
+        if p3_uncert and os.path.exists(p3_uncert):
+            p3_uncert_clamped = os.path.join(p3_dir, "Phase3_Uncertainty_Cleaned.tif")
+            clean_depth_map(
+                p3_uncert, feat_stack, max_depth, p3_uncert_clamped, context, feedback
+            )
+
+            if p1.get("OUTPUT_OSW_POLY") and os.path.exists(p1["OUTPUT_OSW_POLY"]):
+                p3_uncert_osw = os.path.join(p3_dir, "Phase03_Uncertainty_OSW_Clipped.tif")
+                processing.run(
+                    "gdal:cliprasterbymasklayer",
+                    {
+                        "INPUT": p3_uncert_clamped,
+                        "MASK": p1["OUTPUT_OSW_POLY"],
+                        "SOURCE_CRS": crs_id,
+                        "TARGET_CRS": crs_id,
+                        "NODATA": -9999.0,
+                        "ALPHA_BAND": False,
+                        "CROP_TO_CUTLINE": False,
+                        "KEEP_RESOLUTION": True,
+                        "DATA_TYPE": 0,
+                        "OUTPUT": p3_uncert_osw,
+                    },
+                    context=context,
+                    feedback=feedback,
+                    is_child_algorithm=True,
+                )
+                if os.path.exists(p3_uncert_osw):
+                    p3_uncert_clamped = p3_uncert_osw
+
+            p3["OUTPUT_UNCERT_MAP"] = p3_uncert_clamped
+
+    p4_uncert_clamped = None
     if path_refined and os.path.exists(path_refined):
         p4_clamped = os.path.join(p4_dir, "Final_Depth_Cleaned.tif")
         clean_depth_map(
@@ -1164,6 +1516,38 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
         if path_refined:
             write_qml_style(path_refined)
 
+        p4_uncert = p4.get("OUTPUT_UNCERT")
+        if p4_uncert and os.path.exists(p4_uncert):
+            p4_uncert_clamped = os.path.join(p4_dir, "Final_Uncertainty_95.tif")
+            clean_depth_map(
+                p4_uncert, feat_stack, max_depth, p4_uncert_clamped, context, feedback
+            )
+
+            if p1.get("OUTPUT_OSW_POLY") and os.path.exists(p1["OUTPUT_OSW_POLY"]):
+                p4_uncert_osw = os.path.join(p4_dir, "Final_Uncertainty_95_OSW_Clipped.tif")
+                processing.run(
+                    "gdal:cliprasterbymasklayer",
+                    {
+                        "INPUT": p4_uncert_clamped,
+                        "MASK": p1["OUTPUT_OSW_POLY"],
+                        "SOURCE_CRS": crs_id,
+                        "TARGET_CRS": crs_id,
+                        "NODATA": -9999.0,
+                        "ALPHA_BAND": False,
+                        "CROP_TO_CUTLINE": False,
+                        "KEEP_RESOLUTION": True,
+                        "DATA_TYPE": 0,
+                        "OUTPUT": p4_uncert_osw,
+                    },
+                    context=context,
+                    feedback=feedback,
+                    is_child_algorithm=True,
+                )
+                if os.path.exists(p4_uncert_osw):
+                    p4_uncert_clamped = p4_uncert_osw
+
+            p4["OUTPUT_UNCERT"] = p4_uncert_clamped
+
     if enable_val and final_test:
         append_log("\n>>> Phase 05: Validation...", log_path, feedback)
         processing.run(
@@ -1193,6 +1577,8 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
             details_init.setPostProcessor(StylePostProcessor(qml_path_p3))
         context.addLayerToLoadOnCompletion(p3["OUTPUT_DEPTH_MAP"], details_init)
 
+
+
     if path_refined and os.path.exists(path_refined):
         details_ref = QgsProcessingContext.LayerDetails(
             "Refined SDB Map [Phase 04]", QgsProject.instance(), "Refined SDB"
@@ -1202,6 +1588,8 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
             details_ref.setPostProcessor(StylePostProcessor(qml_path_p4))
         context.addLayerToLoadOnCompletion(path_refined, details_ref)
 
+
+
     spatial_cv_p3 = algorithm.parameterAsBool(parameters, algorithm.SPATIAL_CV_P3, context)
     spatial_cv_p4 = algorithm.parameterAsBool(parameters, algorithm.SPATIAL_CV_P4, context)
     enable_ransac = algorithm.parameterAsBool(parameters, algorithm.ENABLE_RANSAC, context)
@@ -1209,6 +1597,20 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
     field_depth = algorithm.parameterAsString(parameters, algorithm.FIELD_DEPTH, context)
     field_weight = algorithm.parameterAsString(parameters, algorithm.FIELD_WEIGHT, context)
     collision_handling_idx = algorithm.parameterAsInt(parameters, algorithm.COLLISION_HANDLING, context)
+
+    input_train_layer = algorithm.parameterAsVectorLayer(parameters, algorithm.INPUT_TRAIN, context)
+    input_test_layer = algorithm.parameterAsVectorLayer(parameters, algorithm.INPUT_TEST, context) if enable_val else None
+
+    # Generate static 3D seabed PNG
+    final_depth_for_3d = None
+    if path_refined and os.path.exists(path_refined):
+        final_depth_for_3d = path_refined
+    elif p3.get("OUTPUT_DEPTH_MAP") and os.path.exists(p3["OUTPUT_DEPTH_MAP"]):
+        final_depth_for_3d = p3["OUTPUT_DEPTH_MAP"]
+        
+    if final_depth_for_3d:
+        out_3d_png = os.path.join(out_dir, "5_Plot_3D_Seabed.png")
+        generate_3d_seabed_png(final_depth_for_3d, out_3d_png, feedback)
 
     generate_html_dashboard(
         out_dir=out_dir,
@@ -1220,8 +1622,492 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
         filter_mode=filter_mode,
         field_depth=field_depth,
         field_weight=field_weight,
-        collision_handling_idx=collision_handling_idx
+        collision_handling_idx=collision_handling_idx,
+        log_path=log_path,
+        feedback=feedback,
+        raster_name=input_raster.name() if input_raster else "Unknown Raster",
+        train_name=input_train_layer.name() if input_train_layer else "Unknown Vector",
+        test_name=input_test_layer.name() if input_test_layer else "N/A"
     )
     append_log("\n>>> Workflow Complete.", log_path, feedback)
 
     return {}
+
+
+def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt_count, depth_min, depth_max, has_weight_stats, weight_min, weight_max, actual_pt_count, collision_handling, filter_mode_name, strat_rows, log_path=None, feedback=None, raster_name="Sentinel-2 MSI", train_name="ICESat-2 (ATL24) LiDAR", test_name="In-situ Echosounder Surveys"):
+    import datetime
+
+    date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    folder_name = os.path.basename(out_dir)
+
+    # Compile tables
+    # P3 Table
+    p3_rows_html = ""
+    for idx, m in enumerate(p3_models):
+        algo = m["Algorithm"]
+        r2 = m["R2"]
+        rmse = m["RMSE"]
+        wmape = m["wMAPE"]
+        bg = ' bgcolor="#f8fafc"' if idx % 2 == 1 else ''
+        p3_rows_html += f"""
+        <tr{bg}>
+            <td style="white-space: nowrap;"><strong>{algo}</strong></td>
+            <td style="color: #0f766e; font-weight: bold; white-space: nowrap;">{r2:.4f}</td>
+            <td style="color: #1d4ed8; font-weight: bold; white-space: nowrap;">{rmse:.2f}m</td>
+            <td style="color: #4f46e5; font-weight: bold; white-space: nowrap;">{wmape:.2f}%</td>
+        </tr>
+        """
+
+    # P4 Table
+    p4_rows_html = ""
+    if has_p4:
+        for idx, m in enumerate(p4_models):
+            algo = m["Algorithm"]
+            r2 = m["R2"]
+            rmse = m["RMSE"]
+            wmape = m["wMAPE"]
+            bg = ' bgcolor="#f8fafc"' if idx % 2 == 1 else ''
+            p4_rows_html += f"""
+            <tr{bg}>
+                <td style="white-space: nowrap;"><strong>{algo}</strong></td>
+                <td style="color: #0f766e; font-weight: bold; white-space: nowrap;">{r2:.4f}</td>
+                <td style="color: #1d4ed8; font-weight: bold; white-space: nowrap;">{rmse:.2f}m</td>
+                <td style="color: #4f46e5; font-weight: bold; white-space: nowrap;">{wmape:.2f}%</td>
+            </tr>
+            """
+    else:
+        p4_rows_html = "<tr><td colspan='4' style='text-align: center; color: #64748b; padding: 6px;'>Phase 04 Refinement was bypassed/disabled.</td></tr>"
+
+    # Stratified Table
+    strat_rows_html = ""
+    if strat_rows:
+        for idx, r in enumerate(strat_rows):
+            model = r["Model"]
+            depth_bin = r["Depth_Bin"]
+            count = r["Count"]
+            mean_depth = r["Mean_Depth"]
+            rmse = r["RMSE"]
+            model_tvu = r["Model_TVU_95"]
+            iho_limit = r["IHO_TVU_Limit"]
+            iho_order = r["IHO_Order"]
+            uses = r["Suggested_Uses"]
+            bg = ' bgcolor="#f8fafc"' if idx % 2 == 1 else ''
+
+            if iho_order == "Special Order":
+                badge_style = "background-color: #d1fae5; color: #065f46; border: 1px solid #a7f3d0;"
+            elif iho_order == "Order 1a/1b":
+                badge_style = "background-color: #e0f2fe; color: #0369a1; border: 1px solid #bae6fd;"
+            elif iho_order == "Order 2":
+                badge_style = "background-color: #fef3c7; color: #92400e; border: 1px solid #fde68a;"
+            else:
+                badge_style = "background-color: #fee2e2; color: #991b1b; border: 1px solid #fca5a5;"
+
+            strat_rows_html += f"""
+            <tr{bg}>
+                <td style="white-space: nowrap;">{model}</td>
+                <td style="white-space: nowrap;"><strong>{depth_bin}</strong></td>
+                <td style="white-space: nowrap;">{count}</td>
+                <td style="white-space: nowrap;">{mean_depth:.2f}m</td>
+                <td style="white-space: nowrap;">{rmse:.3f}m</td>
+                <td style="color: #0284c7; font-weight: bold; white-space: nowrap;">{model_tvu:.3f}m</td>
+                <td style="white-space: nowrap;">{iho_limit:.3f}m</td>
+                <td style="white-space: nowrap;"><span style="padding: 2px 4px; font-weight: bold; border-radius: 3px; font-size: 8pt; {badge_style}">{iho_order}</span></td>
+                <td style="font-size: 8pt; color: #475569;">{uses}</td>
+            </tr>
+            """
+    else:
+        strat_rows_html = "<tr><td colspan='9' style='text-align: center; color: #64748b; padding: 6px;'>Phase 05 Validation was not run. No independent validation data available.</td></tr>"
+
+    # Phase 02 Plots
+    p2_plots_html = ""
+    p2_plot1_path = os.path.abspath(os.path.join(out_dir, "Phase_02_Filtering/2_Plot_1_Trend.png")).replace("\\", "/")
+    p2_plot2_path = os.path.abspath(os.path.join(out_dir, "Phase_02_Filtering/2_Plot_2_Variance.png")).replace("\\", "/")
+    p2_plot3_path = os.path.abspath(os.path.join(out_dir, "Phase_02_Filtering/2_Plot_3_Envelope.png")).replace("\\", "/")
+
+    # Check which plots exist and match the filter mode
+    p2_plots_to_show = []
+    if "Huber" in filter_mode_name:
+        if os.path.exists(p2_plot1_path):
+            p2_plots_to_show.append((p2_plot1_path, "Figure 1: Huber Regression Trend & Outlier Rejection"))
+        if os.path.exists(p2_plot3_path):
+            p2_plots_to_show.append((p2_plot3_path, "Figure 2: Huber Variance Envelope & Cleaned Data Fit"))
+    elif "LS" in filter_mode_name:
+        if os.path.exists(p2_plot1_path):
+            p2_plots_to_show.append((p2_plot1_path, "Figure 1: Least-Squares Regression Trend & Outlier Rejection"))
+        if os.path.exists(p2_plot2_path):
+            p2_plots_to_show.append((p2_plot2_path, "Figure 2: Least-Squares Variance Fit"))
+    elif "RANSAC" in filter_mode_name or "Ransac" in filter_mode_name:
+        if os.path.exists(p2_plot1_path):
+            p2_plots_to_show.append((p2_plot1_path, "Figure 1: RANSAC Regression Trend & Outlier Rejection"))
+
+    if p2_plots_to_show:
+        p2_plots_html = """
+        <h2>📈 Phase 02: Training Dataset Filtering & Uncertainty Plots</h2>
+        <p style="color: #64748b; font-size: 9pt; margin-bottom: 12pt;">
+            The following figures display the pre-filtering regression, trend fitting, and outlier rejection results.
+        </p>
+        """
+        if len(p2_plots_to_show) == 1:
+            img_path, caption = p2_plots_to_show[0]
+            p2_plots_html += f"""
+            <div style="display: block; width: 100%; margin: 0 auto 12pt auto; text-align: center;">
+                <img src="{img_path}" width="480" style="border: 1px solid #cbd5e1; border-radius: 4px; display: block; margin: 0 auto;" />
+                <div style="font-size: 8pt; color: #64748b; margin-top: 3pt; font-weight: bold; text-align: center;">{caption}</div>
+            </div>
+            """
+        else:
+            p2_plots_html += """
+            <table align="center" border="0" cellspacing="0" cellpadding="0" style="width: 600px; border: none; margin-top: 10pt; margin-bottom: 10pt;">
+                <tr bgcolor="transparent">
+            """
+            for img_path, caption in p2_plots_to_show:
+                p2_plots_html += f"""
+                    <td style="width: 300px; text-align: center; border: none; padding: 4pt; background-color: transparent;">
+                        <img src="{img_path}" width="280" style="border: 1px solid #cbd5e1; border-radius: 4px;" />
+                        <div style="font-size: 8pt; color: #64748b; margin-top: 3pt; font-weight: bold; text-align: center;">{caption}</div>
+                    </td>
+                """
+            p2_plots_html += """
+                </tr>
+            </table>
+            """
+
+    # Image paths
+    scatter_path = os.path.abspath(os.path.join(out_dir, "5_Plot_Scatter_Comparison.png")).replace("\\", "/")
+    residuals_path = os.path.abspath(os.path.join(out_dir, "5_Plot_Residuals.png")).replace("\\", "/")
+    histogram_path = os.path.abspath(os.path.join(out_dir, "5_Plot_Error_Histogram.png")).replace("\\", "/")
+    seabed_3d_path = os.path.abspath(os.path.join(out_dir, "5_Plot_3D_Seabed.png")).replace("\\", "/")
+
+    plots_section_html = ""
+    if os.path.exists(scatter_path) or os.path.exists(residuals_path) or os.path.exists(histogram_path) or os.path.exists(seabed_3d_path):
+        plots_section_html = f"""
+        <div style="page-break-before: always;"></div>
+        <h2>📊 Scientific Validation & 3D Topography Plots</h2>
+        <p style="color: #64748b; font-size: 9pt; margin-bottom: 12pt;">
+            The following plots display the model's accuracy comparison and the generated 3D seabed topography.
+        </p>
+        """
+        
+        if os.path.exists(seabed_3d_path) and (os.path.exists(scatter_path) or os.path.exists(residuals_path) or os.path.exists(histogram_path)):
+            val_col_html = ""
+            if os.path.exists(scatter_path):
+                val_col_html += f"""
+                <div style="margin-bottom: 8pt; text-align: center;">
+                    <img src="{scatter_path}" width="380" style="border: 1px solid #cbd5e1; border-radius: 4px;" />
+                    <div style="font-size: 8pt; color: #64748b; margin-top: 2pt; font-weight: bold;">Figure 2: 1:1 Scatter Comparison Plot</div>
+                </div>
+                """
+            
+            if os.path.exists(residuals_path) or os.path.exists(histogram_path):
+                val_col_html += f"""
+                <table align="center" border="0" cellspacing="0" cellpadding="0" style="width: 380px; border: none; margin: 0 auto;">
+                    <tr bgcolor="transparent">
+                """
+                if os.path.exists(residuals_path):
+                    val_col_html += f"""
+                        <td style="width: 50%; text-align: center; border: none; padding: 2pt; background-color: transparent;">
+                            <img src="{residuals_path}" width="180" style="border: 1px solid #cbd5e1; border-radius: 4px;" />
+                            <div style="font-size: 7.5pt; color: #64748b; margin-top: 2pt; font-weight: bold;">Figure 3: Residual Error</div>
+                        </td>
+                    """
+                else:
+                    val_col_html += """<td style="width: 50%; border: none;"></td>"""
+                    
+                if os.path.exists(histogram_path):
+                    val_col_html += f"""
+                        <td style="width: 50%; text-align: center; border: none; padding: 2pt; background-color: transparent;">
+                            <img src="{histogram_path}" width="180" style="border: 1px solid #cbd5e1; border-radius: 4px;" />
+                            <div style="font-size: 7.5pt; color: #64748b; margin-top: 2pt; font-weight: bold;">Figure 4: Error Histogram</div>
+                        </td>
+                    """
+                else:
+                    val_col_html += """<td style="width: 50%; border: none;"></td>"""
+                    
+                val_col_html += """
+                    </tr>
+                </table>
+                """
+                
+            plots_section_html += f"""
+            <table border="0" cellspacing="0" cellpadding="0" style="width: 100%; border: none; margin-top: 10pt; margin-bottom: 10pt;">
+                <tr bgcolor="transparent">
+                    <td style="width: 50%; vertical-align: middle; text-align: center; border: none; padding: 4pt; background-color: transparent;">
+                        <img src="{seabed_3d_path}" width="460" style="border: 1px solid #cbd5e1; border-radius: 4px;" />
+                        <div style="font-size: 8pt; color: #64748b; margin-top: 3pt; font-weight: bold; text-align: center;">Figure 1: 3D Seabed Elevation Model Plot (Spectral Colormap)</div>
+                    </td>
+                    <td style="width: 50%; vertical-align: top; text-align: center; border: none; padding: 4pt; background-color: transparent;">
+                        {val_col_html}
+                    </td>
+                </tr>
+            </table>
+            """
+        else:
+            if os.path.exists(seabed_3d_path):
+                plots_section_html += f"""
+                <div style="display: block; width: 100%; margin: 0 auto 12pt auto; text-align: center;">
+                    <img src="{seabed_3d_path}" width="480" style="border: 1px solid #cbd5e1; border-radius: 4px; display: block; margin: 0 auto;" />
+                    <div style="font-size: 8pt; color: #64748b; margin-top: 3pt; font-weight: bold; text-align: center;">Figure 1: 3D Seabed Elevation Model Plot (Spectral Colormap)</div>
+                </div>
+                """
+            if os.path.exists(scatter_path):
+                plots_section_html += f"""
+                <div style="display: block; width: 100%; margin: 0 auto 12pt auto; text-align: center;">
+                    <img src="{scatter_path}" width="480" style="border: 1px solid #cbd5e1; border-radius: 4px; display: block; margin: 0 auto;" />
+                    <div style="font-size: 8pt; color: #64748b; margin-top: 3pt; font-weight: bold; text-align: center;">Figure 2: 1:1 Scatter Comparison Plot (Predicted vs. Observed Depths)</div>
+                </div>
+                """
+            if os.path.exists(residuals_path) or os.path.exists(histogram_path):
+                plots_section_html += f"""
+                <table align="center" border="0" cellspacing="0" cellpadding="0" style="width: 500px; border: none; margin-top: 10pt; margin-bottom: 10pt;">
+                    <tr bgcolor="transparent">
+                """
+                if os.path.exists(residuals_path):
+                    plots_section_html += f"""
+                        <td style="width: 250px; text-align: center; border: none; padding: 4pt; background-color: transparent;">
+                            <img src="{residuals_path}" width="235" style="border: 1px solid #cbd5e1; border-radius: 4px;" />
+                            <div style="font-size: 8pt; color: #64748b; margin-top: 3pt; font-weight: bold; text-align: center;">Figure 3: Residual Error Plot</div>
+                        </td>
+                    """
+                else:
+                    plots_section_html += """<td style="width: 250px; border: none;"></td>"""
+                if os.path.exists(histogram_path):
+                    plots_section_html += f"""
+                        <td style="width: 250px; text-align: center; border: none; padding: 4pt; background-color: transparent;">
+                            <img src="{histogram_path}" width="235" style="border: 1px solid #cbd5e1; border-radius: 4px;" />
+                            <div style="font-size: 8pt; color: #64748b; margin-top: 3pt; font-weight: bold; text-align: center;">Figure 4: Density Histogram of Residual Errors</div>
+                        </td>
+                    """
+                else:
+                    plots_section_html += """<td style="width: 250px; border: none;"></td>"""
+                plots_section_html += """
+                    </tr>
+                </table>
+                """
+
+
+    html_content = f"""<!DOCTYPE html>
+    <html>
+    <head>
+    <meta charset="utf-8">
+    <style>
+        body {{
+            font-family: Arial, Helvetica, sans-serif;
+            color: #333333;
+            margin: 10pt;
+            line-height: 1.4;
+            font-size: 10pt;
+        }}
+        .header {{
+            background-color: #1a365d;
+            color: white;
+            padding: 12pt;
+            border-radius: 4pt;
+            margin-bottom: 15pt;
+        }}
+        .header h1 {{
+            margin: 0;
+            font-size: 16pt;
+            font-weight: bold;
+        }}
+        .header p {{
+            margin: 4pt 0 0 0;
+            font-size: 9.5pt;
+            color: #cbd5e1;
+        }}
+        h2 {{
+            font-size: 12pt;
+            color: #1a365d;
+            margin-top: 15pt;
+            border-bottom: 1.5pt solid #e2e8f0;
+            padding-bottom: 3pt;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 8pt;
+            margin-bottom: 12pt;
+        }}
+        th {{
+            background-color: #f1f5f9;
+            color: #1e293b;
+            font-weight: bold;
+            text-align: left;
+            border: 1px solid #cbd5e1;
+            padding: 4pt 6pt;
+            font-size: 8.5pt;
+            white-space: nowrap;
+        }}
+        td {{
+            border: 1px solid #cbd5e1;
+            padding: 4pt 6pt;
+            font-size: 8pt;
+            white-space: nowrap;
+        }}
+        tr:nth-child(even) {{
+            background-color: #f8fafc;
+        }}
+        .meta-box {{
+            background-color: #f8fafc;
+            border: 1px solid #cbd5e1;
+            border-radius: 4pt;
+            padding: 8pt;
+            margin-bottom: 12pt;
+        }}
+        .meta-table {{
+            width: 100%;
+            margin: 0;
+        }}
+        .meta-table td {{
+            border: none;
+            padding: 2pt 4pt;
+            font-size: 8.5pt;
+            white-space: nowrap;
+        }}
+        .meta-table tr:nth-child(even) {{
+            background-color: transparent;
+        }}
+        .footer {{
+            margin-top: 15pt;
+            border-top: 1.5pt solid #cbd5e1;
+            padding-top: 5pt;
+            text-align: center;
+            color: #64748b;
+            font-size: 7.5pt;
+        }}
+    </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>BATHYMETRIX-AI V6.3: TECHNICAL VALIDATION REPORT</h1>
+            <p>SDB MasterFlow | High-Precision Satellite-Derived Bathymetry Calibration & Validation</p>
+        </div>
+
+        <div class="meta-box">
+            <table class="meta-table">
+                <tr>
+                    <td style="width: 20%; font-weight: bold; color: #475569; white-space: nowrap;">Project Folder:</td>
+                    <td style="width: 30%; font-weight: bold; color: #1e293b; white-space: nowrap;">{folder_name}</td>
+                    <td style="width: 20%; font-weight: bold; color: #475569; white-space: nowrap;">Date:</td>
+                    <td style="width: 30%; color: #1e293b; white-space: nowrap;">{date_str}</td>
+                </tr>
+                <tr>
+                    <td style="font-weight: bold; color: #475569; white-space: nowrap;">Satellite Data:</td>
+                    <td style="color: #1e293b; white-space: nowrap;">{raster_name}</td>
+                    <td style="font-weight: bold; color: #475569; white-space: nowrap;">Training Reference:</td>
+                    <td style="color: #1e293b; white-space: nowrap;">{train_name}</td>
+                </tr>
+                <tr>
+                    <td style="font-weight: bold; color: #475569; white-space: nowrap;">Validation Ground Truth:</td>
+                    <td style="color: #1e293b; white-space: nowrap;" colspan="3">{test_name}</td>
+                </tr>
+            </table>
+        </div>
+
+        <h2>🧹 Phase 02: Training Dataset Filtering & Uncertainty Summary</h2>
+        <table border="1" cellspacing="0" cellpadding="6" bordercolor="#cbd5e1" style="width: 100%; border-collapse: collapse; margin-top: 8pt; margin-bottom: 12pt;">
+            <thead>
+                <tr bgcolor="#f1f5f9">
+                    <th style="white-space: nowrap;">Filtering Algorithm</th>
+                    <th style="white-space: nowrap;">Collision Resolution</th>
+                    <th style="white-space: nowrap;">Cleaned Training Samples</th>
+                    <th style="white-space: nowrap;">Final Model Input Points</th>
+                    <th style="white-space: nowrap;">Calibration Depth Range</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td style="white-space: nowrap;"><strong>{filter_mode_name}</strong></td>
+                    <td style="white-space: nowrap;">{collision_handling}</td>
+                    <td style="white-space: nowrap;">{pt_count}</td>
+                    <td style="white-space: nowrap;"><strong>{actual_pt_count}</strong></td>
+                    <td style="white-space: nowrap;">{depth_min}m to {depth_max}m</td>
+                </tr>
+            </tbody>
+        </table>
+
+        {p2_plots_html}
+
+        <h2>🏆 Phase 03: AutoML Leaderboard (Global Model)</h2>
+        <p style="color: #64748b; font-size: 8pt; margin-bottom: 5px;">
+            The algorithms are optimized and evaluated against independent cross-validation blocks.
+        </p>
+        <table border="1" cellspacing="0" cellpadding="6" bordercolor="#cbd5e1" style="width: 100%; border-collapse: collapse; margin-top: 8pt; margin-bottom: 12pt;">
+            <thead>
+                <tr bgcolor="#f1f5f9">
+                    <th style="white-space: nowrap;">Algorithm</th>
+                    <th style="white-space: nowrap;">R² Accuracy</th>
+                    <th style="white-space: nowrap;">RMSE (Vertical Error)</th>
+                    <th style="white-space: nowrap;">wMAPE (%)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {p3_rows_html}
+            </tbody>
+        </table>
+
+        {f"<h2>🔄 Phase 04: Adaptive Refinement Leaderboard</h2><table border='1' cellspacing='0' cellpadding='6' bordercolor='#cbd5e1' style='width: 100%; border-collapse: collapse; margin-top: 8pt; margin-bottom: 12pt;'><thead><tr bgcolor='#f1f5f9'><th style='white-space: nowrap;'>Algorithm</th><th style='white-space: nowrap;'>R² Accuracy</th><th style='white-space: nowrap;'>RMSE (Vertical Error)</th><th style='white-space: nowrap;'>wMAPE (%)</th></tr></thead><tbody>{p4_rows_html}</tbody></table>" if has_p4 else ""}
+
+        <div class="footer">
+            Report generated automatically by Bathymetrix-AI V6.3. All rights reserved. &copy; Mohamed Aly Nasef (2026).
+        </div>
+        <div style="page-break-before: always;"></div>
+
+        <h2>📏 IHO S-44 Standards Compliance & Stratified Error Analysis</h2>
+        <p style="color: #64748b; font-size: 8pt; margin-bottom: 5px;">
+            Compliance evaluation at a 95% confidence level (Model TVU = 1.96 * RMSE) calculated across depth layers.
+        </p>
+        <table border="1" cellspacing="0" cellpadding="5" bordercolor="#cbd5e1" style="width: 100%; border-collapse: collapse; margin-top: 8pt; margin-bottom: 12pt;">
+            <thead>
+                <tr bgcolor="#f1f5f9">
+                    <th style="white-space: nowrap;">Model Phase</th>
+                    <th style="white-space: nowrap;">Depth Bin</th>
+                    <th style="white-space: nowrap;">Points</th>
+                    <th style="white-space: nowrap;">Mean Depth</th>
+                    <th style="white-space: nowrap;">RMSE</th>
+                    <th style="white-space: nowrap;">Model TVU (95%)</th>
+                    <th style="white-space: nowrap;">IHO TVU Limit</th>
+                    <th style="white-space: nowrap;">IHO Order Achieved</th>
+                    <th>Suggested Industrial Uses</th>
+                </tr>
+            </thead>
+            <tbody>
+                {strat_rows_html}
+            </tbody>
+        </table>
+
+        {f'<div class="footer">Report generated automatically by Bathymetrix-AI V6.3. All rights reserved. &copy; Mohamed Aly Nasef (2026).</div>' if plots_section_html else ""}
+        {plots_section_html}
+
+        <div class="footer">
+            Report generated automatically by Bathymetrix-AI V6.3. All rights reserved. &copy; Mohamed Aly Nasef (2026).
+        </div>
+    </body>
+    </html>
+    """
+
+    try:
+        html_report_path = os.path.join(out_dir, "SDB Technical Report.html")
+        with open(html_report_path, "w", encoding="utf-8") as f:
+            f.write(html_content)
+            
+        success_msg = f"HTML Technical Report generated successfully: {html_report_path}"
+        if feedback is not None:
+            feedback.pushInfo(success_msg)
+        elif log_path:
+            try:
+                with open(log_path, "a", encoding="utf-8") as f:
+                    f.write(success_msg + "\n")
+            except Exception:
+                pass
+        return html_report_path
+    except Exception as e:
+        error_msg = f"Failed to generate SDB Technical Report HTML: {str(e)}"
+        if feedback is not None:
+            feedback.pushWarning(error_msg)
+        elif log_path:
+            try:
+                with open(log_path, "a", encoding="utf-8") as f:
+                    f.write(f"[Warning] {error_msg}\n")
+            except Exception:
+                pass
+        return None

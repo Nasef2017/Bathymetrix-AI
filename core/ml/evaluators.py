@@ -558,9 +558,32 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
         with rasterio.open(p_depth, "w", **meta) as dst:
             dst.write(final_map, 1)
 
-        p_uncert = os.path.join(out_dir, "Phase4_Uncertainty.tif")
-        uncert_map = np.full((h, w), -9999.0, dtype="float32")
-        uncert_map[valid_mask] = 0.0
+        p_uncert = os.path.join(out_dir, "4-Refined_Uncertainty.tif")
+        try:
+            append_log("   Fitting Phase 04 Math Uncertainty spatial model...", log_path, feedback)
+            math_residuals = residuals - spatial_model.predict(coords_tr)
+            abs_math_residuals = np.abs(math_residuals) * 1.96
+            
+            if interp_idx == 0:
+                spatial_uncert_model = KNeighborsRegressor(n_neighbors=knn_k, weights="distance", n_jobs=n_jobs)
+            elif interp_idx == 1:
+                spatial_uncert_model = RobustSpatialKNN(n_neighbors=knn_k)
+            else:
+                spatial_uncert_model = GaussianProcessRegressor(kernel=kernel, alpha=0.1, n_restarts_optimizer=2, random_state=random_state)
+                
+            spatial_uncert_model.fit(coords_tr, abs_math_residuals)
+            
+            append_log("   Interpolating Phase 04 Math Uncertainty Grid...", log_path, feedback)
+            uncert_map = np.full((h, w), -9999.0, dtype="float32")
+            for idx_c in range(0, len(water_coords), chunk_size):
+                chunk_c = water_coords[idx_c:idx_c + chunk_size]
+                if len(chunk_c) > 0:
+                    uncert_map[chunk_c[:, 0], chunk_c[:, 1]] = spatial_uncert_model.predict(chunk_c)
+        except Exception as e:
+            append_log(f"   [Warning] Failed to interpolate math uncertainty grid spatially: {e}", log_path, feedback)
+            uncert_map = np.full((h, w), -9999.0, dtype="float32")
+            uncert_map[valid_mask] = 0.0
+            
         meta.update(count=1, dtype="float32", nodata=-9999.0)
         with rasterio.open(p_uncert, "w", **meta) as dst:
             dst.write(uncert_map, 1)
@@ -1038,6 +1061,39 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
     with rasterio.open(p_final, "w", **meta) as dst:
         dst.write(final_map, 1)
 
+    p_uncert = os.path.join(out_dir, "4-Refined_Uncertainty.tif")
+    try:
+        append_log("   Fitting Phase 04 uncertainty model (Empirical Residual Regressor)...", log_path, feedback)
+        y_train_pred = best_model.predict(X_train)
+        abs_residuals = np.abs(y_train - y_train_pred)
+        uncert_y = abs_residuals * 1.96
+        
+        from sklearn.ensemble import RandomForestRegressor
+        uncertainty_model = RandomForestRegressor(n_estimators=50, max_depth=6, random_state=random_state, n_jobs=n_jobs)
+        uncertainty_model.fit(X_train, uncert_y)
+        
+        append_log("   Generating Phase 04 uncertainty prediction map...", log_path, feedback)
+        uncert_out = uncertainty_model.predict(X_map)
+        
+        uncert_map = np.full((h, w), -9999.0, dtype="float32")
+        uncert_map[water_indices] = uncert_out
+        
+        meta_uncert = meta.copy()
+        meta_uncert.update(count=1, dtype="float32", nodata=-9999.0)
+        with rasterio.open(p_uncert, "w", **meta_uncert) as dst:
+            dst.write(uncert_map, 1)
+    except Exception as e:
+        append_log(f"   [Warning] Failed to generate Phase 04 uncertainty map: {e}", log_path, feedback)
+        try:
+            uncert_map = np.full((h, w), -9999.0, dtype="float32")
+            uncert_map[water_indices] = 0.0
+            meta_uncert = meta.copy()
+            meta_uncert.update(count=1, dtype="float32", nodata=-9999.0)
+            with rasterio.open(p_uncert, "w", **meta_uncert) as dst:
+                dst.write(uncert_map, 1)
+        except Exception:
+            p_uncert = None
+
     try:
         import pandas as pd
         rows_p4 = []
@@ -1064,6 +1120,7 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
     return {
         "OUTPUT_FINAL": p_final,
         "OUTPUT_RESIDUAL": p_residual,
+        "OUTPUT_UNCERT": p_uncert,
         "BEST_R2": best_r2,
         "BEST_RMSE": best_rmse,
         "BEST_WMAPE": best_wmape,
