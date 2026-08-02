@@ -103,6 +103,9 @@ FEATURE_OPTIONS = [
     "[Ratio] Log(Blue) / Log(Green)",
     "[Ratio] Log(Blue) / Log(Red)",
     "[Ratio] Log(Coastal) / Log(Green)",
+    "[Ratio] Log(Green) / Log(NIR)",
+    "[Ratio] Log(Red) / Log(NIR)",
+    "[Index] NDWI (Green - NIR) / (Green + NIR)",
     "[Custom] Band Math Calculator",
 ]
 
@@ -231,14 +234,20 @@ def run_hedley(in_f, out_f, nir_idx, target_bands_idx, mask_f, percentile, fb):
             band = src.read(b).astype(np.float64)
 
             if b in target_bands_idx:
-                band_water = band[water_mask]
+                # Ensure we only use pixels where BOTH NIR and the target band are finite
+                valid_band_mask = water_mask & np.isfinite(band)
+                band_water = band[valid_band_mask]
+                nir_water_b = nir[valid_band_mask]
 
-                var_nir = np.var(nir_water)
-                if var_nir == 0:
-                    slope = 0.0
+                if len(nir_water_b) > 1:
+                    var_nir = np.var(nir_water_b)
+                    if var_nir == 0:
+                        slope = 0.0
+                    else:
+                        cov_matrix = np.cov(nir_water_b, band_water)
+                        slope = cov_matrix[0, 1] / var_nir
                 else:
-                    cov_matrix = np.cov(nir_water, band_water)
-                    slope = cov_matrix[0, 1] / var_nir
+                    slope = 0.0
 
                 fb.pushInfo(f"      Band {b} slope = {slope:.5f}")
                 corrected = band - slope * (nir - nir_min)
@@ -370,9 +379,12 @@ def generate_features(
             rbg = lb / lg
             rbr = lb / lr
             rcg = lc / lg
+            rgn = lg / ln
+            rrn = lr / ln
+            ndwi = (g_val - n_val) / (g_val + n_val)
 
         custom_band = np.zeros_like(b_val)
-        if do_calc and formula and 9 in selected_indices:
+        if do_calc and formula and 12 in selected_indices:
             try:
                 band_dict = {}
                 for i in range(1, nbands + 1):
@@ -399,7 +411,10 @@ def generate_features(
             6: rbg,
             7: rbr,
             8: rcg,
-            9: custom_band,
+            9: rgn,
+            10: rrn,
+            11: ndwi,
+            12: custom_band,
         }
 
         final_stack = []
@@ -418,6 +433,11 @@ def generate_features(
             
             for i in range(1, nbands + 1):
                 raw_band_data = s.read(i).astype("float32")
+                
+                # Fix NaN/Inf or original nodata in valid pixels so ML phase doesn't drop them
+                invalid_data = np.isnan(raw_band_data) | np.isinf(raw_band_data) | (raw_band_data <= -9999.0)
+                raw_band_data[invalid_data & mask_valid] = 0.0
+                
                 raw_band_data[~mask_valid] = -9999.0
                 final_stack.append(raw_band_data)
                 
@@ -489,52 +509,111 @@ def apply_deepwater_mask(
     import rasterio
 
     if apply_dw:
+        fallback_to_auto = False
         if dw_method == 0:  # Manual
             if not dw_roi:
-                raise QgsProcessingException("Deep Water Filter is ON (Manual mode), but no ROI provided.")
-            feedback.pushInfo("      Calculating Deep Water Stats (Manual ROI)...")
-            
-            stats_alg = processing.run("native:zonalstatisticsfb", {
-                'INPUT': dw_roi,
-                'INPUT_RASTER': base_img_path,
-                'RASTER_BAND': b_idx,
-                'COLUMN_PREFIX': 'b_',
-                'STATISTICS': [2, 4], # Mean, StDev
-                'OUTPUT': 'TEMPORARY_OUTPUT'
-            }, context=context, feedback=feedback, is_child_algorithm=True)
-            layer = QgsProcessingUtils.mapLayerFromString(stats_alg['OUTPUT'], context)
-            feat = list(layer.getFeatures())[0]
-            b_mean = feat['b_mean']
-            b_std = feat['b_stdev']
-            if b_mean is None or b_std is None or np.isnan(b_mean) or np.isnan(b_std):
-                raise QgsProcessingException("Calculated Blue stats are NULL or NaN. Make sure your ROI overlaps valid raster data.")
-            b_thresh = b_mean + (2 * b_std)
-            
-            stats_alg_g = processing.run("native:zonalstatisticsfb", {
-                'INPUT': dw_roi,
-                'INPUT_RASTER': base_img_path,
-                'RASTER_BAND': g_idx,
-                'COLUMN_PREFIX': 'g_',
-                'STATISTICS': [2, 4],
-                'OUTPUT': 'TEMPORARY_OUTPUT'
-            }, context=context, feedback=feedback, is_child_algorithm=True)
-            layer_g = QgsProcessingUtils.mapLayerFromString(stats_alg_g['OUTPUT'], context)
-            feat_g = list(layer_g.getFeatures())[0]
-            g_mean = feat_g['g_mean']
-            g_std = feat_g['g_stdev']
-            if g_mean is None or g_std is None or np.isnan(g_mean) or np.isnan(g_std):
-                raise QgsProcessingException("Calculated Green stats are NULL or NaN.")
-            g_thresh = g_mean + (2 * g_std)
-            feedback.pushInfo(f"      Blue Thresh: {b_thresh:.4f}, Green Thresh: {g_thresh:.4f}")
+                feedback.pushWarning("⚠️ Deep Water Filter is ON (Manual mode), but no ROI provided. Falling back to Automatic NIR.")
+                fallback_to_auto = True
+            else:
+                from qgis.core import QgsRasterLayer
+                raster_layer = QgsRasterLayer(base_img_path, "base_img")
+                if raster_layer.isValid() and dw_roi.crs() != raster_layer.crs():
+                    feedback.pushInfo(f"      Reprojecting Deep Water ROI to {raster_layer.crs().authid()}...")
+                    reproject_alg = processing.run("native:reprojectlayer", {
+                        'INPUT': dw_roi,
+                        'TARGET_CRS': raster_layer.crs(),
+                        'OUTPUT': 'TEMPORARY_OUTPUT'
+                    }, context=context, feedback=feedback, is_child_algorithm=True)
+                    dw_roi_final = QgsProcessingUtils.mapLayerFromString(reproject_alg['OUTPUT'], context)
+                else:
+                    dw_roi_final = dw_roi
+                    
+                feedback.pushInfo("      Calculating Deep Water Stats (Manual ROI)...")
+                
+                stats_alg = processing.run("native:zonalstatisticsfb", {
+                    'INPUT': dw_roi_final,
+                    'INPUT_RASTER': base_img_path,
+                    'RASTER_BAND': b_idx,
+                    'COLUMN_PREFIX': 'b_',
+                    'STATISTICS': [2, 4], # Mean, StDev
+                    'OUTPUT': 'TEMPORARY_OUTPUT'
+                }, context=context, feedback=feedback, is_child_algorithm=True)
+                layer = QgsProcessingUtils.mapLayerFromString(stats_alg['OUTPUT'], context)
+                feat = list(layer.getFeatures())[0]
+                b_mean = feat['b_mean']
+                b_std = feat['b_stdev']
+                
+                if b_mean is None or b_std is None or np.isnan(b_mean) or np.isnan(b_std):
+                    feedback.pushWarning("⚠️ Calculated Blue stats are NULL. Manual ROI might not overlap valid raster data. Falling back to Auto NIR.")
+                    fallback_to_auto = True
+                else:
+                    b_thresh = b_mean + (2 * b_std)
+                    
+                    stats_alg_g = processing.run("native:zonalstatisticsfb", {
+                        'INPUT': dw_roi_final,
+                        'INPUT_RASTER': base_img_path,
+                        'RASTER_BAND': g_idx,
+                        'COLUMN_PREFIX': 'g_',
+                        'STATISTICS': [2, 4],
+                        'OUTPUT': 'TEMPORARY_OUTPUT'
+                    }, context=context, feedback=feedback, is_child_algorithm=True)
+                    layer_g = QgsProcessingUtils.mapLayerFromString(stats_alg_g['OUTPUT'], context)
+                    feat_g = list(layer_g.getFeatures())[0]
+                    g_mean = feat_g['g_mean']
+                    g_std = feat_g['g_stdev']
+                    
+                    if g_mean is None or g_std is None or np.isnan(g_mean) or np.isnan(g_std):
+                        feedback.pushWarning("⚠️ Calculated Green stats are NULL. Falling back to Auto NIR.")
+                        fallback_to_auto = True
+                    else:
+                        g_thresh = g_mean + (2 * g_std)
+                        feedback.pushInfo(f"      Blue Thresh: {b_thresh:.4f}, Green Thresh: {g_thresh:.4f}")
 
-            stats_csv = os.path.join(out_dir, "04_DeepWater_Threshold_Stats.csv")
-            with open(stats_csv, "w") as f:
-                f.write("Band,Mean,SD,Threshold\n")
-                f.write(f"Blue,{b_mean},{b_std},{b_thresh}\n")
-                f.write(f"Green,{g_mean},{g_std},{g_thresh}\n")
-            feedback.pushInfo(f"      Saved stats to: {stats_csv}")
+                        stats_csv = os.path.join(out_dir, "04_DeepWater_Threshold_Stats.csv")
+                        with open(stats_csv, "w") as f:
+                            f.write("Band,Mean,SD,Threshold\n")
+                            f.write(f"Blue,{b_mean},{b_std},{b_thresh}\n")
+                            f.write(f"Green,{g_mean},{g_std},{g_thresh}\n")
+                        feedback.pushInfo(f"      Saved stats to: {stats_csv}")
 
-        elif dw_method == 1:  # Automatic
+        if dw_method == 2:  # Shallow Water Bound (OSW Polygon)
+            if not dw_roi:
+                feedback.pushWarning("⚠️ OSW Polygon method selected, but no ROI provided. Falling back to Automatic NIR.")
+                fallback_to_auto = True
+            else:
+                from qgis.core import QgsRasterLayer
+                raster_layer = QgsRasterLayer(base_img_path, "base_img")
+                if raster_layer.isValid() and dw_roi.crs() != raster_layer.crs():
+                    feedback.pushInfo(f"      Reprojecting OSW Polygon to {raster_layer.crs().authid()}...")
+                    reproject_alg = processing.run("native:reprojectlayer", {
+                        'INPUT': dw_roi,
+                        'TARGET_CRS': raster_layer.crs(),
+                        'OUTPUT': 'TEMPORARY_OUTPUT'
+                    }, context=context, feedback=feedback, is_child_algorithm=True)
+                    dw_roi_final = QgsProcessingUtils.mapLayerFromString(reproject_alg['OUTPUT'], context)
+                else:
+                    dw_roi_final = dw_roi
+                
+                feedback.pushInfo("      Rasterizing OSW Polygon to mask...")
+                import json
+                from rasterio import features
+                geom_list = []
+                for feat in dw_roi_final.getFeatures():
+                    geom = feat.geometry()
+                    if geom and not geom.isNull():
+                        geom_list.append(json.loads(geom.asJson()))
+                
+                with rasterio.open(base_img_path) as src:
+                    out_shape = (src.height, src.width)
+                    out_transform = src.transform
+                
+                if geom_list:
+                    not_deep_water = features.rasterize(geom_list, out_shape=out_shape, transform=out_transform, fill=0, default_value=1, dtype=np.uint8).astype(bool)
+                else:
+                    feedback.pushWarning("⚠️ OSW Polygon is empty. Falling back to Automatic NIR.")
+                    fallback_to_auto = True
+
+        if dw_method == 1 or fallback_to_auto:  # Automatic
             feedback.pushInfo(f"      Calculating Deep Water Stats (Auto NIR {nir_perc}%)...")
             with rasterio.open(base_img_path) as src:
                 nir_arr = src.read(n_idx).astype(np.float32)
@@ -571,7 +650,9 @@ def apply_deepwater_mask(
         prof = src.profile
         
     if apply_dw:
-        not_deep_water = (b_arr > b_thresh) | (g_arr > g_thresh)
+        if dw_method == 0 or dw_method == 1 or fallback_to_auto:
+            not_deep_water = (b_arr > b_thresh) | (g_arr > g_thresh)
+        # if dw_method == 2, not_deep_water is already computed
     else:
         not_deep_water = np.ones_like(b_arr, dtype=bool)
         
@@ -585,12 +666,57 @@ def apply_deepwater_mask(
         
     try:
         from scipy import ndimage
-        if median_size > 0:
+        if median_size > 0 and dw_method != 2:
             osw_mask = ndimage.median_filter(osw_mask.astype(np.uint8), size=median_size) > 0
-        if fill_holes:
+        if fill_holes and dw_method != 2:
             osw_mask = ndimage.binary_fill_holes(osw_mask)
     except ImportError:
         pass
+        
+    if dw_method != 2:
+        # =========================================================================
+        # METHOD A: Elbow Point Detection (Dynamic / No Hardcoded Threshold)
+        # =========================================================================
+        try:
+            from rasterio.features import sieve
+            from scipy import ndimage
+
+            labeled_array, num_features = ndimage.label(osw_mask)
+            if num_features > 3:
+                component_sizes = ndimage.sum_labels(osw_mask, labeled_array, range(1, num_features + 1))
+                component_sizes = np.sort(component_sizes)[::-1]
+
+                # Log-transformed scale for Elbow (Max Distance from Secant Line)
+                log_sizes = np.log10(component_sizes + 1e-5)
+                n_pts = len(log_sizes)
+                x_norm = np.linspace(0, 1, n_pts)
+                y_range = log_sizes[0] - log_sizes[-1]
+                if y_range > 0:
+                    y_norm = (log_sizes - log_sizes[-1]) / y_range
+
+                    p1 = np.array([x_norm[0], y_norm[0]])
+                    p2 = np.array([x_norm[-1], y_norm[-1]])
+                    vec_line = p2 - p1
+                    line_norm = np.linalg.norm(vec_line)
+
+                    if line_norm > 0:
+                        pts = np.column_stack((x_norm, y_norm))
+                        distances = np.abs(np.cross(vec_line, p1 - pts)) / line_norm
+                        elbow_idx = np.argmax(distances)
+                        cutoff_size = int(component_sizes[elbow_idx])
+
+                        if cutoff_size > 1:
+                            feedback.pushInfo(f"      📊 [Elbow Filter] Dynamic Threshold: {cutoff_size} pixels ({num_features} components analyzed)")
+                            osw_mask = sieve(osw_mask.astype(np.uint8), size=cutoff_size, connectivity=8).astype(bool)
+        except Exception as err:
+            feedback.pushWarning(f"⚠️ Elbow filter fallback warning: {str(err)}")
+            # =========================================================================
+            # METHOD B (ORIGINAL BASELINE - PRE-MODIFICATION):
+            # Median Filter + Binary Fill Holes (without any Sieve / Area Filtering)
+            # If you want to revert to original baseline, comment out Method A above.
+            # (The baseline uses scipy.ndimage.median_filter & binary_fill_holes above).
+            # =========================================================================
+            pass
         
     osw_mask_path = os.path.join(out_dir, "06_Final_OSW_Mask.tif")
     with rasterio.open(osw_mask_path, "w", **prof) as dst:
@@ -598,45 +724,49 @@ def apply_deepwater_mask(
         
     osw_poly_path = None
     if extract_polygon:
-        osw_poly_path = os.path.join(out_dir, "07_OSW_Boundary_Polygon.gpkg")
-        poly_res = processing.run("gdal:polygonize", {
-            'INPUT': osw_mask_path,
-            'BAND': 1,
-            'FIELD': 'DN',
-            'EIGHT_CONNECTEDNESS': False,
-            'OUTPUT': 'TEMPORARY_OUTPUT'
-        }, context=context, feedback=feedback, is_child_algorithm=True)
-        
-        extracted = processing.run("native:extractbyexpression", {
-            'INPUT': poly_res['OUTPUT'],
-            'EXPRESSION': '"DN" = 1',
-            'OUTPUT': 'TEMPORARY_OUTPUT'
-        }, context=context, feedback=feedback, is_child_algorithm=True)
-        
-        crs_wkt = None
-        try:
-            with rasterio.open(base_img_path) as src:
-                crs_wkt = src.crs.to_wkt() if src.crs else None
-        except Exception:  # nosec B110
-            pass
-            
-        from qgis.core import QgsCoordinateReferenceSystem
-        qgis_crs = QgsCoordinateReferenceSystem.fromWkt(crs_wkt) if crs_wkt else None
-        
-        if qgis_crs and qgis_crs.isValid():
-            processing.run("native:reprojectlayer", {
-                'INPUT': extracted['OUTPUT'],
-                'TARGET_CRS': qgis_crs,
-                'OUTPUT': osw_poly_path
-            }, context=context, feedback=feedback, is_child_algorithm=True)
+        if dw_method == 2 and dw_roi:
+            osw_poly_path = dw_roi.source()
+            feedback.pushInfo(f"      Using existing OSW Polygon: {osw_poly_path}")
         else:
-            processing.run("native:extractbyexpression", {
+            osw_poly_path = os.path.join(out_dir, "07_OSW_Boundary_Polygon.gpkg")
+            poly_res = processing.run("gdal:polygonize", {
+                'INPUT': osw_mask_path,
+                'BAND': 1,
+                'FIELD': 'DN',
+                'EIGHT_CONNECTEDNESS': False,
+                'OUTPUT': 'TEMPORARY_OUTPUT'
+            }, context=context, feedback=feedback, is_child_algorithm=True)
+            
+            extracted = processing.run("native:extractbyexpression", {
                 'INPUT': poly_res['OUTPUT'],
                 'EXPRESSION': '"DN" = 1',
-                'OUTPUT': osw_poly_path
+                'OUTPUT': 'TEMPORARY_OUTPUT'
             }, context=context, feedback=feedback, is_child_algorithm=True)
             
-        feedback.pushInfo(f"      Saved OSW Polygon to: {osw_poly_path}")
+            crs_wkt = None
+            try:
+                with rasterio.open(base_img_path) as src:
+                    crs_wkt = src.crs.to_wkt() if src.crs else None
+            except Exception:  # nosec B110
+                pass
+                
+            from qgis.core import QgsCoordinateReferenceSystem
+            qgis_crs = QgsCoordinateReferenceSystem.fromWkt(crs_wkt) if crs_wkt else None
+            
+            if qgis_crs and qgis_crs.isValid():
+                processing.run("native:reprojectlayer", {
+                    'INPUT': extracted['OUTPUT'],
+                    'TARGET_CRS': qgis_crs,
+                    'OUTPUT': osw_poly_path
+                }, context=context, feedback=feedback, is_child_algorithm=True)
+            else:
+                processing.run("native:extractbyexpression", {
+                    'INPUT': poly_res['OUTPUT'],
+                    'EXPRESSION': '"DN" = 1',
+                    'OUTPUT': osw_poly_path
+                }, context=context, feedback=feedback, is_child_algorithm=True)
+                
+            feedback.pushInfo(f"      Saved OSW Polygon to: {osw_poly_path}")
 
     return osw_poly_path
 
@@ -797,6 +927,19 @@ def run_phase01_preprocessing(algorithm, parameters, context, feedback):
             context=context,
             feedback=feedback
         )
+        
+        osw_mask_path = os.path.join(out_dir, "06_Final_OSW_Mask.tif")
+        if os.path.exists(osw_mask_path) and os.path.exists(p_stack):
+            feedback.pushInfo("   [4/4] Masking Feature Stack with OSW...")
+            with rasterio.open(osw_mask_path) as msrc:
+                osw_mask = msrc.read(1)
+            
+            with rasterio.open(p_stack, "r+") as src:
+                stack_data = src.read()
+                nodata_val = src.nodata if src.nodata is not None else np.nan
+                for b_i in range(stack_data.shape[0]):
+                    stack_data[b_i, osw_mask == 0] = nodata_val
+                src.write(stack_data)
     else:
         feedback.pushInfo("      OSW Filter is completely disabled.")
 

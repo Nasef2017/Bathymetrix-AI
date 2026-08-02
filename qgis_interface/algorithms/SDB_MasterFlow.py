@@ -23,8 +23,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
     # =======================================================================
     # 1. PARAMETER CONSTANTS
     # =======================================================================
-
-    # [0] General I/O
+    SELECTED_ALGOS = "SELECTED_ALGOS"
     INPUT_RASTER = "INPUT_RASTER"
     OUTPUT_FOLDER = "OUTPUT_FOLDER"
     NUM_THREADS = "NUM_THREADS"
@@ -109,6 +108,9 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
 
     TRAIN_TEST_SPLIT = "TRAIN_TEST_SPLIT"
     RANDOM_STATE = "RANDOM_STATE"
+    CV_FOLDS = "CV_FOLDS"
+    UNCERT_TREES = "UNCERT_TREES"
+    MAX_GPR_SAMPLES = "MAX_GPR_SAMPLES"
     OUTPUT_FORMAT = "OUTPUT_FORMAT"
 
     # [4] Adaptive Refinement
@@ -161,7 +163,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         "Strict Center",
     ]
     MASK_METHODS_NAMES = ["Otsu (Automatic NDWI)", "Manual NDWI Threshold", "3 Indices Equation (NDWI, MNDWI, NWI)"]
-    OSW_METHODS_NAMES = ["Manual Polygon ROI", "Automatic (Lowest NIR Percentile)"]
+    OSW_METHODS_NAMES = ["Manual Polygon ROI", "Automatic (Lowest NIR Percentile)", "Shallow Water Bound (OSW Polygon)"]
     FEATURE_CORR_THRESHOLDS = ["0.0", "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1.0"]
     FEATURE_CORR_THRESHOLDS_P4 = ["Use Phase 03 (-1.0)", "0.0", "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1.0"]
     FEATURE_OPTIONS_NAMES = [
@@ -174,6 +176,9 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         "[Ratio] Log(Blue) / Log(Green)",
         "[Ratio] Log(Blue) / Log(Red)",
         "[Ratio] Log(Coastal) / Log(Green)",
+        "[Ratio] Log(Green) / Log(NIR)",
+        "[Ratio] Log(Red) / Log(NIR)",
+        "[Index] NDWI (Green - NIR) / (Green + NIR)",
         "[Custom] Band Math Calculator",
     ]
 
@@ -239,6 +244,14 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
             <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
                 <li><b>Post-processing:</b> Positive depth removal and physical slope spike filtering.</li>
                 <li><b>Format Support:</b> Outputs float32, float64, or uint16 rasters.</li>
+            </ul>
+
+            <b style="display: block; margin-bottom: 2px; margin-top: 15px;">📚 Key References</b>
+            <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px; font-size: 12px;">
+                <li><b>Stumpf et al. (2003):</b> Log-Ratio Algorithm for SDB inversion.</li>
+                <li><b>Hedley et al. (2005):</b> Physics-based sun-glint correction.</li>
+                <li><b>Wheaton et al. (2010):</b> Accounting for uncertainty in DEMs from repeat topographic surveys.</li>
+                <li><b>Lane & Chandler (2003):</b> The application of topographic surveying to fluvial studies.</li>
             </ul>
 
             <p style="margin-top: 10px; border-top: 1px solid #ccc; padding-top: 5px;">
@@ -385,7 +398,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
             QgsProcessingParameterBoolean(
                 self.ENABLE_MASKING,
                 "🏖️ [1.3] Enable Automated Water Masking",
-                defaultValue=False,
+                defaultValue=True,
             )
         )
         self.addParameter(
@@ -595,7 +608,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
                 "🤖 [3] Algorithms to Benchmark",
                 options=self.MODEL_LIST_NAMES,
                 allowMultiple=True,
-                defaultValue=[0, 1, 2, 3],
+                defaultValue=[3, 12, 13, 14], # Extra Trees, XGBoost, LightGBM, CatBoost
             )
         )
         self.addParameter(
@@ -697,6 +710,24 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         )
         p_fmt.setFlags(p_fmt.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_fmt)
+
+        p_cv = QgsProcessingParameterNumber(
+            self.CV_FOLDS, "🎛️ [Advanced] ML Cross-Validation Folds", type=QgsProcessingParameterNumber.Integer, defaultValue=5
+        )
+        p_cv.setFlags(p_cv.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_cv)
+
+        p_uncert = QgsProcessingParameterNumber(
+            self.UNCERT_TREES, "🎛️ [Advanced] Uncertainty Model Estimators (Trees)", type=QgsProcessingParameterNumber.Integer, defaultValue=200
+        )
+        p_uncert.setFlags(p_uncert.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_uncert)
+
+        p_gpr = QgsProcessingParameterNumber(
+            self.MAX_GPR_SAMPLES, "📍 [Advanced] Max GPR Training Samples (Phase 04)", type=QgsProcessingParameterNumber.Integer, defaultValue=1500
+        )
+        p_gpr.setFlags(p_gpr.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_gpr)
 
         p_rf = QgsProcessingParameterString(self.PARAM_RF, "🎛️ [General ML] Random Forest Hyperparameters", defaultValue="'n_estimators':[100, 500], 'max_depth':[10, 30]")
         p_rf.setFlags(p_rf.flags() | QgsProcessingParameterDefinition.FlagAdvanced)

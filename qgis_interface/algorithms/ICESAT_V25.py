@@ -582,7 +582,18 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
                 save_log()
                 raise QgsProcessingException(f"No Data Found.{available_range_msg} Please adjust your temporal or spatial filters.")
 
-        feedback.pushInfo(f"Downloaded {len(gdf)} points.")
+        # Add explicit 'year' and 'acq_date' columns for temporal indexing
+        if 'year' not in gdf.columns:
+            if isinstance(gdf.index, pd.DatetimeIndex):
+                gdf['year'] = gdf.index.year.astype(int)
+                gdf['acq_date'] = gdf.index.strftime('%Y-%m-%d')
+            elif 'time' in gdf.columns:
+                try:
+                    dt_col = pd.to_datetime(gdf['time'], utc=True)
+                    gdf['year'] = dt_col.dt.year.astype(int)
+                    gdf['acq_date'] = dt_col.dt.strftime('%Y-%m-%d')
+                except Exception:
+                    pass
 
         # --- Save to QGIS ---
         fields = QgsFields()

@@ -69,7 +69,7 @@ class SDBPhase1Preprocessing(QgsProcessingAlgorithm):
     NUM_THREADS = "NUM_THREADS"
 
     MASK_METHODS = ["Otsu (Automatic NDWI)", "Manual NDWI Threshold", "3 Indices Equation (NDWI, MNDWI, NWI)"]
-    OSW_METHODS = ["Manual Polygon ROI", "Automatic (Lowest NIR Percentile)"]
+    OSW_METHODS = ["Manual Polygon ROI", "Automatic (Lowest NIR Percentile)", "Shallow Water Bound (OSW Polygon)"]
 
     FEATURE_OPTIONS = [
         "[All Raw] All Bands from Input Image",
@@ -81,6 +81,9 @@ class SDBPhase1Preprocessing(QgsProcessingAlgorithm):
         "[Ratio] Log(Blue) / Log(Green)",
         "[Ratio] Log(Blue) / Log(Red)",
         "[Ratio] Log(Coastal) / Log(Green)",
+        "[Ratio] Log(Green) / Log(NIR)",
+        "[Ratio] Log(Red) / Log(NIR)",
+        "[Index] NDWI (Green - NIR) / (Green + NIR)",
         "[Custom] Band Math Calculator",
     ]
 

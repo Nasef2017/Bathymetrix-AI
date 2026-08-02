@@ -26,7 +26,6 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
     INPUT_TRAIN = "INPUT_TRAIN"
     FIELD_TRAIN = "FIELD_TRAIN"
     STACK_COMPONENTS = "STACK_COMPONENTS"
-
     SELECTED_ALGOS = "SELECTED_ALGOS"
     OPTIMIZER_METHOD = "OPTIMIZER_METHOD"
     COLLISION_HANDLING = "COLLISION_HANDLING"
@@ -43,6 +42,8 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
     TRAIN_TEST_SPLIT = "TRAIN_TEST_SPLIT"
     RANDOM_STATE = "RANDOM_STATE"
     NUM_THREADS = "NUM_THREADS"
+    CV_FOLDS = "CV_FOLDS"
+    MAX_GPR_SAMPLES = "MAX_GPR_SAMPLES"
     OUTPUT_FORMAT = "OUTPUT_FORMAT"
 
     PARAM_RF = "PARAM_RF"
@@ -285,6 +286,18 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
         )
         p_fmt.setFlags(p_fmt.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_fmt)
+
+        p_cv = QgsProcessingParameterNumber(
+            self.CV_FOLDS, "ML Cross-Validation Folds", type=QgsProcessingParameterNumber.Integer, defaultValue=5
+        )
+        p_cv.setFlags(p_cv.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_cv)
+
+        p_gpr = QgsProcessingParameterNumber(
+            self.MAX_GPR_SAMPLES, "Max GPR Training Samples", type=QgsProcessingParameterNumber.Integer, defaultValue=1500
+        )
+        p_gpr.setFlags(p_gpr.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_gpr)
 
         p_rf = QgsProcessingParameterString(self.PARAM_RF, "RF Params", defaultValue="'n_estimators':[100, 500], 'max_depth':[10, 30]", optional=True)
         p_rf.setFlags(p_rf.flags() | QgsProcessingParameterDefinition.FlagAdvanced)

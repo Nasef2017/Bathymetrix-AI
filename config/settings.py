@@ -8,6 +8,7 @@ MASK_METHODS_NAMES = ["Otsu (Automatic NDWI)", "Manual NDWI Threshold"]
 # Filtering Modes
 FILTER_MODES_NAMES = ["Linear RANSAC", "LS Variance Fit", "Huber Variance Fit"]
 
+
 # Model Lists
 MODEL_LIST_NAMES = [
     "Linear Regression",
@@ -46,5 +47,8 @@ FEATURE_OPTIONS_NAMES = [
     "[Ratio] Log(Blue) / Log(Green)",
     "[Ratio] Log(Blue) / Log(Red)",
     "[Ratio] Log(Coastal) / Log(Green)",
+    "[Ratio] Log(Green) / Log(NIR)",
+    "[Ratio] Log(Red) / Log(NIR)",
+    "[Index] NDWI (Green - NIR) / (Green + NIR)",
     "[Custom] Band Math Calculator",
 ]

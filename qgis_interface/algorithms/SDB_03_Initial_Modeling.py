@@ -39,6 +39,8 @@ class SDBModule03(QgsProcessingAlgorithm):
     TRAIN_TEST_SPLIT = "TRAIN_TEST_SPLIT"
     RANDOM_STATE = "RANDOM_STATE"
     NUM_THREADS = "NUM_THREADS"
+    CV_FOLDS = "CV_FOLDS"
+    UNCERT_TREES = "UNCERT_TREES"
     OUTPUT_FORMAT = "OUTPUT_FORMAT"
 
     PARAM_RF = "PARAM_RF"
@@ -127,7 +129,7 @@ class SDBModule03(QgsProcessingAlgorithm):
                 "Select Algorithms",
                 options=self.MODEL_LIST,
                 allowMultiple=True,
-                defaultValue=[0, 1],
+                defaultValue=[3, 12, 13, 14], # Extra Trees, XGBoost, LightGBM, CatBoost
             )
         )
         self.addParameter(
@@ -241,6 +243,18 @@ class SDBModule03(QgsProcessingAlgorithm):
         p_fmt.setFlags(p_fmt.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_fmt)
 
+        p_cv = QgsProcessingParameterNumber(
+            self.CV_FOLDS, "ML Cross-Validation Folds", type=QgsProcessingParameterNumber.Integer, defaultValue=5
+        )
+        p_cv.setFlags(p_cv.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_cv)
+
+        p_uncert = QgsProcessingParameterNumber(
+            self.UNCERT_TREES, "Uncertainty Model Estimators (Trees)", type=QgsProcessingParameterNumber.Integer, defaultValue=200
+        )
+        p_uncert.setFlags(p_uncert.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_uncert)
+
         p_rf = QgsProcessingParameterString(self.PARAM_RF, "RF Params", defaultValue="'n_estimators':[100, 500], 'max_depth':[10, 30]", optional=True)
         p_rf.setFlags(p_rf.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_rf)
@@ -296,6 +310,14 @@ class SDBModule03(QgsProcessingAlgorithm):
         p_cat = QgsProcessingParameterString(self.PARAM_CATBOOST, "CatBoost Params", defaultValue="'iterations':[100, 200], 'depth':[4, 6], 'learning_rate':[0.05, 0.1]", optional=True)
         p_cat.setFlags(p_cat.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_cat)
+
+        self.addOutput(
+            QgsProcessingOutputRasterLayer(self.OUTPUT_DEPTH_MAP, "Output Depth Map")
+        )
+        self.addOutput(
+            QgsProcessingOutputNumber(self.BEST_R2, "Best R2 Score")
+        )
+
 
     def name(self):
         return "sdb_03_initial_modeling"

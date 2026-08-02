@@ -36,27 +36,36 @@ def clean_depth_map(
             ">>> Cleaning Depth Map: Clamping edges and deep anomalies..."
         )
     deep_limit = (max_depth * 1.5) if max_depth < 0 else -100.0
-    formula = (
-        f"A * ((A >= {deep_limit}) * (B > -9000)) "
-        f"+ (-9999.0) * (1 - ((A >= {deep_limit}) * (B > -9000)))"
-    )
-    calc_res = processing.run(
-        "gdal:rastercalculator",
-        {
-            "INPUT_A": depth_raster,
-            "BAND_A": 1,
-            "INPUT_B": feature_stack_raster,
-            "BAND_B": 1,
-            "FORMULA": formula,
-            "NO_DATA": -9999.0,
-            "RTYPE": 5,
-            "OUTPUT": out_path,
-        },
-        context=context,
-        feedback=feedback,
-        is_child_algorithm=True,
-    )
-    return calc_res["OUTPUT"]
+    import rasterio
+    import numpy as np
+
+    with rasterio.open(depth_raster) as src_depth, rasterio.open(feature_stack_raster) as src_feat:
+        depth_data = src_depth.read(1)
+        
+        # Ensure feat_data matches shape (just in case)
+        if src_feat.shape != src_depth.shape:
+            from rasterio.warp import reproject, Resampling
+            feat_data = np.zeros_like(depth_data, dtype=np.float32)
+            reproject(
+                source=src_feat.read(1),
+                destination=feat_data,
+                src_transform=src_feat.transform,
+                src_crs=src_feat.crs,
+                dst_transform=src_depth.transform,
+                dst_crs=src_depth.crs,
+                resampling=Resampling.nearest
+            )
+        else:
+            feat_data = src_feat.read(1)
+        
+        valid_mask = (depth_data >= deep_limit) & (feat_data > -9000)
+        clean_data = np.where(valid_mask, depth_data, -9999.0)
+        
+        profile = src_depth.profile.copy()
+        profile.update(dtype=rasterio.float32, nodata=-9999.0)
+        with rasterio.open(out_path, "w", **profile) as dst:
+            dst.write(clean_data.astype(np.float32), 1)
+    return out_path
 
 
 def slope_filter_depth(

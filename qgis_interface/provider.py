@@ -23,8 +23,7 @@ from .algorithms.SDB_04_Spatial_Retraining import SDBPhase4Adaptive
 # 6. Final Reporting
 from .algorithms.SDB_05_Final_Reporting import SDBModule05
 
-# 7. Evaluate Model
-from .algorithms.evaluate_model_algorithm import EvaluateModelAlgorithm
+# 7. Evaluate Model (Removed)
 
 # 8. ICESAT
 from .algorithms.ICESAT_V25 import SlideRuleFinalTool
@@ -32,6 +31,8 @@ from .algorithms.ICESAT_V25 import SlideRuleFinalTool
 # 9. Tidal Datum
 from .algorithms.Tidal_Datum_Converter import TidalDatumConverter
 
+# 10. Temporal Intelligence (Multi-Year System)
+from .algorithms.SDB_Temporal_Intelligence import SDBTemporalIntelligence
 
 
 class SdbProvider(QgsProcessingProvider):
@@ -51,9 +52,10 @@ class SdbProvider(QgsProcessingProvider):
         self.addAlgorithm(SDBModule03())
         self.addAlgorithm(SDBPhase4Adaptive())
         self.addAlgorithm(SDBModule05())
-        self.addAlgorithm(EvaluateModelAlgorithm())
+
         self.addAlgorithm(SlideRuleFinalTool())
         self.addAlgorithm(TidalDatumConverter())
+        self.addAlgorithm(SDBTemporalIntelligence())
 
     def id(self):
         return "sdb_tools"

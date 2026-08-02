@@ -270,7 +270,7 @@ def generate_3d_seabed_png(raster_path, out_png_path, feedback=None):
         return False
 
 
-def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, spatial_cv_p4=True, enable_ransac=False, filter_mode=0, field_depth=None, field_weight=None, collision_handling_idx=0, log_path=None, feedback=None, raster_name="Sentinel-2 MSI", train_name="ICESat-2 (ATL24) LiDAR", test_name="In-situ Echosounder Surveys"):
+def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, spatial_cv_p4=True, enable_ransac=False, filter_mode=0, field_depth=None, field_weight=None, collision_handling_idx=0, log_path=None, feedback=None, raster_name="Satellite Imagery", train_name="ICESat-2 (ATL24) LiDAR", test_name="In-situ Echosounder Surveys"):
     benchmark_csv = os.path.join(p3_dir, "3_All_Algorithms_Benchmark.csv")
     p4_benchmark_csv = os.path.join(p4_dir, "4_All_Algorithms_Benchmark.csv") if p4_dir else None
     
@@ -429,6 +429,10 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
             best_algo = algo
             best_rmse = rmse
             
+        algo_folder = algo.replace(" ", "_")
+        if algo.startswith("Ensemble"):
+            algo_folder = "Ensemble_Model"
+            
         rows_p3_html += f"""
         <tr class="hover:bg-slate-700/50 transition-colors border-b border-slate-700/30">
             <td class="px-6 py-4 text-sm font-semibold text-slate-200">{algo}</td>
@@ -436,7 +440,7 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
             <td class="px-6 py-4 text-sm font-medium text-blue-400">{rmse:.2f}m</td>
             <td class="px-6 py-4 text-sm font-medium text-indigo-400">{wmape:.2f}%</td>
             <td class="px-6 py-4 text-sm">
-                <a href="Phase_03_Initial_Modeling/{algo.replace(" ", "_")}/Validation_Scatter_Plot.png" target="_blank" class="text-xs text-sky-400 hover:text-sky-300 font-semibold underline">View Plot</a>
+                <a href="Phase_03_Initial_Modeling/{algo_folder}/Validation_Scatter_Plot.png" target="_blank" class="text-xs text-sky-400 hover:text-sky-300 font-semibold underline">View Plot</a>
             </td>
         </tr>
         """
@@ -588,27 +592,20 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                         </div>
             """
             
-        if filter_mode == 0:
-            plots_html = f"""
-            <div class="bg-slate-900/50 rounded-xl p-4 border border-slate-800 flex flex-col justify-center items-center w-full">
-                <h4 class="text-xs font-semibold text-slate-400 mb-3 uppercase tracking-wider">Regression & Cleaned Data Fit</h4>
-                <a href="Phase_02_Filtering/2_Plot_1_Trend.png" target="_blank" class="block w-full">
-                    <img src="Phase_02_Filtering/2_Plot_1_Trend.png" alt="RANSAC Trend Plot" class="w-full h-auto rounded-lg border border-slate-800 hover:opacity-90 transition-opacity" onerror="this.src='https://placehold.co/450x300/1e293b/94a3b8?text=Trend+Plot+Not+Found'"/>
-                </a>
-            </div>
-            """
-        else:
-            plots_html = f"""
-            <div class="bg-slate-900/50 rounded-xl p-4 border border-slate-800 flex flex-col justify-center items-center w-full space-y-4">
-                <h4 class="text-xs font-semibold text-slate-400 mb-1 uppercase tracking-wider">Regression & Cleaned Data Fit</h4>
-                <a href="Phase_02_Filtering/2_Plot_1_Trend.png" target="_blank" class="block w-full">
-                    <img src="Phase_02_Filtering/2_Plot_1_Trend.png" alt="Trend Plot" class="w-full h-auto rounded-lg border border-slate-800 hover:opacity-90 transition-opacity" onerror="this.src='https://placehold.co/450x300/1e293b/94a3b8?text=Trend+Plot+Not+Found'"/>
-                </a>
-                <a href="{filter_plot_path}" target="_blank" class="block w-full">
-                    <img src="{filter_plot_path}" alt="{filter_mode_name} Plot" class="w-full h-auto rounded-lg border border-slate-800 hover:opacity-90 transition-opacity" onerror="this.src='https://placehold.co/450x300/1e293b/94a3b8?text=Fit+Plot+Not+Found'"/>
-                </a>
-            </div>
-            """
+        plots_html = f"""
+        <div class="bg-slate-900/50 rounded-xl p-4 border border-slate-800 flex flex-col justify-center items-center w-full space-y-4">
+            <h4 class="text-xs font-semibold text-slate-400 mb-1 uppercase tracking-wider">Regression & Cleaned Data Fit</h4>
+            <a href="Phase_02_Filtering/2_Plot_1_Trend.png" target="_blank" class="block w-full">
+                <img src="Phase_02_Filtering/2_Plot_1_Trend.png" alt="Trend Plot" class="w-full h-auto rounded-lg border border-slate-800 hover:opacity-90 transition-opacity" onerror="this.style.display='none'"/>
+            </a>
+            <a href="Phase_02_Filtering/2_Plot_2_Variance.png" target="_blank" class="block w-full">
+                <img src="Phase_02_Filtering/2_Plot_2_Variance.png" alt="Variance Plot" class="w-full h-auto rounded-lg border border-slate-800 hover:opacity-90 transition-opacity" onerror="this.style.display='none'"/>
+            </a>
+            <a href="Phase_02_Filtering/2_Plot_3_Envelope.png" target="_blank" class="block w-full">
+                <img src="Phase_02_Filtering/2_Plot_3_Envelope.png" alt="Envelope Plot" class="w-full h-auto rounded-lg border border-slate-800 hover:opacity-90 transition-opacity" onerror="this.style.display='none'"/>
+            </a>
+        </div>
+        """
 
         html_p2_section = f"""
         <!-- Phase 02 Filtering Details -->
@@ -1309,16 +1306,21 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
         ad_layer = algorithm.parameterAsVectorLayer(
             parameters, algorithm.INPUT_ADAPTIVE_TRAIN, context
         )
-        temp_adapt = os.path.join(p4_dir, "temp_reprojected_adaptive.gpkg")
-        final_ad = reproject_layer_if_needed(
-            ad_layer, target_crs, temp_adapt, context, feedback
-        )
-        field_ad_depth = algorithm.parameterAsString(
-            parameters, algorithm.FIELD_ADAPTIVE_DEPTH, context
-        )
-        final_ad = filter_by_depth(
-            final_ad, field_ad_depth, max_depth, context, feedback
-        )
+        if ad_layer:
+            temp_adapt = os.path.join(p4_dir, "temp_reprojected_adaptive.gpkg")
+            final_ad = reproject_layer_if_needed(
+                ad_layer, target_crs, temp_adapt, context, feedback
+            )
+            field_ad_depth = algorithm.parameterAsString(
+                parameters, algorithm.FIELD_ADAPTIVE_DEPTH, context
+            )
+            final_ad = filter_by_depth(
+                final_ad, field_ad_depth, max_depth, context, feedback
+            )
+        else:
+            final_ad = path_clean
+            field_ad_depth = field_depth
+
 
         p4_thresh_idx = parameters.get(algorithm.FEATURE_CORR_THRESHOLD_P4, 0)
         p4_method = parameters.get(algorithm.FEATURE_CORR_METHOD_P4, 3)
@@ -1431,6 +1433,91 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
 
         p3["OUTPUT_DEPTH_MAP"] = current_p3
         write_qml_style(current_p3)
+
+        # ---------------------------------------------------------
+        # [NEW] Post-process isolated Linear Regression Depth & Uncertainty Maps (Clean & OSW Clip)
+        # ---------------------------------------------------------
+        lr_dir = os.path.join(p3_dir, "Linear_Regression")
+        raw_lr_map = os.path.join(lr_dir, "Linear_Regression_Depth.tif")
+        raw_lr_uncert = os.path.join(lr_dir, "Linear_Regression_Uncertainty.tif")
+
+        if os.path.exists(raw_lr_map):
+            try:
+                lr_clamped = os.path.join(lr_dir, "Linear_Regression_Cleaned.tif")
+                clean_depth_map(raw_lr_map, feat_stack, max_depth, lr_clamped, context, feedback)
+                
+                lr_current = lr_clamped
+                if remove_positives_flag:
+                    lr_no_pos = os.path.join(lr_dir, "Linear_Regression_NoPositives.tif")
+                    remove_positive_pixels(lr_clamped, lr_no_pos, feedback)
+                    lr_current = lr_no_pos
+                    
+                if p1.get("OUTPUT_OSW_POLY") and os.path.exists(p1["OUTPUT_OSW_POLY"]):
+                    lr_osw_clipped = os.path.join(lr_dir, "Linear_Regression_Depth_OSW_Clipped.tif")
+                    processing.run(
+                        "gdal:cliprasterbymasklayer",
+                        {
+                            "INPUT": lr_current,
+                            "MASK": p1["OUTPUT_OSW_POLY"],
+                            "SOURCE_CRS": crs_id,
+                            "TARGET_CRS": crs_id,
+                            "NODATA": -9999.0,
+                            "ALPHA_BAND": False,
+                            "CROP_TO_CUTLINE": False,
+                            "KEEP_RESOLUTION": True,
+                            "DATA_TYPE": 0,
+                            "OUTPUT": lr_osw_clipped,
+                        },
+                        context=context,
+                        feedback=feedback,
+                        is_child_algorithm=True,
+                    )
+                    if os.path.exists(lr_osw_clipped):
+                        import shutil
+                        shutil.copy2(lr_osw_clipped, raw_lr_map)
+                elif os.path.exists(lr_current):
+                    import shutil
+                    shutil.copy2(lr_current, raw_lr_map)
+                append_log("   [Analytics] Linear Regression depth map successfully cleaned and OSW clipped.", log_path, feedback)
+            except Exception as e:
+                append_log(f"   [Warning] Failed to post-process Linear Regression depth map: {e}", log_path, feedback)
+
+        if os.path.exists(raw_lr_uncert):
+            try:
+                lr_u_clamped = os.path.join(lr_dir, "Linear_Regression_Uncertainty_Cleaned.tif")
+                clean_depth_map(raw_lr_uncert, feat_stack, max_depth, lr_u_clamped, context, feedback)
+                lr_u_current = lr_u_clamped
+
+                if p1.get("OUTPUT_OSW_POLY") and os.path.exists(p1["OUTPUT_OSW_POLY"]):
+                    lr_u_osw_clipped = os.path.join(lr_dir, "Linear_Regression_Uncertainty_OSW_Clipped.tif")
+                    processing.run(
+                        "gdal:cliprasterbymasklayer",
+                        {
+                            "INPUT": lr_u_current,
+                            "MASK": p1["OUTPUT_OSW_POLY"],
+                            "SOURCE_CRS": crs_id,
+                            "TARGET_CRS": crs_id,
+                            "NODATA": -9999.0,
+                            "ALPHA_BAND": False,
+                            "CROP_TO_CUTLINE": False,
+                            "KEEP_RESOLUTION": True,
+                            "DATA_TYPE": 0,
+                            "OUTPUT": lr_u_osw_clipped,
+                        },
+                        context=context,
+                        feedback=feedback,
+                        is_child_algorithm=True,
+                    )
+                    if os.path.exists(lr_u_osw_clipped):
+                        import shutil
+                        shutil.copy2(lr_u_osw_clipped, raw_lr_uncert)
+                elif os.path.exists(lr_u_current):
+                    import shutil
+                    shutil.copy2(lr_u_current, raw_lr_uncert)
+                append_log("   [Analytics] Linear Regression uncertainty map successfully cleaned and OSW clipped.", log_path, feedback)
+            except Exception as e:
+                append_log(f"   [Warning] Failed to post-process Linear Regression uncertainty map: {e}", log_path, feedback)
+        # ---------------------------------------------------------
 
         p3_uncert = p3.get("OUTPUT_UNCERT_MAP")
         p3_uncert_clamped = None
@@ -1634,7 +1721,7 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
     return {}
 
 
-def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt_count, depth_min, depth_max, has_weight_stats, weight_min, weight_max, actual_pt_count, collision_handling, filter_mode_name, strat_rows, log_path=None, feedback=None, raster_name="Sentinel-2 MSI", train_name="ICESat-2 (ATL24) LiDAR", test_name="In-situ Echosounder Surveys"):
+def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt_count, depth_min, depth_max, has_weight_stats, weight_min, weight_max, actual_pt_count, collision_handling, filter_mode_name, strat_rows, log_path=None, feedback=None, raster_name="Satellite Imagery", train_name="ICESat-2 (ATL24) LiDAR", test_name="In-situ Echosounder Surveys"):
     import datetime
 
     date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1726,19 +1813,12 @@ def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt
 
     # Check which plots exist and match the filter mode
     p2_plots_to_show = []
-    if "Huber" in filter_mode_name:
-        if os.path.exists(p2_plot1_path):
-            p2_plots_to_show.append((p2_plot1_path, "Figure 1: Huber Regression Trend & Outlier Rejection"))
-        if os.path.exists(p2_plot3_path):
-            p2_plots_to_show.append((p2_plot3_path, "Figure 2: Huber Variance Envelope & Cleaned Data Fit"))
-    elif "LS" in filter_mode_name:
-        if os.path.exists(p2_plot1_path):
-            p2_plots_to_show.append((p2_plot1_path, "Figure 1: Least-Squares Regression Trend & Outlier Rejection"))
-        if os.path.exists(p2_plot2_path):
-            p2_plots_to_show.append((p2_plot2_path, "Figure 2: Least-Squares Variance Fit"))
-    elif "RANSAC" in filter_mode_name or "Ransac" in filter_mode_name:
-        if os.path.exists(p2_plot1_path):
-            p2_plots_to_show.append((p2_plot1_path, "Figure 1: RANSAC Regression Trend & Outlier Rejection"))
+    if os.path.exists(p2_plot1_path):
+        p2_plots_to_show.append((p2_plot1_path, "Figure 1: Regression Trend & Outlier Rejection"))
+    if os.path.exists(p2_plot2_path):
+        p2_plots_to_show.append((p2_plot2_path, "Figure 2: Depth vs Variance Analysis"))
+    if os.path.exists(p2_plot3_path):
+        p2_plots_to_show.append((p2_plot3_path, "Figure 3: Residuals & Uncertainty Envelope"))
 
     if p2_plots_to_show:
         p2_plots_html = """
@@ -2048,7 +2128,7 @@ def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt
         {f"<h2>🔄 Phase 04: Adaptive Refinement Leaderboard</h2><table border='1' cellspacing='0' cellpadding='6' bordercolor='#cbd5e1' style='width: 100%; border-collapse: collapse; margin-top: 8pt; margin-bottom: 12pt;'><thead><tr bgcolor='#f1f5f9'><th style='white-space: nowrap;'>Algorithm</th><th style='white-space: nowrap;'>R² Accuracy</th><th style='white-space: nowrap;'>RMSE (Vertical Error)</th><th style='white-space: nowrap;'>wMAPE (%)</th></tr></thead><tbody>{p4_rows_html}</tbody></table>" if has_p4 else ""}
 
         <div class="footer">
-            Report generated automatically by Bathymetrix-AI V6.3. All rights reserved. &copy; Mohamed Aly Nasef (2026).
+            Report generated automatically by Bathymetrix-AI V6.4. All rights reserved. &copy; Mohamed Aly Nasef (2026).
         </div>
         <div style="page-break-before: always;"></div>
 
@@ -2075,11 +2155,11 @@ def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt
             </tbody>
         </table>
 
-        {f'<div class="footer">Report generated automatically by Bathymetrix-AI V6.3. All rights reserved. &copy; Mohamed Aly Nasef (2026).</div>' if plots_section_html else ""}
+        {f'<div class="footer">Report generated automatically by Bathymetrix-AI V6.4. All rights reserved. &copy; Mohamed Aly Nasef (2026).</div>' if plots_section_html else ""}
         {plots_section_html}
 
         <div class="footer">
-            Report generated automatically by Bathymetrix-AI V6.3. All rights reserved. &copy; Mohamed Aly Nasef (2026).
+            Report generated automatically by Bathymetrix-AI V6.4. All rights reserved. &copy; Mohamed Aly Nasef (2026).
         </div>
     </body>
     </html>

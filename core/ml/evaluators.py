@@ -18,6 +18,7 @@ from sklearn.neighbors import KNeighborsRegressor
 from sklearn.neural_network import MLPRegressor
 from sklearn.svm import SVR
 from sklearn.tree import DecisionTreeRegressor
+from sklearn.base import clone
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, ConstantKernel as C
 
@@ -359,6 +360,14 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
         
     random_state = algorithm.parameterAsInt(parameters, algorithm.RANDOM_STATE, context)
     n_jobs = algorithm.parameterAsInt(parameters, algorithm.NUM_THREADS, context)
+    
+    max_gpr_samples = 1500
+    if algorithm.parameterDefinition("MAX_GPR_SAMPLES"):
+        try:
+            val = algorithm.parameterAsInt(parameters, "MAX_GPR_SAMPLES", context)
+            if val > 1: max_gpr_samples = val
+        except: pass
+        
     fmt_idx = algorithm.parameterAsEnum(parameters, algorithm.OUTPUT_FORMAT, context)
     fmt_map = {0: "float32", 1: "float64", 2: "uint16"}
     output_format = fmt_map.get(fmt_idx, "float32")
@@ -444,9 +453,9 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
     else:
         interp_name = "Kriging/GP"
         append_log("   Fitting Gaussian Process Regression (Kriging)...", log_path, feedback)
-        if len(coords_tr) > 1500:
+        if len(coords_tr) > max_gpr_samples:
             np.random.seed(random_state)
-            gpr_idx = np.random.choice(len(coords_tr), size=1500, replace=False)
+            gpr_idx = np.random.choice(len(coords_tr), size=max_gpr_samples, replace=False)
             coords_gpr = coords_tr[gpr_idx]
             residuals_gpr = residuals[gpr_idx]
         else:
@@ -475,7 +484,11 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
     water_coords = np.column_stack((water_indices[0], water_indices[1]))
 
     residual_grid = np.zeros((h, w), dtype="float32")
-    chunk_size = 500000
+    model_str = str(spatial_model)
+    if "KNeighbors" in model_str or "GaussianProcess" in model_str or "RobustSpatialKNN" in model_str or "KNN" in model_str:
+        chunk_size = 5000
+    else:
+        chunk_size = 500000
     for i in range(0, len(water_coords), chunk_size):
         chunk = water_coords[i:i + chunk_size]
         if len(chunk) > 0:
@@ -845,18 +858,20 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
     except Exception:
         ensemble_size = 3
 
+
+
     all_models_p4 = []
 
     for idx in sel_idx:
-        name, model_inst, default_params = get_model_and_params(idx, opt_idx, random_state, n_jobs)
-        if model_inst is None:
+        name, raw_model_inst, default_params = get_model_and_params(idx, opt_idx, random_state, n_jobs)
+        if raw_model_inst is None:
             append_log(f"       ! Skipping {name}: Library is not installed.", log_path, feedback)
             continue
 
         if name in custom_params and custom_params[name]:
             parsed_dict = custom_params[name]
             base_params = {k: (v[0] if isinstance(v, list) and len(v)>0 else v) for k, v in parsed_dict.items()}
-            model_inst.set_params(**base_params)
+            raw_model_inst.set_params(**base_params)
 
             if opt_idx == 2 and SKOPT_AVAILABLE:
                 params = convert_to_bayes(parsed_dict)
@@ -866,7 +881,6 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
             params = default_params
 
         try:
-            curr_model = model_inst
             with joblib.parallel_backend("threading", n_jobs=n_jobs):
                 if params and n_iter > 0:
                     search = None
@@ -890,14 +904,12 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
                             if isinstance(v, list) and len(v) == 2:
                                 if all(isinstance(x, int) for x in v) and v[0] < v[1]:
                                     opt_params[k] = stats.randint(v[0], v[1] + 1)
-                                elif all(isinstance(x, (int, float)) for x in v) and v[0] < v[1]:
-                                    opt_params[k] = stats.uniform(v[0], v[1] - v[0])
                                 else:
-                                    opt_params[k] = v
+                                    opt_params[k] = stats.uniform(v[0], v[1] - v[0])
                             else:
                                 opt_params[k] = v
                         search = RandomizedSearchCV(
-                            model_inst, opt_params, n_iter=n_iter, cv=cv_splitter, n_jobs=n_jobs, random_state=random_state
+                            clone(raw_model_inst), opt_params, n_iter=n_iter, cv=cv_splitter, n_jobs=n_jobs, random_state=random_state
                         )
                     elif current_opt_idx == 1:
                         opt_params = {}
@@ -905,17 +917,15 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
                             if isinstance(v, list) and len(v) == 2:
                                 if all(isinstance(x, int) for x in v) and v[0] < v[1]:
                                     opt_params[k] = list(np.linspace(v[0], v[1], 5, dtype=int))
-                                elif all(isinstance(x, (int, float)) for x in v) and v[0] < v[1]:
-                                    opt_params[k] = list(np.linspace(v[0], v[1], 5))
                                 else:
-                                    opt_params[k] = v
+                                    opt_params[k] = list(np.linspace(v[0], v[1], 5))
                             else:
                                 opt_params[k] = v
-                        search = GridSearchCV(model_inst, opt_params, cv=cv_splitter, n_jobs=n_jobs)
+                        search = GridSearchCV(clone(raw_model_inst), opt_params, cv=cv_splitter, n_jobs=n_jobs)
                     elif current_opt_idx == 2:
                         if OPTUNA_AVAILABLE:
                             best_m, best_params = run_optuna_search(
-                                model_inst, name, params, X_train, y_train, {},
+                                clone(raw_model_inst), name, params, X_train, y_train, {},
                                 n_iter=n_iter, cv=3, random_state=random_state, n_jobs=n_jobs,
                                 groups=groups_tr
                             )
@@ -929,17 +939,15 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
                                 if isinstance(v, list) and len(v) == 2:
                                     if all(isinstance(x, int) for x in v) and v[0] < v[1]:
                                         opt_params[k] = stats.randint(v[0], v[1] + 1)
-                                    elif all(isinstance(x, (int, float)) for x in v) and v[0] < v[1]:
-                                        opt_params[k] = stats.uniform(v[0], v[1] - v[0])
                                     else:
-                                        opt_params[k] = v
+                                        opt_params[k] = stats.uniform(v[0], v[1] - v[0])
                                 else:
                                     opt_params[k] = v
                             search = (
-                                BayesSearchCV(model_inst, params, n_iter=n_iter, cv=cv_splitter, n_jobs=n_jobs)
+                                BayesSearchCV(clone(raw_model_inst), params, n_iter=n_iter, cv=cv_splitter, n_jobs=n_jobs)
                                 if SKOPT_AVAILABLE
                                 else RandomizedSearchCV(
-                                    model_inst, opt_params, n_iter=n_iter, cv=cv_splitter, n_jobs=n_jobs, random_state=random_state
+                                    clone(raw_model_inst), opt_params, n_iter=n_iter, cv=cv_splitter, n_jobs=n_jobs, random_state=random_state
                                 )
                             )
 
@@ -950,8 +958,10 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
                             search.fit(X_train, y_train)
                         curr_model = search.best_estimator_
                     elif not OPTUNA_AVAILABLE or current_opt_idx != 2:
+                        curr_model = clone(raw_model_inst)
                         curr_model.fit(X_train, y_train)
                 else:
+                    curr_model = clone(raw_model_inst)
                     curr_model.fit(X_train, y_train)
 
             y_pred = curr_model.predict(X_val)
@@ -964,6 +974,7 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
             append_log(f"       > {name}: RMSE={rmse:.3f}m", log_path, feedback)
             all_models_p4.append({
                 "Algorithm": name,
+                "Feature Scaling": "None",
                 "Model": curr_model,
                 "RMSE": rmse,
                 "R2": r2,
@@ -979,6 +990,7 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
 
         except Exception as e:
             append_log(f"Error in {name}: {str(e)}", log_path, feedback)
+
 
     if enable_ensemble and len(all_models_p4) >= 2:
         sorted_p4 = sorted(all_models_p4, key=lambda x: x["RMSE"])
@@ -1026,13 +1038,22 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
         append_log(f"   [Warning] Failed to generate feature importance: {e}", log_path, feedback)
 
     append_log(f"   Predicting Final Map using {best_algo_name}...", log_path, feedback)
-    X_map = stack[:, water_indices[0], water_indices[1]].T
-    X_map = np.nan_to_num(X_map, nan=0.0)
-    
-    if selected_indices is not None and len(selected_indices) > 0:
-        X_map = X_map[:, selected_indices]
-        
-    z_out = best_model.predict(X_map)
+    n_water_pts = len(water_indices[0])
+    z_out = np.empty(n_water_pts, dtype="float32")
+    model_str = str(best_model)
+    if "KNeighbors" in model_str or "GaussianProcess" in model_str or "RobustSpatialKNN" in model_str or "KNN" in model_str:
+        chunk_size = 5000
+    else:
+        chunk_size = 500000
+
+    for start in range(0, n_water_pts, chunk_size):
+        end = min(start + chunk_size, n_water_pts)
+        idx_r = (water_indices[0][start:end], water_indices[1][start:end])
+        X_chunk = stack[:, idx_r[0], idx_r[1]].T
+        if selected_indices is not None and len(selected_indices) > 0:
+            X_chunk = X_chunk[:, selected_indices]
+        np.nan_to_num(X_chunk, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+        z_out[start:end] = best_model.predict(X_chunk)
 
     final_map = np.full((h, w), -9999.0, dtype="float32")
     final_map[water_indices] = z_out
@@ -1073,7 +1094,15 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
         uncertainty_model.fit(X_train, uncert_y)
         
         append_log("   Generating Phase 04 uncertainty prediction map...", log_path, feedback)
-        uncert_out = uncertainty_model.predict(X_map)
+        uncert_out = np.empty(n_water_pts, dtype="float32")
+        for start in range(0, n_water_pts, chunk_size):
+            end = min(start + chunk_size, n_water_pts)
+            idx_r = (water_indices[0][start:end], water_indices[1][start:end])
+            X_chunk = stack[:, idx_r[0], idx_r[1]].T
+            if selected_indices is not None and len(selected_indices) > 0:
+                X_chunk = X_chunk[:, selected_indices]
+            np.nan_to_num(X_chunk, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+            uncert_out[start:end] = uncertainty_model.predict(X_chunk)
         
         uncert_map = np.full((h, w), -9999.0, dtype="float32")
         uncert_map[water_indices] = uncert_out

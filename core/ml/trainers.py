@@ -8,6 +8,13 @@ import numpy as np
 import pandas as pd
 import rasterio
 from qgis.PyQt.QtCore import QVariant
+from qgis.core import (
+    QgsCoordinateReferenceSystem,
+    QgsRasterLayer,
+    QgsCoordinateTransform,
+    QgsProject,
+    QgsPointXY,
+)
 from sklearn.ensemble import (
     ExtraTreesRegressor,
     GradientBoostingRegressor,
@@ -191,11 +198,49 @@ def save_training_points(out_path, coords, depths, weights, X_data, ref_raster, 
     del writer
 
 
+def _get_pixel_coords(geom, src, v_crs, r_crs):
+    raw_pt = geom.asMultiPoint()[0] if geom.isMultipart() else geom.asPoint()
+    h, w = src.height, src.width
+    try:
+        r_raw, c_raw = src.index(raw_pt.x(), raw_pt.y())
+        if 0 <= r_raw < h and 0 <= c_raw < w:
+            return r_raw, c_raw, raw_pt
+    except Exception:
+        pass
+
+    try:
+        tr = QgsCoordinateTransform(v_crs, r_crs, QgsProject.instance())
+        geom_trans = QgsGeometry(geom)
+        geom_trans.transform(tr)
+        trans_pt = geom_trans.asMultiPoint()[0] if geom_trans.isMultipart() else geom_trans.asPoint()
+        r_trans, c_trans = src.index(trans_pt.x(), trans_pt.y())
+        if 0 <= r_trans < h and 0 <= c_trans < w:
+            return r_trans, c_trans, trans_pt
+    except Exception:
+        pass
+
+    return None, None, None
+
+
 def extract_samples(ras_path, vec_layer, d_fld, w_fld, mode):
     rlayer = QgsRasterLayer(ras_path)
-    tr = QgsCoordinateTransform(
-        vec_layer.sourceCrs(), rlayer.crs(), QgsProject.instance()
-    )
+    
+    v_crs = vec_layer.crs() if vec_layer and vec_layer.crs().isValid() else QgsCoordinateReferenceSystem("EPSG:4326")
+    r_crs = rlayer.crs() if rlayer and rlayer.crs().isValid() else QgsCoordinateReferenceSystem("EPSG:4326")
+    
+    from ...infrastructure.vector_io import resolve_depth_field
+    actual_d_fld = resolve_depth_field(vec_layer, d_fld)
+    
+    fields_lower = [f.name().lower() for f in vec_layer.fields()]
+    actual_w_fld = None
+    if w_fld and w_fld.lower() in fields_lower:
+        actual_w_fld = [f.name() for f in vec_layer.fields() if f.name().lower() == w_fld.lower()][0]
+    else:
+        for fallback in ['confidence', 'sdb_uncert', 'weight', 'uncertainty']:
+            if fallback in fields_lower:
+                actual_w_fld = [f.name() for f in vec_layer.fields() if f.name().lower() == fallback][0]
+                break
+                
     X_out, y_out, w_out, c_out = [], [], [], []
 
     with rasterio.open(ras_path) as src:
@@ -206,39 +251,43 @@ def extract_samples(ras_path, vec_layer, d_fld, w_fld, mode):
 
         if mode == 0:
             for f in vec_layer.getFeatures():
-                geom = f.geometry()
-                geom.transform(tr)
-                pt = geom.asPoint()
-                try:
-                    r, c = src.index(pt.x(), pt.y())
-                    if 0 <= r < h and 0 <= c < w:
-                        val = d[:, r, c]
-                        if np.all(np.isfinite(val)) and not np.any(val == -9999):
-                            X_out.append(val)
-                            y_out.append(f[d_fld])
-                            c_out.append([r, c])
-                            w_out.append(f[w_fld] if w_fld else 1.0)
-                except IndexError:
-                    continue
+                geom = QgsGeometry(f.geometry())
+                r, c, pt = _get_pixel_coords(geom, src, v_crs, r_crs)
+                if r is not None and c is not None:
+                    val = d[:, r, c]
+                    if np.all(np.isfinite(val)) and not np.any(val == -9999):
+                        X_out.append(val)
+                        y_out.append(f[actual_d_fld])
+                        c_out.append([r, c])
+                        w_out.append(f[actual_w_fld] if actual_w_fld else 1.0)
+                    else:
+                        from qgis.core import QgsMessageLog, Qgis
+                        QgsMessageLog.logMessage(
+                            f"Point dropped at [r={r}, c={c}]. val: {val.tolist()}", 
+                            "Bathymetrix_AI_Debug", Qgis.Warning)
+                else:
+                    from qgis.core import QgsMessageLog, Qgis
+                    QgsMessageLog.logMessage(
+                        f"Point out of bounds or transformation failed. Geom: {geom.asWkt()}", 
+                        "Bathymetrix_AI_Debug", Qgis.Warning)
             return np.array(X_out), np.array(y_out), np.array(w_out), c_out
 
         pixel_registry = {}
         for f in vec_layer.getFeatures():
-            geom = f.geometry()
-            geom.transform(tr)
-            pt = geom.asPoint()
-            try:
-                r, c = src.index(pt.x(), pt.y())
-                if 0 <= r < h and 0 <= c < w:
-                    pixel_registry.setdefault((r, c), []).append(
-                        {"d": f[d_fld], "w": f[w_fld] if w_fld else 1.0, "pt": pt}
-                    )
-            except IndexError:
-                continue
+            geom = QgsGeometry(f.geometry())
+            r, c, pt = _get_pixel_coords(geom, src, v_crs, r_crs)
+            if r is not None and c is not None:
+                pixel_registry.setdefault((r, c), []).append(
+                    {"d": f[actual_d_fld], "w": f[actual_w_fld] if actual_w_fld else 1.0, "pt": pt}
+                )
 
         for (r, c), items in pixel_registry.items():
             val = d[:, r, c]
             if not np.all(np.isfinite(val)) or np.any(val == -9999):
+                from qgis.core import QgsMessageLog, Qgis
+                QgsMessageLog.logMessage(
+                    f"Point dropped at [r={r}, c={c}]. val: {val.tolist()}", 
+                    "Bathymetrix_AI_Debug", Qgis.Warning)
                 continue
 
             final_depth, final_weight = 0.0, 1.0
@@ -290,10 +339,10 @@ def extract_samples(ras_path, vec_layer, d_fld, w_fld, mode):
     return np.array(X_out), np.array(y_out), np.array(w_out), c_out
 
 
-def save_algo_artifacts(y_t, y_p, pct, name, folder, r2, rmse, mape, params):
+def save_algo_artifacts(y_t, y_p, pct, name, folder, r2, rmse, mape, params, scaler_name="None"):
     with open(os.path.join(folder, "Results.txt"), "w") as f:
         f.write(
-            f"Algo: {name}\nR2: {r2:.4f}\nRMSE: {rmse:.4f}\nwMAPE: {mape:.2f}%\nParams: {params}"
+            f"Algo: {name}\nFeature Scaling: {scaler_name}\nR2: {r2:.4f}\nRMSE: {rmse:.4f}\nwMAPE: {mape:.2f}%\nParams: {params}"
         )
 
     try:
@@ -635,7 +684,8 @@ def export_feature_importance(model, win_name, X_val, y_val, out_dir, log_path, 
 def run_benchmarking(
     X, y, weights, indices, n_iter, out_dir, feedback, opt_idx, log_path, custom_params,
     test_size=0.2, random_state=42, n_jobs=-1, enable_ensemble=False, ensemble_method="Average",
-    spatial_cv=False, coords=None, selected_indices=None, ensemble_size=3, feature_names=None
+    spatial_cv=False, coords=None, selected_indices=None, ensemble_size=3, feature_names=None,
+    cv_folds=3
 ):
     X = np.nan_to_num(X, nan=0.0)
     
@@ -660,15 +710,15 @@ def run_benchmarking(
 
     results = []
     for idx in [int(i) for i in indices]:
-        name, base_model, default_params = get_model_and_params(idx, opt_idx, random_state, n_jobs)
-        if base_model is None:
+        name, raw_base_model, default_params = get_model_and_params(idx, opt_idx, random_state, n_jobs)
+        if raw_base_model is None:
             append_log(f"      ! Skipping {name}: Library is not installed.", log_path, feedback)
             continue
 
         if name in custom_params and custom_params[name]:
             parsed_dict = custom_params[name]
             base_params = {k: (v[0] if isinstance(v, list) and len(v)>0 else v) for k, v in parsed_dict.items()}
-            base_model.set_params(**base_params)
+            raw_base_model.set_params(**base_params)
 
             if opt_idx == 2 and SKOPT_AVAILABLE:
                 params = convert_to_bayes(parsed_dict)
@@ -681,7 +731,6 @@ def run_benchmarking(
         os.makedirs(algo_dir, exist_ok=True)
 
         try:
-            model = base_model
             fit_params = {}
             if name in [
                 "Random Forest",
@@ -699,19 +748,21 @@ def run_benchmarking(
             ]:
                 fit_params["sample_weight"] = w_tr
 
-            with joblib.parallel_backend("threading", n_jobs=n_jobs):
+            search_n_jobs = 1 if name in ["Random Forest", "Extra Trees", "KNN", "XGBoost", "LightGBM", "CatBoost"] else n_jobs
+
+            with joblib.parallel_backend("threading", n_jobs=search_n_jobs):
                 if params and n_iter > 0:
                     search = None
                     current_opt_idx = opt_idx
                     if name == "MLP (Neural Net)":
                         current_opt_idx = 0
                     
-                    cv_splitter = 3
+                    cv_splitter = cv_folds
                     if groups_tr is not None:
                         n_unique_groups = len(np.unique(groups_tr))
                         if n_unique_groups >= 2:
                             from sklearn.model_selection import GroupKFold
-                            cv_splitter = GroupKFold(n_splits=min(3, n_unique_groups))
+                            cv_splitter = GroupKFold(n_splits=min(cv_folds, n_unique_groups))
                         else:
                             groups_tr = None
 
@@ -719,60 +770,54 @@ def run_benchmarking(
                         import scipy.stats as stats
                         opt_params = {}
                         for k, v in params.items():
-                            if isinstance(v, list) and len(v) == 2:
+                            if isinstance(v, list) and len(v) == 2 and all(isinstance(x, (int, float)) for x in v):
                                 if all(isinstance(x, int) for x in v) and v[0] < v[1]:
                                     opt_params[k] = stats.randint(v[0], v[1] + 1)
-                                elif all(isinstance(x, (int, float)) for x in v) and v[0] < v[1]:
-                                    opt_params[k] = stats.uniform(v[0], v[1] - v[0])
                                 else:
-                                    opt_params[k] = v
+                                    opt_params[k] = stats.uniform(v[0], v[1] - v[0])
                             else:
                                 opt_params[k] = v
                         search = RandomizedSearchCV(
-                            base_model, opt_params, n_iter=n_iter, cv=cv_splitter, n_jobs=n_jobs, random_state=random_state
+                            clone(raw_base_model), opt_params, n_iter=n_iter, cv=cv_splitter, n_jobs=search_n_jobs, random_state=random_state
                         )
                     elif current_opt_idx == 1:
                         opt_params = {}
                         for k, v in params.items():
-                            if isinstance(v, list) and len(v) == 2:
+                            if isinstance(v, list) and len(v) == 2 and all(isinstance(x, (int, float)) for x in v):
                                 if all(isinstance(x, int) for x in v) and v[0] < v[1]:
                                     opt_params[k] = list(np.linspace(v[0], v[1], 5, dtype=int))
-                                elif all(isinstance(x, (int, float)) for x in v) and v[0] < v[1]:
-                                    opt_params[k] = list(np.linspace(v[0], v[1], 5))
                                 else:
-                                    opt_params[k] = v
+                                    opt_params[k] = list(np.linspace(v[0], v[1], 5))
                             else:
                                 opt_params[k] = v
-                        search = GridSearchCV(base_model, opt_params, cv=cv_splitter, n_jobs=n_jobs)
+                        search = GridSearchCV(clone(raw_base_model), opt_params, cv=cv_splitter, n_jobs=search_n_jobs)
                     elif current_opt_idx == 2:
                         if OPTUNA_AVAILABLE:
-                            best_model, best_params = run_optuna_search(
-                                base_model, name, params, X_tr, y_tr, fit_params,
-                                n_iter=n_iter, cv=3, random_state=random_state, n_jobs=n_jobs,
+                            best_model_opt, best_params_opt = run_optuna_search(
+                                clone(raw_base_model), name, params, X_tr, y_tr, fit_params,
+                                n_iter=n_iter, cv=cv_folds, random_state=random_state, n_jobs=n_jobs,
                                 groups=groups_tr
                             )
-                            model = best_model
+                            model = best_model_opt
                             model.fit(X_tr, y_tr, **fit_params)
-                            params_str = str(best_params)
+                            params_str = str(best_params_opt)
                             search = None
                         else:
                             import scipy.stats as stats
                             opt_params = {}
                             for k, v in params.items():
-                                if isinstance(v, list) and len(v) == 2:
+                                if isinstance(v, list) and len(v) == 2 and all(isinstance(x, (int, float)) for x in v):
                                     if all(isinstance(x, int) for x in v) and v[0] < v[1]:
                                         opt_params[k] = stats.randint(v[0], v[1] + 1)
-                                    elif all(isinstance(x, (int, float)) for x in v) and v[0] < v[1]:
-                                        opt_params[k] = stats.uniform(v[0], v[1] - v[0])
                                     else:
-                                        opt_params[k] = v
+                                        opt_params[k] = stats.uniform(v[0], v[1] - v[0])
                                 else:
                                     opt_params[k] = v
                             search = (
-                                BayesSearchCV(base_model, params, n_iter=n_iter, cv=cv_splitter, n_jobs=n_jobs)
+                                BayesSearchCV(clone(raw_base_model), params, n_iter=n_iter, cv=cv_splitter, n_jobs=search_n_jobs)
                                 if SKOPT_AVAILABLE
                                 else RandomizedSearchCV(
-                                    base_model, opt_params, n_iter=n_iter, cv=cv_splitter, n_jobs=n_jobs, random_state=random_state
+                                    clone(raw_base_model), opt_params, n_iter=n_iter, cv=cv_splitter, n_jobs=search_n_jobs, random_state=random_state
                                 )
                             )
 
@@ -784,9 +829,11 @@ def run_benchmarking(
                         model = search.best_estimator_
                         params_str = str(search.best_params_)
                     elif not OPTUNA_AVAILABLE or current_opt_idx != 2:
+                        model = clone(raw_base_model)
                         model.fit(X_tr, y_tr, **fit_params)
                         params_str = "Default"
                 else:
+                    model = clone(raw_base_model)
                     model.fit(X_tr, y_tr, **fit_params)
                     params_str = "Default"
 
@@ -807,11 +854,13 @@ def run_benchmarking(
                 rmse,
                 wmape,
                 params_str,
+                scaler_name="None",
             )
 
             results.append(
                 {
                     "Algorithm": name,
+                    "Feature Scaling": "None",
                     "Model": model,
                     "R2": r2,
                     "RMSE": rmse,
@@ -865,11 +914,13 @@ def run_benchmarking(
             rmse,
             wmape,
             f"Method: {ensemble_method}, Models: {[r['Algorithm'] for r in top_results]}",
+            scaler_name="Composite",
         )
 
         results.append(
             {
                 "Algorithm": f"Ensemble ({ensemble_method})",
+                "Feature Scaling": "Composite",
                 "Model": ensemble_model,
                 "R2": r2,
                 "RMSE": rmse,
@@ -916,7 +967,8 @@ def run_benchmarking(
     ]:
         fit_params_final["sample_weight"] = weights
 
-    with joblib.parallel_backend("threading", n_jobs=n_jobs):
+    final_search_n_jobs = 1 if winner["Algorithm"] in ["Random Forest", "Extra Trees", "KNN", "XGBoost", "LightGBM", "CatBoost"] else n_jobs
+    with joblib.parallel_backend("threading", n_jobs=final_search_n_jobs):
         final_model.fit(X, y, **fit_params_final)
 
     try:
@@ -936,6 +988,7 @@ def run_benchmarking(
 
     return df, {
         "name": winner["Algorithm"],
+        "scaler": winner.get("Feature Scaling", "None"),
         "model": final_model,
         "score": winner["score"],
         "r2": winner["R2"],
@@ -960,14 +1013,27 @@ def predict_map(model, stack_path, mask_path, out_path, med_size, output_format=
     water_idx = np.where(mask_arr == 1)[0]
     if len(water_idx) == 0:
         return
-    X_pixels = np.nan_to_num(d_flat[water_idx], nan=0.0)
-    
-    if selected_indices is not None and len(selected_indices) > 0:
-        X_pixels = X_pixels[:, selected_indices]
         
-    preds = model.predict(X_pixels)
     out_img = np.full(h * w, -9999.0, dtype="float32")
-    out_img[water_idx] = preds
+    model_str = str(model)
+    if "KNeighbors" in model_str or "GaussianProcess" in model_str or "RobustSpatialKNN" in model_str or "KNN" in model_str:
+        chunk_size = 5000
+    else:
+        chunk_size = 500000
+    n_pixels = len(water_idx)
+    
+    for start in range(0, n_pixels, chunk_size):
+        end = min(start + chunk_size, n_pixels)
+        batch_idx = water_idx[start:end]
+        
+        X_chunk = d_flat[batch_idx]
+        if selected_indices is not None and len(selected_indices) > 0:
+            X_chunk = X_chunk[:, selected_indices]
+            
+        np.nan_to_num(X_chunk, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+        chunk_preds = model.predict(X_chunk)
+        out_img[batch_idx] = chunk_preds
+
     out_img = out_img.reshape(h, w)
     if med_size > 0 and scipy_is_available:
         valid = out_img != -9999.0
@@ -1051,6 +1117,21 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
     
     random_state = algorithm.parameterAsInt(parameters, algorithm.RANDOM_STATE, context)
     n_jobs = algorithm.parameterAsInt(parameters, algorithm.NUM_THREADS, context)
+    
+    cv_folds = 3
+    if algorithm.parameterDefinition("CV_FOLDS"):
+        try:
+            val = algorithm.parameterAsInt(parameters, "CV_FOLDS", context)
+            if val > 1: cv_folds = val
+        except: pass
+
+    uncert_trees = 50
+    if algorithm.parameterDefinition("UNCERT_TREES"):
+        try:
+            val = algorithm.parameterAsInt(parameters, "UNCERT_TREES", context)
+            if val > 0: uncert_trees = val
+        except: pass
+
     fmt_idx = algorithm.parameterAsEnum(parameters, algorithm.OUTPUT_FORMAT, context)
     fmt_map = {0: "float32", 1: "float64", 2: "uint16"}
     output_format = fmt_map.get(fmt_idx, "float32")
@@ -1130,7 +1211,7 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
         final_weights,
         X,
         stack_path,
-        points_layer.sourceCrs(),
+        QgsRasterLayer(stack_path).crs(),
         feature_names
     )
     
@@ -1301,6 +1382,8 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
     except Exception:
         ensemble_size = 3
 
+
+
     results_df, best_algo_data = run_benchmarking(
         X,
         y,
@@ -1321,11 +1404,59 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
         coords,
         selected_indices,
         ensemble_size,
-        feature_names
+        feature_names,
+        cv_folds
     )
     results_df.to_csv(
         os.path.join(out_dir, "3_All_Algorithms_Benchmark.csv"), index=False
     )
+
+    # ---------------------------------------------------------
+    # [NEW] Generate strictly Linear Regression SDB for Analytics
+    # ---------------------------------------------------------
+    lr_algo_name = "Linear Regression"
+    lr_model = None
+
+    if lr_algo_name in results_df["Algorithm"].values:
+        lr_model = results_df[results_df["Algorithm"] == lr_algo_name].iloc[0]["Model"]
+        append_log("   [Analytics] Linear Regression was manually selected. Generating its depth map...", log_path, feedback)
+    else:
+        append_log("   [Analytics] Linear Regression not manually selected. Running it isolated for analytics...", log_path, feedback)
+        try:
+            lr_df, lr_best = run_benchmarking(
+                X, y, final_weights, [0], n_iter, out_dir, feedback, opt_idx, log_path, custom_params,
+                test_size, random_state, n_jobs, False, "Average", spatial_cv, coords, selected_indices, 3, feature_names, cv_folds
+            )
+            lr_model = lr_best["model"]
+        except Exception as e:
+            append_log(f"   [Warning] Isolated Linear Regression failed: {e}", log_path, feedback)
+
+    if lr_model is not None:
+        lr_dir = os.path.join(out_dir, "Linear_Regression")
+        os.makedirs(lr_dir, exist_ok=True)
+        lr_map_path = os.path.join(lr_dir, "Linear_Regression_Depth.tif")
+        lr_uncert_path = os.path.join(lr_dir, "Linear_Regression_Uncertainty.tif")
+        try:
+            from sklearn.base import clone
+            final_lr_model = clone(lr_model)
+            fit_kwargs = {"sample_weight": final_weights}
+            final_lr_model.fit(X, y, **fit_kwargs)
+            
+            predict_map(final_lr_model, stack_path, mask_path, lr_map_path, med_size, output_format, selected_indices)
+            joblib.dump(final_lr_model, os.path.join(lr_dir, "Linear_Regression_Model.pkl"))
+
+            # Generate Uncertainty map for Linear Regression
+            y_lr_pred = final_lr_model.predict(X)
+            lr_abs_residuals = np.abs(y - y_lr_pred) * 1.96
+            from sklearn.ensemble import RandomForestRegressor
+            lr_uncert_model = RandomForestRegressor(n_estimators=uncert_trees, random_state=random_state, n_jobs=n_jobs)
+            lr_uncert_model.fit(X, lr_abs_residuals)
+            predict_map(lr_uncert_model, stack_path, mask_path, lr_uncert_path, med_size, "float32", selected_indices)
+
+            append_log(f"   [Analytics] Linear Regression depth & uncertainty analytics saved to: {lr_dir}", log_path, feedback)
+        except Exception as e:
+            append_log(f"   [Warning] Failed to generate Linear Regression map: {e}", log_path, feedback)
+    # ---------------------------------------------------------
 
     win_name = best_algo_data["name"]
     append_log(
@@ -1353,7 +1484,7 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
         uncert_y = abs_residuals * 1.96
         
         from sklearn.ensemble import RandomForestRegressor
-        uncertainty_model = RandomForestRegressor(n_estimators=50, max_depth=6, random_state=random_state, n_jobs=n_jobs)
+        uncertainty_model = RandomForestRegressor(n_estimators=uncert_trees, random_state=random_state, n_jobs=n_jobs)
         uncertainty_model.fit(X, uncert_y)
         
         append_log("   Generating Phase 03 uncertainty prediction map...", log_path, feedback)

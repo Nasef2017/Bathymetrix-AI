@@ -10,14 +10,18 @@ from sklearn.preprocessing import PolynomialFeatures
 
 from qgis.core import (
     QgsCoordinateTransform,
+    QgsCoordinateReferenceSystem,
     QgsFeature,
     QgsField,
+    QgsGeometry,
     QgsProcessingException,
     QgsProject,
     QgsRasterLayer,
     QgsVectorFileWriter,
     QgsWkbTypes,
 )
+
+from ...infrastructure.vector_io import resolve_depth_field
 
 warnings.filterwarnings("ignore")
 matplotlib.use("Agg")
@@ -28,11 +32,17 @@ FILTER_MODES = ["Linear RANSAC", "LS Variance Fit", "Huber Variance Fit"]
 
 def extract_and_calc_robust(ras_path, vec_layer, depth_fld, b_idx, g_idx, fb):
     rlayer = QgsRasterLayer(ras_path)
-    tr = QgsCoordinateTransform(
-        vec_layer.sourceCrs(), rlayer.crs(), QgsProject.instance()
-    )
+    
+    # Ensure vector and raster CRS are valid
+    v_crs = vec_layer.crs() if vec_layer and vec_layer.crs().isValid() else QgsCoordinateReferenceSystem("EPSG:4326")
+    r_crs = rlayer.crs() if rlayer and rlayer.crs().isValid() else QgsCoordinateReferenceSystem("EPSG:4326")
+    
+    tr = QgsCoordinateTransform(v_crs, r_crs, QgsProject.instance())
 
-    total_pts = vec_layer.featureCount()
+    # Resolve actual depth field name dynamically
+    actual_depth_fld = resolve_depth_field(vec_layer, depth_fld)
+
+    total_pts = vec_layer.featureCount() if vec_layer else 0
     count_invalid_depth = 0
     count_out_of_bounds = 0
     count_nodata = 0
@@ -44,7 +54,7 @@ def extract_and_calc_robust(ras_path, vec_layer, depth_fld, b_idx, g_idx, fb):
         raw_b, raw_g, depths_list, feats_list = [], [], [], []
 
         for f in vec_layer.getFeatures():
-            raw_d = f[depth_fld]
+            raw_d = f[actual_depth_fld] if actual_depth_fld in [field.name() for field in vec_layer.fields()] else None
             if raw_d is None or raw_d == "" or str(raw_d).strip() == "":
                 count_invalid_depth += 1
                 continue
@@ -58,13 +68,37 @@ def extract_and_calc_robust(ras_path, vec_layer, depth_fld, b_idx, g_idx, fb):
                 count_invalid_depth += 1
                 continue
 
-            geom = f.geometry()
-            geom.transform(tr)
-            pt = geom.asPoint()
+            geom = QgsGeometry(f.geometry())
+            raw_pt = geom.asMultiPoint()[0] if geom.isMultipart() else geom.asPoint()
+            
+            pt = raw_pt
+            in_bounds = False
+            r, c = -1, -1
 
+            # 1. Test if raw point coordinates are ALREADY inside raster bounds
             try:
-                r, c = src.index(pt.x(), pt.y())
+                r_raw, c_raw = src.index(raw_pt.x(), raw_pt.y())
+                if 0 <= r_raw < src.height and 0 <= c_raw < src.width:
+                    in_bounds = True
+                    r, c = r_raw, c_raw
             except Exception:
+                in_bounds = False
+
+            # 2. If raw point was NOT in bounds, attempt CRS transformation
+            if not in_bounds:
+                try:
+                    tr = QgsCoordinateTransform(v_crs, r_crs, QgsProject.instance())
+                    geom_trans = QgsGeometry(geom)
+                    geom_trans.transform(tr)
+                    trans_pt = geom_trans.asMultiPoint()[0] if geom_trans.isMultipart() else geom_trans.asPoint()
+                    r_trans, c_trans = src.index(trans_pt.x(), trans_pt.y())
+                    if 0 <= r_trans < src.height and 0 <= c_trans < src.width:
+                        in_bounds = True
+                        r, c = r_trans, c_trans
+                except Exception:
+                    pass
+
+            if not in_bounds:
                 count_out_of_bounds += 1
                 continue
 
@@ -82,6 +116,8 @@ def extract_and_calc_robust(ras_path, vec_layer, depth_fld, b_idx, g_idx, fb):
                 count_out_of_bounds += 1
 
         fb.pushInfo(f"   [DEBUG] Total Points: {total_pts}")
+        fb.pushInfo(f"   [DEBUG] Depth Field Used: '{actual_depth_fld}'")
+        fb.pushInfo(f"   [DEBUG] Vector CRS: {v_crs.authid() or v_crs.userFriendlyIdentifier()} | Raster CRS: {r_crs.authid() or r_crs.userFriendlyIdentifier()}")
         fb.pushInfo(f"   [DEBUG] Invalid Depth (0/None): {count_invalid_depth}")
         fb.pushInfo(f"   [DEBUG] Out of Bounds: {count_out_of_bounds}")
         fb.pushInfo(f"   [DEBUG] NoData/Masked Pixels: {count_nodata}")
@@ -91,7 +127,7 @@ def extract_and_calc_robust(ras_path, vec_layer, depth_fld, b_idx, g_idx, fb):
             hint = (
                 "Hint: Uncheck 'Enable Water Masking' in Phase 01 if 'NoData' is high."
                 if count_nodata > 0
-                else "Hint: Check CRS alignment."
+                else f"Hint: Check CRS alignment between vector ({v_crs.authid()}) and raster ({r_crs.authid()})."
             )
             raise QgsProcessingException(
                 f"No valid training points found! (NoData={count_nodata}, OutBounds={count_out_of_bounds}). {hint}"
@@ -148,7 +184,18 @@ def plot_physics_trend(X, y, mask, mode, path):
         X[~mask], y[~mask], c="gray", marker="x", s=15, alpha=0.4, label="Rejected"
     )
 
-    x_rng = np.linspace(X.min(), X.max(), 100).reshape(-1, 1)
+    # Dynamic Outlier-Robust Axis Limiting (Percentile-based Zooming)
+    x_valid = X[mask] if np.sum(mask) > 0 else X
+    y_valid = y[mask] if np.sum(mask) > 0 else y
+
+    x_pmin, x_pmax = np.percentile(x_valid, [0.5, 99.5])
+    y_pmin, y_pmax = np.percentile(y_valid, [0.5, 99.5])
+    
+    x_span = x_pmax - x_pmin if x_pmax > x_pmin else 1.0
+    y_span = y_pmax - y_pmin if y_pmax > y_pmin else 1.0
+
+    # Trend line strictly inside valid domain to avoid shooting off to infinity
+    x_rng = np.linspace(x_pmin - 0.05 * x_span, x_pmax + 0.05 * x_span, 100).reshape(-1, 1)
     if mode == 0:
         model = LinearRegression().fit(X[mask], y[mask])
         y_rng = model.predict(x_rng)
@@ -158,12 +205,16 @@ def plot_physics_trend(X, y, mask, mode, path):
         y_rng = model.predict(poly.transform(x_rng))
 
     plt.plot(x_rng, y_rng, "k-", lw=2, label="Trend Model")
+    plt.xlim(x_pmin - 0.1 * x_span, x_pmax + 0.1 * x_span)
+    plt.ylim(y_pmin - 0.15 * y_span, y_pmax + 0.15 * y_span)
+    
     plt.title("Plot 1: Band Ratio vs Depth")
     plt.xlabel("Log Ratio")
     plt.ylabel("Depth (m)")
     plt.legend()
     plt.grid(True, linestyle="--", alpha=0.5)
-    plt.savefig(path, dpi=100)
+    plt.tight_layout()
+    plt.savefig(path, dpi=120)
     plt.close()
 
 
@@ -173,18 +224,32 @@ def plot_variance_analysis(depths, residuals, sigma_model, mode, path):
     plt.figure(figsize=(10, 6))
     d_abs = np.abs(depths)
     res_sq = residuals**2
+    
+    d_pmin, d_pmax = np.percentile(d_abs, [0.5, 99.5])
+    d_span = d_pmax - d_pmin if d_pmax > d_pmin else 1.0
+
     poly = PolynomialFeatures(degree=2, include_bias=False)
-    d_rng = np.linspace(d_abs.min(), d_abs.max(), 100).reshape(-1, 1)
+    d_rng = np.linspace(d_pmin, d_pmax + 0.05 * d_span, 100).reshape(-1, 1)
     var_pred = sigma_model.predict(poly.fit_transform(d_rng))
 
     plt.scatter(d_abs, res_sq, c="black", s=10, alpha=0.5, label="Residual Squares")
     plt.plot(d_rng, var_pred, "r-", lw=2.5, label=r"Variance Trend ($\sigma^2$)")
+    
+    # Robust Y-axis scaling to prevent extreme residual outliers (e.g. res^2 = 800) from squishing the variance trend
+    y_max = max(np.percentile(res_sq, 98.0) * 1.5, np.max(var_pred) * 2.5)
+    if np.isnan(y_max) or y_max <= 0:
+        y_max = np.max(res_sq) if len(res_sq) > 0 else 100
+        
+    plt.xlim(max(0, d_pmin - 0.05 * d_span), d_pmax + 0.05 * d_span)
+    plt.ylim(-0.02 * y_max, y_max)
+
     plt.title("Plot 2: Depth vs Residual Square (Variance Analysis)")
     plt.xlabel("Depth (m)")
     plt.ylabel(r"Residual² ($m^2$)")
     plt.legend()
     plt.grid(True, linestyle="--", alpha=0.5)
-    plt.savefig(path, dpi=100)
+    plt.tight_layout()
+    plt.savefig(path, dpi=120)
     plt.close()
 
 
@@ -213,12 +278,28 @@ def plot_envelope_analysis(depths, residuals, sigmas, mask, multiplier, mode, pa
         label="Rejected",
     )
     plt.axhline(0, c="black", lw=1)
+    
+    # Robust Envelope Limiting to zoom in on data & envelope
+    res_valid = residuals[mask] if np.sum(mask) > 0 else residuals
+    r_pmin, r_pmax = np.percentile(res_valid, [0.5, 99.5])
+    
+    env_max = max(np.max(upper), r_pmax)
+    env_min = min(np.min(lower), r_pmin)
+    r_span = env_max - env_min if env_max > env_min else 2.0
+    
+    d_pmin, d_pmax = np.percentile(d_abs, [0.5, 99.5])
+    d_span = d_pmax - d_pmin if d_pmax > d_pmin else 1.0
+
+    plt.xlim(max(0, d_pmin - 0.05 * d_span), d_pmax + 0.05 * d_span)
+    plt.ylim(env_min - 0.15 * r_span, env_max + 0.15 * r_span)
+
     plt.title(f"Plot 3: Residuals & Uncertainty Envelope (Mode {mode})")
     plt.xlabel("Depth (m)")
     plt.ylabel("Residual (m)")
     plt.legend()
     plt.grid(True, linestyle="--", alpha=0.5)
-    plt.savefig(path, dpi=100)
+    plt.tight_layout()
+    plt.savefig(path, dpi=120)
     plt.close()
 
 
@@ -231,11 +312,27 @@ def run_phase02_filtering(algorithm, parameters, context, feedback):
     points_layer = algorithm.parameterAsVectorLayer(
         parameters, algorithm.INPUT_POINTS, context
     )
+    
+    # Safely reproject points to match stack before proceeding
+    import processing
+    r_temp = QgsRasterLayer(stack_path, "temp")
+    if r_temp.isValid() and points_layer and points_layer.crs().isValid() and points_layer.crs() != r_temp.crs():
+        feedback.pushInfo(f"   [DEBUG] Reprojecting training points from {points_layer.crs().authid()} to {r_temp.crs().authid()}...")
+        try:
+            res = processing.run("native:reprojectlayer", {
+                'INPUT': points_layer,
+                'TARGET_CRS': r_temp.crs(),
+                'OUTPUT': 'memory:'
+            }, context=context, feedback=feedback)
+            points_layer = res['OUTPUT']
+        except Exception as e:
+            feedback.pushWarning(f"Failed to reproject points natively: {e}")
+
     depth_fld = algorithm.parameterAsString(parameters, algorithm.FIELD_DEPTH, context)
     b_idx = algorithm.parameterAsInt(parameters, algorithm.BLUE_BAND, context)
     g_idx = algorithm.parameterAsInt(parameters, algorithm.GREEN_BAND, context)
 
-    mode_idx = algorithm.parameterAsInt(parameters, algorithm.FILTER_MODE, context)
+    mode_idx = algorithm.parameterAsEnum(parameters, algorithm.FILTER_MODE, context)
     user_val = algorithm.parameterAsDouble(
         parameters, algorithm.RESIDUAL_THRESHOLD, context
     )
