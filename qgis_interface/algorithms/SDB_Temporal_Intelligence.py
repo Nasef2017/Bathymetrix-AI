@@ -1036,7 +1036,7 @@ class SDBTemporalIntelligence(QgsProcessingAlgorithm):
             
             # Apply OSW polygon from the first year to all subsequent years
             if first_year_osw_path and os.path.exists(first_year_osw_path):
-                current_masterflow_params["DEEPWATER_METHOD"] = 0  # Manual Polygon ROI
+                current_masterflow_params["DEEPWATER_METHOD"] = 2  # Shallow Water Bound (OSW Polygon)
                 current_masterflow_params["DEEPWATER_ROI"] = first_year_osw_path
                 feedback.pushInfo(f"♻️ Reusing OSW Deep Water Polygon from the first year for {yr}")
 
@@ -1050,7 +1050,7 @@ class SDBTemporalIntelligence(QgsProcessingAlgorithm):
             
             # Capture the OSW polygon from the first year
             if not first_year_osw_path:
-                candidate_osw = os.path.join(res["year_out_dir"], "Phase_01_Preprocessing", "1_OSW_Deep_Water_Mask.shp")
+                candidate_osw = os.path.join(res["year_out_dir"], "Phase_01_Preprocessing", "07_OSW_Boundary_Polygon.gpkg")
                 if os.path.exists(candidate_osw):
                     first_year_osw_path = candidate_osw
 
