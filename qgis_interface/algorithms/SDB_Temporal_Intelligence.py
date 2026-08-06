@@ -15,6 +15,7 @@ from qgis.core import (
     QgsProcessingParameterString,
     QgsProcessingParameterDefinition,
     QgsProcessingException,
+    QgsProcessingFeedback,
 )
 
 try:
@@ -221,7 +222,7 @@ class SDBTemporalIntelligence(QgsProcessingAlgorithm):
             <h2 style="margin-bottom: 5px; color: #2E86C1;">🌊 Bathymetrix-AI: Coastal Dynamics Analysis</h2>
             <p style="margin-top: 0; margin-bottom: 15px; font-size: 13px;">
                 An advanced engineering tool for autonomous multi-year coastal analysis. It extracts Satellite Derived Bathymetry (SDB), 
-                calculates shoreline migration, and computes robust sediment mass balance over time.
+                calculates shoreline migration, tracks targeted sub-region sediment mass balance (Target ROI), and computes robust sediment mass balance over time using Classical Z-score or Spatially-Adaptive Quantile Regression Uncertainty.
             </p>
             
             <h3 style="color: #117A65; margin-bottom: 5px; border-bottom: 2px solid #117A65; padding-bottom: 3px;">📁 Required Workspace Structure</h3>
@@ -664,7 +665,7 @@ class SDBTemporalIntelligence(QgsProcessingAlgorithm):
             QgsProcessingParameterEnum(
                 self.ENSEMBLE_METHOD,
                 "📊 [3] Ensemble Blending Method",
-                options=["Average", "Median", "Stacking"],
+                options=["Average", "Median", "Stacking", "Uncertainty-Weighted Fusion"],
                 defaultValue=0,
             )
         )
@@ -836,7 +837,7 @@ class SDBTemporalIntelligence(QgsProcessingAlgorithm):
         p_ens_p4.setFlags(p_ens_p4.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_ens_p4)
 
-        p_ens_meth_p4 = QgsProcessingParameterEnum(self.ENSEMBLE_METHOD_P4, "📊 [Advanced] Phase 04 Ensemble Method", options=["Average", "Median", "Stacking"], defaultValue=0)
+        p_ens_meth_p4 = QgsProcessingParameterEnum(self.ENSEMBLE_METHOD_P4, "📊 [Advanced] Phase 04 Ensemble Method", options=["Average", "Median", "Stacking", "Uncertainty-Weighted Fusion"], defaultValue=0)
         p_ens_meth_p4.setFlags(p_ens_meth_p4.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_ens_meth_p4)
 
@@ -915,6 +916,34 @@ class SDBTemporalIntelligence(QgsProcessingAlgorithm):
                 defaultValue=0,
             )
         )
+        self.addParameter(
+            QgsProcessingParameterVectorLayer(
+                "TARGET_ROI",
+                "🎯 [5] Target ROI for Volumetric Change (Polygon)",
+                types=[QgsProcessing.TypeVectorPolygon],
+                optional=True,
+            )
+        )
+
+        p_unc_mode = QgsProcessingParameterEnum(
+            "UNCERTAINTY_MODE",
+            "🎲 [Advanced] Temporal Uncertainty Mode",
+            options=["Classical Z-score (1.96σ)", "Quantile Regression (Adaptive σ)"],
+            defaultValue=0,
+        )
+        p_unc_mode.setFlags(p_unc_mode.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_unc_mode)
+
+        p_qr_conf = QgsProcessingParameterNumber(
+            "QR_CONFIDENCE",
+            "🎲 [Advanced] Quantile Regression Confidence Level (0.50-0.99)",
+            type=QgsProcessingParameterNumber.Double,
+            defaultValue=0.95,
+            minValue=0.50,
+            maxValue=0.99,
+        )
+        p_qr_conf.setFlags(p_qr_conf.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_qr_conf)
 
 
 
@@ -1005,8 +1034,62 @@ class SDBTemporalIntelligence(QgsProcessingAlgorithm):
         comparison_mode_idx = self.parameterAsEnum(parameters, self.COMPARISON_MODE, context)
         comparison_mode = self.COMPARISON_MODE_NAMES[comparison_mode_idx]
 
+        target_roi_layer = self.parameterAsVectorLayer(parameters, "TARGET_ROI", context)
+        target_roi_shp = target_roi_layer.source().split('|')[0] if target_roi_layer else None
+
+        uncertainty_mode_idx = self.parameterAsEnum(parameters, "UNCERTAINTY_MODE", context)
+        uncertainty_mode = "quantile_regression" if uncertainty_mode_idx == 1 else "classical"
+        qr_confidence = self.parameterAsDouble(parameters, "QR_CONFIDENCE", context)
+
 
         os.makedirs(out_folder, exist_ok=True)
+
+        # Full Process Log Output Setup
+        log_file_path = os.path.join(out_folder, "Full_Process_Log.txt")
+        # Initialize log file
+        with open(log_file_path, "w", encoding="utf-8") as f:
+            f.write("Bathymetrix-AI Temporal Process Log\n===================================\n")
+
+        class FileLoggingFeedback(QgsProcessingFeedback):
+            def __init__(self, inner, log_path):
+                super().__init__()
+                self.inner = inner
+                self.log_path = log_path
+
+            def pushInfo(self, info):
+                self.inner.pushInfo(info)
+                try:
+                    with open(self.log_path, "a", encoding="utf-8") as f:
+                        f.write(f"[INFO] {info}\n")
+                except:
+                    pass
+
+            def pushWarning(self, warning):
+                self.inner.pushWarning(warning)
+                try:
+                    with open(self.log_path, "a", encoding="utf-8") as f:
+                        f.write(f"[WARNING] {warning}\n")
+                except:
+                    pass
+
+            def reportError(self, error, fatalError=False):
+                self.inner.reportError(error, fatalError)
+                try:
+                    with open(self.log_path, "a", encoding="utf-8") as f:
+                        f.write(f"[ERROR] {error}\n")
+                except:
+                    pass
+                    
+            def setProgressText(self, text):
+                self.inner.setProgressText(text)
+                
+            def setProgress(self, progress):
+                self.inner.setProgress(progress)
+                
+            def isCanceled(self):
+                return self.inner.isCanceled()
+
+        feedback = FileLoggingFeedback(feedback, log_file_path)
 
         feedback.pushInfo("==========================================================")
         feedback.pushInfo("🌊 Bathymetrix-AI Temporal Intelligence Initialized")
@@ -1106,7 +1189,9 @@ class SDBTemporalIntelligence(QgsProcessingAlgorithm):
         # Build / Retrieve Linear Regression SDB maps specifically for Volumetric & MSI analytics
         linear_sdb_maps = {}
         linear_uncert_maps = {}
+        linear_training_maps = {}
         for yr, res in yearly_sdb_results.items():
+            linear_training_maps[yr] = res.get("icesat_shp_path", "")
             if "sdb_linear_map" in res and res["sdb_linear_map"] and os.path.exists(res["sdb_linear_map"]):
                 linear_sdb_maps[yr] = res["sdb_linear_map"]
                 linear_uncert_maps[yr] = res.get("linear_uncertainty_map", res.get("uncertainty_map", ""))
@@ -1123,7 +1208,12 @@ class SDBTemporalIntelligence(QgsProcessingAlgorithm):
             feedback=feedback,
             osw_shp=effective_osw_shp,
             overall_trend_method=overall_trend_method,
-            comparison_mode=comparison_mode
+            comparison_mode=comparison_mode,
+            target_roi_path=target_roi_shp,
+            uncertainty_mode=uncertainty_mode,
+            qr_confidence=qr_confidence,
+            training_maps=linear_training_maps,
+            depth_field=field_depth
         )
 
         # Step 5: QGIS Layer Group Organization & Summary Reports
@@ -1135,6 +1225,8 @@ class SDBTemporalIntelligence(QgsProcessingAlgorithm):
             benthic_results=benthic_results,
             output_dir=out_folder,
             feedback=feedback,
+            uncertainty_mode=uncertainty_mode,
+            qr_confidence=qr_confidence
         )
 
         # Stop QGIS from auto-loading intermediate child outputs (e.g., Phase03_Depth_OSW_Clipped)

@@ -34,6 +34,8 @@ class TemporalReportGenerator:
         benthic_results: Dict[int, Dict[str, Any]],
         output_dir: str,
         feedback: QgsProcessingFeedback,
+        uncertainty_mode: str = "classical",
+        qr_confidence: float = 0.95
     ):
         """
         Populates QGIS Layer Group and exports summary analytics report.
@@ -175,18 +177,30 @@ class TemporalReportGenerator:
         html_report_path = os.path.join(output_dir, "Temporal_Analytics_Report.html")
         
         if analytics_results:
+            has_target = any(res.get("target_accretion_volume_m3") is not None for res in analytics_results)
             try:
                 with open(sediment_csv_path, "w", newline="", encoding="utf-8") as f:
                     writer = csv.writer(f)
-                    writer.writerow(["Period", "Type", "Accretion_m3", "Erosion_m3", "Net_Balance_m3"])
+                    header = ["Period", "Type", "Accretion_m3", "Erosion_m3", "Net_Balance_m3"]
+                    if has_target:
+                        header.extend(["Target_Accretion_m3", "Target_Erosion_m3", "Target_Net_Balance_m3"])
+                    writer.writerow(header)
+
                     for res in analytics_results:
-                        writer.writerow([
+                        row = [
                             res.get("period", "N/A"),
                             res.get("analysis_type", "Overall Trend" if res.get("is_overall") else "Sequential"),
                             f"{res.get('accretion_volume_m3', 0):.2f}",
                             f"{res.get('erosion_volume_m3', 0):.2f}",
                             f"{res.get('net_sediment_balance_m3', 0):.2f}"
-                        ])
+                        ]
+                        if has_target:
+                            row.extend([
+                                f"{res.get('target_accretion_volume_m3', 0):.2f}",
+                                f"{res.get('target_erosion_volume_m3', 0):.2f}",
+                                f"{res.get('target_net_sediment_balance_m3', 0):.2f}"
+                            ])
+                        writer.writerow(row)
                 feedback.pushInfo(f"✅ Sediment Mass Balance exported: {sediment_csv_path}")
             except PermissionError:
                 feedback.pushWarning(f"⚠️ Permission Denied: Could not write to {sediment_csv_path}. Please close the file if it is open in Excel.")
@@ -224,6 +238,7 @@ class TemporalReportGenerator:
                             <h3>📊 1. Volumetric Erosion & Accretion</h3>
                             <p><b>What it measures:</b> The <i>Magnitude and Direction</i> of physical sand volume change (in cubic meters).</p>
                             <p><b>Methodology:</b> Uses a robust Linear Regression (Time-Series Trend) across all provided years. This mathematically filters out deep-water random noise and calculates the true rate of sand movement, identifying dredging (Erosion) and shoaling (Accretion).</p>
+                            <p><b>Uncertainty Modeling:</b> {"Quantile Regression (Spatially Adaptive &sigma;)" if uncertainty_mode == "quantile_regression" else "Classical Z-score (Homoscedastic Gaussian)"} at {(qr_confidence * 100):.0f}% Confidence Level.</p>
                             <p><b>Importance:</b> Essential for estimating dredging budgets, understanding the sediment budget, and verifying how much sand was added or removed.</p>
                         </div>
 
@@ -234,6 +249,14 @@ class TemporalReportGenerator:
                                 <th>Accretion (m³)</th>
                                 <th>Erosion / Dredging (m³)</th>
                                 <th>Net Balance (m³)</th>
+                """
+                if has_target:
+                    html_content += """
+                                <th>Target ROI Accretion (m³)</th>
+                                <th>Target ROI Erosion (m³)</th>
+                                <th>Target ROI Net Balance (m³)</th>
+                    """
+                html_content += """
                             </tr>
                 """
                 
@@ -245,8 +268,17 @@ class TemporalReportGenerator:
                                 <td style="color: #27AE60; font-weight: bold;">+ {res.get('accretion_volume_m3', 0):,.2f}</td>
                                 <td style="color: #C0392B; font-weight: bold;">- {res.get('erosion_volume_m3', 0):,.2f}</td>
                                 <td><b>{res.get('net_sediment_balance_m3', 0):,.2f}</b></td>
+                    """
+                    if has_target:
+                        html_content += f"""
+                                <td style="color: #27AE60; font-weight: bold;">+ {res.get('target_accretion_volume_m3', 0):,.2f}</td>
+                                <td style="color: #C0392B; font-weight: bold;">- {res.get('target_erosion_volume_m3', 0):,.2f}</td>
+                                <td><b>{res.get('target_net_sediment_balance_m3', 0):,.2f}</b></td>
+                        """
+                    html_content += """
                             </tr>
                     """
+
 
                 html_content += """
                         </table>

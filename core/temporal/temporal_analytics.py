@@ -14,7 +14,84 @@ class TemporalAnalyticsEngine:
     - Morphological Stability Index Map (MSI)
     """
 
-    def _compute_pair(self, y1, y2, sdb_maps, uncertainty_maps, output_dir, feedback, osw_shp, is_overall=False, all_years=None, overall_trend_method="Long-term Trend", analysis_type="Sequential"):
+    def _estimate_qr_sigma(self, sdb_raster_path, icesat_shp_path, depth_field, qr_alpha, feedback):
+        """
+        Fits QuantileRegressor at lower (alpha) and upper (1-alpha) quantiles
+        on ICESat-2 training data, then predicts a spatially-adaptive sigma map.
+        Returns a 2D np.ndarray matching the SDB raster shape.
+        """
+        if not sdb_raster_path or not os.path.exists(sdb_raster_path) or not icesat_shp_path or not os.path.exists(icesat_shp_path):
+            return None
+
+        try:
+            from sklearn.linear_model import QuantileRegressor
+            from qgis.core import QgsVectorLayer
+            try:
+                from ...core.ml.trainers import extract_samples
+            except Exception:
+                from Bathymetrix_AI.core.ml.trainers import extract_samples
+
+            vec_layer = QgsVectorLayer(icesat_shp_path, "pts", "ogr")
+            if not vec_layer or not vec_layer.isValid():
+                return None
+
+            # Extract samples (X: reflectance bands, y: depth)
+            X, y, weights, coords = extract_samples(sdb_raster_path, vec_layer, depth_field, None, 0)
+            
+            if X is None or len(y) < 5:
+                feedback.pushWarning(f"⚠️ Not enough training points for QR on {os.path.basename(sdb_raster_path)}. Falling back to Classical.")
+                return None
+
+            alpha_lo = (1.0 - qr_alpha) / 2.0
+            alpha_hi = 1.0 - alpha_lo
+
+            feedback.pushInfo(f"⏳ Fitting Quantile Regression Models (alpha={alpha_lo:.3f} and {alpha_hi:.3f}) for {os.path.basename(sdb_raster_path)}...")
+            
+            qr_lo = QuantileRegressor(quantile=alpha_lo, alpha=0)
+            qr_hi = QuantileRegressor(quantile=alpha_hi, alpha=0)
+
+            qr_lo.fit(X, y)
+            qr_hi.fit(X, y)
+
+            with rasterio.open(sdb_raster_path) as src:
+                # Read all bands for prediction
+                img_data = src.read()
+                bands, height, width = img_data.shape
+                # Reshape for prediction, ignoring nodata/nan
+                nodata = src.nodata if src.nodata is not None else -9999
+                
+                # We need to flatten and filter valid pixels
+                img_flat = img_data.reshape(bands, -1).T  # shape: (pixels, bands)
+                
+                # valid mask: all bands are not nodata and not nan
+                valid_mask = np.all((img_flat != nodata) & ~np.isnan(img_flat), axis=1)
+                
+                if not np.any(valid_mask):
+                    return None
+                    
+                X_pred = img_flat[valid_mask, :]
+                
+                # Predict
+                pred_lo = qr_lo.predict(X_pred)
+                pred_hi = qr_hi.predict(X_pred)
+                
+                from scipy import stats
+                z_crit = stats.norm.ppf(1 - (1 - qr_alpha) / 2)
+                
+                # Calculate sigma: (q_hi - q_lo) / (2 * z_crit)
+                sigma_pred = (pred_hi - pred_lo) / (2 * z_crit)
+                
+                sigma_map = np.zeros(height * width, dtype=np.float32)
+                sigma_map[valid_mask] = sigma_pred
+                sigma_map = sigma_map.reshape(height, width)
+                
+                return sigma_map
+
+        except Exception as e:
+            feedback.pushWarning(f"⚠️ Quantile Regression failed for {os.path.basename(sdb_raster_path)}: {str(e)}. Falling back to Classical.")
+            return None
+
+    def _compute_pair(self, y1, y2, sdb_maps, uncertainty_maps, output_dir, feedback, osw_shp, is_overall=False, all_years=None, overall_trend_method="Long-term Trend", analysis_type="Sequential", target_roi_path=None, uncertainty_mode="classical", qr_confidence=0.95, qr_sigma_1=None, qr_sigma_2=None):
         from rasterio.warp import reproject, Resampling
         
         statcd_raster_path = os.path.join(output_dir, f"Volumetric_Erosion_Accretion_{y1}_{y2}.tif")
@@ -50,29 +127,45 @@ class TemporalAnalyticsEngine:
             abs_z2 = np.abs(z2)
             valid = (abs_z1 > 0.1) & (abs_z2 > 0.1) & (z1 != nodata_1) & (z2 != nodata_2) & (abs_z1 < 40) & (abs_z2 < 40)
 
-            import geopandas as gpd
             from rasterio.features import rasterize
+            import json
+            from qgis.core import QgsVectorLayer, QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsProject
             
             def apply_mask(shp_path, current_valid_mask):
-                if not shp_path or not os.path.exists(shp_path):
+                if not shp_path:
+                    return current_valid_mask
+                shp_path = str(shp_path).split('|')[0]
+                if not os.path.exists(shp_path):
                     return current_valid_mask
                 try:
-                    gdf = gpd.read_file(shp_path)
-                    if gdf.crs:
-                        try:
-                            gdf = gdf.to_crs(src_1.crs.to_wkt())
-                        except Exception:
+                    vlayer = QgsVectorLayer(shp_path, "mask", "ogr")
+                    if not vlayer.isValid():
+                        return current_valid_mask
+                    
+                    target_crs = QgsCoordinateReferenceSystem(src_1.crs.to_wkt())
+                    transform = None
+                    if vlayer.crs() != target_crs:
+                        transform = QgsCoordinateTransform(vlayer.crs(), target_crs, QgsProject.instance())
+                    
+                    geoms = []
+                    for feat in vlayer.getFeatures():
+                        geom = feat.geometry()
+                        if geom.isNull(): continue
+                        if transform:
                             try:
-                                gdf = gdf.to_crs(src_1.crs)
+                                geom.transform(transform)
                             except Exception:
                                 pass
-                    if not gdf.empty:
-                        geom = [g for g in gdf.geometry if g is not None]
-                        shp_mask = rasterize(geom, out_shape=z1.shape, transform=src_1.transform, fill=0, default_value=1, dtype=np.uint8)
-                        feedback.pushInfo(f"✂️ Applied Study Area OSW Polygon mask for Volume Analytics ({os.path.basename(shp_path)}).")
-                        return current_valid_mask & (shp_mask == 1)
+                        geoms.append(json.loads(geom.asJson()))
+                        
+                    if not geoms:
+                        return current_valid_mask
+                        
+                    shp_mask = rasterize(geoms, out_shape=z1.shape, transform=src_1.transform, fill=0, default_value=1, dtype=np.uint8)
+                    feedback.pushInfo(f"✂️ Applied polygon mask ({os.path.basename(shp_path)}).")
+                    return current_valid_mask & (shp_mask == 1)
                 except Exception as e:
-                    feedback.pushWarning(f"⚠️ Could not apply OSW Polygon mask ({shp_path}): {e}")
+                    feedback.pushWarning(f"⚠️ Could not apply polygon mask ({shp_path}): {e}")
                 return current_valid_mask
                 
             valid = apply_mask(osw_shp, valid)
@@ -179,9 +272,17 @@ class TemporalAnalyticsEngine:
             else:
                 # Sequential simple difference OR Net Difference for overall trend
                 delta_z[valid] = z2[valid] - z1[valid]
-                sigma_delta = np.sqrt(u1**2 + u2**2)
+                
+                if uncertainty_mode == "quantile_regression" and qr_sigma_1 is not None and qr_sigma_2 is not None:
+                    sigma_delta[valid] = np.sqrt(qr_sigma_1[valid]**2 + qr_sigma_2[valid]**2)
+                    sigma_delta[valid] = np.maximum(sigma_delta[valid], 0.05) # Floor
+                else:
+                    sigma_delta[valid] = np.sqrt(u1[valid]**2 + u2[valid]**2)
 
             sigma_delta[sigma_delta == 0] = 0.001
+
+            from scipy import stats
+            z_crit = stats.norm.ppf(1 - (1 - qr_confidence) / 2) if uncertainty_mode == "quantile_regression" else 1.96
 
             z_score = np.zeros_like(z1)
             z_score[valid] = delta_z[valid] / sigma_delta[valid]
@@ -200,11 +301,11 @@ class TemporalAnalyticsEngine:
             #   delta_z > 0 is Accretion
             
             if is_positive_depth:
-                true_accretion = valid & (z_score < -1.96)
-                true_erosion = valid & (z_score > 1.96)
+                true_accretion = valid & (z_score < -z_crit)
+                true_erosion = valid & (z_score > z_crit)
             else:
-                true_accretion = valid & (z_score > 1.96)
-                true_erosion = valid & (z_score < -1.96)
+                true_accretion = valid & (z_score > z_crit)
+                true_erosion = valid & (z_score < -z_crit)
 
             # Apply Spatial Coherence Filter (Minimum Mapping Unit - MMU) to eliminate isolated single-pixel noise artifacts (Lane & Chandler, Wheaton et al. 2010)
             try:
@@ -227,6 +328,21 @@ class TemporalAnalyticsEngine:
                 erosion_vol_m3 = float(np.sum(-delta_z[true_erosion]) * pixel_area_m2)
 
             net_sediment_balance_m3 = accretion_vol_m3 - erosion_vol_m3
+
+            # Calculate Target ROI Volumes if provided
+            target_accretion_vol_m3 = None
+            target_erosion_vol_m3 = None
+            target_net_balance_m3 = None
+
+            if target_roi_path and os.path.exists(target_roi_path):
+                target_valid = apply_mask(target_roi_path, valid)
+                if is_positive_depth:
+                    target_accretion_vol_m3 = float(np.sum(-delta_z[target_valid & (z_score < -z_crit)]) * pixel_area_m2)
+                    target_erosion_vol_m3 = float(np.sum(delta_z[target_valid & (z_score > z_crit)]) * pixel_area_m2)
+                else:
+                    target_accretion_vol_m3 = float(np.sum(delta_z[target_valid & (z_score > z_crit)]) * pixel_area_m2)
+                    target_erosion_vol_m3 = float(np.sum(-delta_z[target_valid & (z_score < -z_crit)]) * pixel_area_m2)
+                target_net_balance_m3 = target_accretion_vol_m3 - target_erosion_vol_m3
 
             profile = src_1.profile.copy()
             profile.update(count=1, dtype=rasterio.uint8, nodata=255, compress="lzw")
@@ -253,6 +369,11 @@ class TemporalAnalyticsEngine:
             f"✅ StatCD Change Detection ({y1} -> {y2}):\n"
             f"   - Accretion: +{accretion_vol_m3:,.2f} m³ | Erosion: -{erosion_vol_m3:,.2f} m³ | Net: {net_sediment_balance_m3:+,.2f} m³"
         )
+        if target_accretion_vol_m3 is not None:
+            feedback.pushInfo(
+                f"🎯 Target ROI Change Detection ({y1} -> {y2}):\n"
+                f"   - Target Accretion: +{target_accretion_vol_m3:,.2f} m³ | Target Erosion: -{target_erosion_vol_m3:,.2f} m³ | Target Net: {target_net_balance_m3:+,.2f} m³"
+            )
 
         return {
             "period": f"{y1}_{y2}",
@@ -263,6 +384,9 @@ class TemporalAnalyticsEngine:
             "accretion_volume_m3": accretion_vol_m3,
             "erosion_volume_m3": erosion_vol_m3,
             "net_sediment_balance_m3": net_sediment_balance_m3,
+            "target_accretion_volume_m3": target_accretion_vol_m3,
+            "target_erosion_volume_m3": target_erosion_vol_m3,
+            "target_net_sediment_balance_m3": target_net_balance_m3,
             "is_overall": is_overall,
             "analysis_type": "Overall Trend" if is_overall else analysis_type
         }
@@ -276,6 +400,11 @@ class TemporalAnalyticsEngine:
         osw_shp: str = None,
         overall_trend_method: str = "Long-term Trend",
         comparison_mode: str = "Sequential (Year-to-Year)",
+        target_roi_path: str = None,
+        uncertainty_mode: str = "classical",
+        qr_confidence: float = 0.95,
+        training_maps: Dict[int, str] = None,
+        depth_field: str = None
     ) -> List[Dict[str, Any]]:
         """
         Executes multi-year bathymetric change detection sequentially or against baseline year, plus overall.
@@ -286,6 +415,29 @@ class TemporalAnalyticsEngine:
         if len(years) < 2:
             feedback.pushWarning("At least 2 years required for temporal change analysis.")
             return []
+
+        qr_sigmas = {}
+        if uncertainty_mode == "quantile_regression" and training_maps and depth_field:
+            for yr in years:
+                sdb_path = sdb_maps.get(yr)
+                shp_path = training_maps.get(yr)
+                if sdb_path and shp_path:
+                    sigma_map = self._estimate_qr_sigma(sdb_path, shp_path, depth_field, qr_confidence, feedback)
+                    if sigma_map is not None:
+                        qr_sigmas[yr] = sigma_map
+                        # Save QR uncertainty map
+                        try:
+                            qr_out_path = os.path.join(output_dir, f"Quantile_Uncertainty_{yr}.tif")
+                            with rasterio.open(sdb_path) as src:
+                                profile = src.profile.copy()
+                                profile.update(count=1, dtype=rasterio.float32, nodata=-9999.0, compress="lzw")
+                                with rasterio.open(qr_out_path, "w", **profile) as dst:
+                                    dst.write(sigma_map.astype(np.float32), 1)
+                            feedback.pushInfo(f"💾 Saved QR Uncertainty Map: {qr_out_path}")
+                        except Exception as e:
+                            feedback.pushWarning(f"⚠️ Failed to save QR Uncertainty map for {yr}: {e}")
+                    else:
+                        feedback.pushWarning(f"⚠️ QR Sigma map generation failed for {yr}. Will fallback to classical.")
 
         results = []
         
@@ -298,7 +450,12 @@ class TemporalAnalyticsEngine:
                     y1, y2, sdb_maps, uncertainty_maps,
                     output_dir, feedback, osw_shp,
                     is_overall=False,
-                    analysis_type="Baseline Reference"
+                    analysis_type="Baseline Reference",
+                    target_roi_path=target_roi_path,
+                    uncertainty_mode=uncertainty_mode,
+                    qr_confidence=qr_confidence,
+                    qr_sigma_1=qr_sigmas.get(y1),
+                    qr_sigma_2=qr_sigmas.get(y2)
                 )
                 results.append(res_pair)
         else: # Sequential (Year-to-Year)
@@ -308,7 +465,12 @@ class TemporalAnalyticsEngine:
                     y1, y2, sdb_maps, uncertainty_maps,
                     output_dir, feedback, osw_shp,
                     is_overall=False,
-                    analysis_type="Sequential"
+                    analysis_type="Sequential",
+                    target_roi_path=target_roi_path,
+                    uncertainty_mode=uncertainty_mode,
+                    qr_confidence=qr_confidence,
+                    qr_sigma_1=qr_sigmas.get(y1),
+                    qr_sigma_2=qr_sigmas.get(y2)
                 )
                 results.append(res_seq)
 
@@ -319,7 +481,12 @@ class TemporalAnalyticsEngine:
             output_dir, feedback, osw_shp, 
             is_overall=True, all_years=years,
             overall_trend_method=overall_trend_method,
-            analysis_type="Overall Trend"
+            analysis_type="Overall Trend",
+            target_roi_path=target_roi_path,
+            uncertainty_mode=uncertainty_mode,
+            qr_confidence=qr_confidence,
+            qr_sigma_1=qr_sigmas.get(first_yr),
+            qr_sigma_2=qr_sigmas.get(last_yr)
         )
         results.append(res_overall)
 

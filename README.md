@@ -43,6 +43,7 @@ To ensure high-quality training data, the tool filters altimetry data to remove 
 Instead of using one algorithm, the tool implements an automated machine learning workflow.
 **Feature Analysis:** Implements advanced feature selection by dropping weak or redundant bands using statistical correlations (Pearson, Spearman) or automated dynamic thresholds (Automatic-RANSAC, Automatic-Random Forest).
 **Algorithm Benchmarking:** Evaluates 15+ different Machine Learning models (e.g., Random Forest, Gradient Boosting, XGBoost, CatBoost, SVR, MLP) to find the best fit for specific coastal areas.
+**Ensemble Blending:** Features an advanced **Uncertainty-Weighted Pixel Fusion** ensemble blending mode, improving the robustness of final maps using inverse variance weighting based on residual uncertainties, alongside Standard Average, Median, and Stacking.
 **Memory-Efficient Prediction:** Uses chunk-based processing (batches of 500,000 pixels) to generate final maps, preventing memory crashes with extremely large images.
 **Hyperparameter Optimization:** Automatically tunes model settings via Random Search, Grid Search, or Bayesian Optimization (Bergstra & Bengio, 2012).
 **Spatial Cross-Validation:** Independent spatial block cross-validation control to evaluate base models.
@@ -50,21 +51,25 @@ Instead of using one algorithm, the tool implements an automated machine learnin
 
 **Phase 04: Adaptive Refinement**
 This phase corrects local errors that global models might miss by analyzing the "residuals" (differences) between predicted and observed depths.  
-**Spatial Error Mapping:** Spatially localized corrections and residual analysis (Alevizos, 2020) to fix local geographic biases.
+**Zero-Mean Centered Spatial Error Mapping:** Zero-mean centered residual bias correction to eliminate global offset drift, followed by spatially localized corrections and residual analysis (Alevizos, 2020) to fix local geographic biases.
+**LOO Robust Huber & Smoothed IDW Weighting:** Uses Leave-One-Out (LOO) robust Huber weighting and distance-decay smoothing ($1 / (d + 1.0)$) to prevent divide-by-zero spikes and outlier distortion in spatial error maps.
+**Empirical Residual Uncertainty Modeling:** Fits a RandomForest Residual Regressor to generate spatial prediction uncertainty maps at 95% confidence (`Final_Uncertainty_95.tif`).
 **Spatial Cross-Validation:** Independent spatial block cross-validation control to evaluate residual modeling.
-**Adaptive Re-training:** Combines spectral data with error maps to produce a refined, high-accuracy final depth map.
+**Adaptive Re-training & Pixel Fusion:** Combines spectral data with error maps to produce a refined, high-accuracy final depth map. Incorporates **Uncertainty-Weighted Pixel Fusion** for robust model stacking.
 
 **Phase 05: Validation & Reporting**
-**Independent Accuracy Assessment:** Validates the finalized models on unseen test data to ensure robust accuracy reporting and scientific validity.
+**Independent Accuracy Assessment:** Validates the finalized models on unseen test data to ensure robust accuracy reporting, IHO Order 1a/2 TVU compliance evaluation, and scientific validity.
 **Interactive Validation Dashboard:** Generates a premium HTML dashboard containing comprehensive AutoML leaderboards, validation metrics, and diagnostic plots with a high-performance responsive layout.
 
 🚀 **Standalone Modules**
 
 **Coastal Dynamics (Temporal Intelligence)**
 An independent, standalone Temporal Analysis module to monitor how the seabed changes across multiple years.
-**Volumetric Sand Tracking:** Utilizes robust **Linear Regression** across multiple years to track sediment volume (m³). It incorporates a Statistical Level of Detection (StatCD) (Wheaton et al., 2010) and Minimum Mapping Unit (MMU) spatial coherence filters (Lane & Chandler, 2003) to flawlessly categorize dredging (Erosion) and shoaling (Accretion) while ignoring noise.
+**Volumetric Sand Tracking & Target ROI Analytics:** Utilizes robust **Linear Regression** across multiple years to track sediment volume (m³). Features a dedicated **Target ROI Vector Polygon** input for tracking accretion, erosion, and net balance ($m^3$) in targeted sub-regions alongside the full study area. This is **highly valuable for Model Quality Control**, allowing users to validate the model's accuracy by checking if the calculated dredging (Erosion) and shoaling (Accretion) volumes in a known ROI match real-world physical expectations. It incorporates a Statistical Level of Detection (StatCD) (Wheaton et al., 2010) and Minimum Mapping Unit (MMU) spatial coherence filters (Lane & Chandler, 2003) to flawlessly categorize dredging and shoaling while ignoring noise.
+**Temporal Uncertainty Modeling (Quantile Regression vs Classical):** Supports both Classical Z-score (1.96σ) and **Quantile Regression (Adaptive σ)** uncertainty modes at customizable confidence levels (0.50–0.99) to account for depth-varying noise.
 **Morphological Stability Index (MSI):** Computes the volatility and stability of the seabed (0 to 1 scale) based on temporal depth variance, vital for infrastructure planning.
 **Shoreline Migration:** Extracts land-water boundaries for each year, creating explicit Erosion and Accretion polygons.
+**Full Process File Logging:** Automatically streams all execution logs to `Full_Process_Log.txt` in real time.
 **Automated HTML Reporting:** Generates a premium, dynamic HTML report that beautifully formats all statistics and highlights engineering metrics.
 
 **ICESat-2 Downloader**
@@ -89,7 +94,6 @@ pip install numpy pandas rasterio matplotlib seaborn scikit-learn>=1.5.0 scipy j
 **Author:** Mohamed Aly Nasef  
 **Email:** Eng.m.nasef2017@gmail.com, Nasefm.aly@alexu.edu.eg  
 
-Nasef M.Aly. (2026). Nasef2017/Bathymetrix-AI: Bathymetrix_AI V6.4 (Version v6.4) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.21762013
 
 🤖 **AI Acknowledgment**  
 The development of the Bathymetrix-AI code, its logical structure, and the technical documentation were significantly enhanced and optimized using Google Gemini. The AI assisted in debugging complex workflows and ensuring the implementation follows best practices in data science.

@@ -167,7 +167,7 @@ class SDBModule03(QgsProcessingAlgorithm):
             QgsProcessingParameterEnum(
                 self.ENSEMBLE_METHOD,
                 "📊 Ensemble Blending Method",
-                options=["Average", "Median", "Stacking"],
+                options=["Average", "Median", "Stacking", "Uncertainty-Weighted Fusion"],
                 defaultValue=0,
             )
         )

@@ -59,10 +59,13 @@ class CustomEnsembleRegressor(BaseEstimator, RegressorMixin):
         self.estimators = estimators  # List of (name, model)
         self.method = method
         self.fitted_estimators_ = []
+        self.uncert_models_ = []
         self.meta_learner_ = None
 
     def fit(self, X, y, sample_weight=None):
         self.fitted_estimators_ = []
+        self.uncert_models_ = []
+        
         for name, est in self.estimators:
             model_to_fit = clone(est)
             fit_params = {}
@@ -74,6 +77,17 @@ class CustomEnsembleRegressor(BaseEstimator, RegressorMixin):
             model_to_fit.fit(X, y, **fit_params)
             self.fitted_estimators_.append(model_to_fit)
 
+            # Train a light residual uncertainty model for each estimator if Uncertainty-Weighted Fusion is active
+            if self.method in ["Uncertainty-Weighted Fusion", "Uncertainty-Weighted"]:
+                y_pred = model_to_fit.predict(X)
+                abs_residuals = np.abs(y - y_pred) * 1.96
+                from sklearn.ensemble import RandomForestRegressor
+                uncert_model = RandomForestRegressor(
+                    n_estimators=30, max_depth=5, random_state=42, n_jobs=-1
+                )
+                uncert_model.fit(X, abs_residuals)
+                self.uncert_models_.append(uncert_model)
+
         if self.method == "Stacking":
             base_preds = np.column_stack([est.predict(X) for est in self.fitted_estimators_])
             self.meta_learner_ = Ridge(alpha=1.0)
@@ -84,7 +98,9 @@ class CustomEnsembleRegressor(BaseEstimator, RegressorMixin):
     def predict(self, X):
         if not self.fitted_estimators_:
             raise ValueError("Ensemble is not fitted yet.")
+        
         preds = np.column_stack([est.predict(X) for est in self.fitted_estimators_])
+
         if self.method == "Average":
             return np.mean(preds, axis=1)
         elif self.method == "Median":
@@ -93,6 +109,16 @@ class CustomEnsembleRegressor(BaseEstimator, RegressorMixin):
             if self.meta_learner_ is None:
                 raise ValueError("Meta learner is not fitted.")
             return self.meta_learner_.predict(preds)
+        elif self.method in ["Uncertainty-Weighted Fusion", "Uncertainty-Weighted"]:
+            if not self.uncert_models_:
+                return np.mean(preds, axis=1)
+            
+            sigmas = np.column_stack([u_mod.predict(X) for u_mod in self.uncert_models_])
+            weights = 1.0 / (np.square(sigmas) + 1e-4)
+            weights_sum = np.sum(weights, axis=1, keepdims=True)
+            weighted_z = np.sum(preds * weights, axis=1, keepdims=True) / weights_sum
+            return weighted_z.flatten()
+
         return np.mean(preds, axis=1)
 
 from qgis.core import (
@@ -1367,7 +1393,7 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
 
     try:
         ens_idx = algorithm.parameterAsEnum(parameters, "ENSEMBLE_METHOD", context)
-        ens_map = {0: "Average", 1: "Median", 2: "Stacking"}
+        ens_map = {0: "Average", 1: "Median", 2: "Stacking", 3: "Uncertainty-Weighted Fusion"}
         ensemble_method = ens_map.get(ens_idx, "Average")
     except Exception:
         ensemble_method = "Average"

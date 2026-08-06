@@ -84,10 +84,8 @@ def extract_and_calc_robust(ras_path, vec_layer, depth_fld, b_idx, g_idx, fb):
             except Exception:
                 in_bounds = False
 
-            # 2. If raw point was NOT in bounds, attempt CRS transformation
             if not in_bounds:
                 try:
-                    tr = QgsCoordinateTransform(v_crs, r_crs, QgsProject.instance())
                     geom_trans = QgsGeometry(geom)
                     geom_trans.transform(tr)
                     trans_pt = geom_trans.asMultiPoint()[0] if geom_trans.isMultipart() else geom_trans.asPoint()
@@ -134,7 +132,8 @@ def extract_and_calc_robust(ras_path, vec_layer, depth_fld, b_idx, g_idx, fb):
             )
 
         np_b, np_g = np.array(raw_b), np.array(raw_g)
-        robust_scale = 10.0 / max(np.percentile(np_b, 5), 0.0001)
+        min_p5 = min(np.percentile(np_b, 5), np.percentile(np_g, 5))
+        robust_scale = 10.0 / max(min_p5, 0.0001)
         lb = np.log(np.maximum(np_b * robust_scale, 1.1))
         lg = np.log(np.maximum(np_g * robust_scale, 1.1))
         ratios = lb / lg
@@ -150,8 +149,15 @@ def extract_and_calc_robust(ras_path, vec_layer, depth_fld, b_idx, g_idx, fb):
 def save_subset_with_uncert(
     original_layer, all_features, mask, uncert, out_path, layer_name
 ):
-    fields = original_layer.fields()
-    fields.append(QgsField("SDB_Uncert", QVariant.Double))
+    from qgis.core import QgsFields
+    fields = QgsFields()
+    for f in original_layer.fields():
+        fields.append(f)
+    uncert_idx = fields.indexOf("SDB_Uncert")
+    if uncert_idx == -1:
+        fields.append(QgsField("SDB_Uncert", QVariant.Double))
+        uncert_idx = fields.count() - 1
+
     if os.path.exists(out_path):
         try:
             os.remove(out_path)
@@ -171,7 +177,10 @@ def save_subset_with_uncert(
                 feat = QgsFeature(fields)
                 feat.setGeometry(all_features[i].geometry())
                 attrs = all_features[i].attributes()
-                attrs.append(float(uncert[i]))
+                if len(attrs) <= uncert_idx:
+                    attrs.append(float(uncert[i]))
+                else:
+                    attrs[uncert_idx] = float(uncert[i])
                 feat.setAttributes(attrs)
                 writer.addFeature(feat)
         del writer
@@ -197,11 +206,11 @@ def plot_physics_trend(X, y, mask, mode, path):
     # Trend line strictly inside valid domain to avoid shooting off to infinity
     x_rng = np.linspace(x_pmin - 0.05 * x_span, x_pmax + 0.05 * x_span, 100).reshape(-1, 1)
     if mode == 0:
-        model = LinearRegression().fit(X[mask], y[mask])
+        model = LinearRegression().fit(x_valid, y_valid)
         y_rng = model.predict(x_rng)
     else:
         poly = PolynomialFeatures(degree=2, include_bias=False)
-        model = LinearRegression().fit(poly.fit_transform(X[mask]), y[mask])
+        model = LinearRegression().fit(poly.fit_transform(x_valid), y_valid)
         y_rng = model.predict(poly.transform(x_rng))
 
     plt.plot(x_rng, y_rng, "k-", lw=2, label="Trend Model")

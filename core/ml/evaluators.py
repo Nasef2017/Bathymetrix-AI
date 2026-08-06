@@ -68,6 +68,9 @@ matplotlib.use("Agg")
 OPTIMIZER_LIST = ["Random Search", "Grid Search", "Bayesian Search"]
 
 
+def smooth_idw_weights(distances):
+    return 1.0 / (distances + 1.0)
+
 def parse_param_string(param_str):
     if not param_str or param_str.strip() == "":
         return {}
@@ -111,15 +114,20 @@ def extract_values(ras, vec, fld, mode, logger_file, fb):
 
         for f in vec.getFeatures():
             g = f.geometry()
+            if g.isNull():
+                continue
             g.transform(tr)
-            pt = g.asPoint()
-            r, c = ds.index(pt.x(), pt.y())
-            if 0 <= r < h and 0 <= c < w:
-                val = d[:, r, c]
-                if np.all(np.isfinite(val)) and not np.any(val == -9999):
-                    X_out.append(val)
-                    y_out.append(f[fld])
-                    c_out.append([r, c])
+            try:
+                pt = g.asMultiPoint()[0] if g.isMultipart() else g.asPoint()
+                r, c = ds.index(pt.x(), pt.y())
+                if 0 <= r < h and 0 <= c < w:
+                    val = d[:, r, c]
+                    if np.all(np.isfinite(val)) and not np.any(val == -9999):
+                        X_out.append(val)
+                        y_out.append(f[fld])
+                        c_out.append([r, c])
+            except Exception:
+                continue
 
     return np.array(X_out), np.array(y_out), np.array(c_out)
 
@@ -281,12 +289,30 @@ class RobustSpatialKNN:
     def fit(self, coords_tr, residuals):
         self.coords_tr = coords_tr
         self.residuals = residuals
-        from sklearn.neighbors import KNeighborsRegressor
-        knn = KNeighborsRegressor(n_neighbors=self.n_neighbors, weights="distance")
-        knn.fit(coords_tr, residuals)
-        errors = residuals - knn.predict(coords_tr)
+        from sklearn.neighbors import NearestNeighbors
+        
+        # Use Leave-One-Out (LOO) to calculate true spatial errors
+        k = min(self.n_neighbors + 1, len(coords_tr))
+        nn = NearestNeighbors(n_neighbors=k)
+        nn.fit(coords_tr)
+        dists, indices = nn.kneighbors(coords_tr)
+        
+        # Exclude the point itself (first column is dist=0)
+        loo_dists = dists[:, 1:]
+        loo_indices = indices[:, 1:]
+        
+        # Use a +1.0 smoothing to prevent divide-by-zero & extreme spikes
+        inv_dists = 1.0 / (loo_dists + 1.0)
+        w_sum = np.sum(inv_dists, axis=1, keepdims=True)
+        w_sum[w_sum == 0] = 1.0
+        
+        loo_preds = np.sum(inv_dists * residuals[loo_indices], axis=1) / w_sum.flatten()
+        
+        # Calculate robust Huber weights based on LOO errors
+        errors = residuals - loo_preds
         mad = np.median(np.abs(errors))
         scale = 1.4826 * mad if mad > 0 else 1e-4
+        
         self.huber_w = np.clip(1.35 * scale / (np.abs(errors) + 1e-6), 0.0, 1.0)
         return self
 
@@ -295,10 +321,13 @@ class RobustSpatialKNN:
         nn = NearestNeighbors(n_neighbors=self.n_neighbors)
         nn.fit(self.coords_tr)
         dists, indices = nn.kneighbors(X_query)
-        inv_dists = 1.0 / (dists + 1e-6)
+        
+        # Use +1.0 smoothing here too so Huber weights can effectively downweight outliers
+        inv_dists = 1.0 / (dists + 1.0)
         w = inv_dists * self.huber_w[indices]
         w_sum = np.sum(w, axis=1, keepdims=True)
         w_sum[w_sum == 0] = 1.0
+        
         predictions = np.sum(w * self.residuals[indices], axis=1) / w_sum.flatten()
         return predictions
 
@@ -423,7 +452,10 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
             "Not enough points for Module 4 (Spatial Refinement)."
         )
 
-    residuals = z_true.flatten() - z_pred3.flatten()
+    raw_residuals = z_true.flatten() - z_pred3.flatten()
+    mean_bias = float(np.mean(raw_residuals))
+    append_log(f"   [Phase 04] Raw mean residual offset: {mean_bias:.4f}m (Zero-mean centered for temporal consistency)", log_path, feedback)
+    residuals = raw_residuals - mean_bias
 
     try:
         interp_idx = algorithm.parameterAsEnum(parameters, "RESIDUAL_INTERP_METHOD", context)
@@ -443,7 +475,7 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
     if interp_idx == 0:
         interp_name = "KNN Standard"
         append_log(f"   Fitting Standard Spatial KNN (K={knn_k})...", log_path, feedback)
-        spatial_model = KNeighborsRegressor(n_neighbors=knn_k, weights="distance", n_jobs=n_jobs)
+        spatial_model = KNeighborsRegressor(n_neighbors=knn_k, weights=smooth_idw_weights, n_jobs=n_jobs)
         spatial_model.fit(coords_tr, residuals)
     elif interp_idx == 1:
         interp_name = "KNN Robust"
@@ -554,8 +586,12 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
             final_map[valid_mask] = residual_grid[valid_mask]
             
         if med_size > 0 and scipy_is_available:
+            from scipy.ndimage import distance_transform_edt
             temp = final_map.copy()
-            temp[~valid_mask] = np.nan
+            invalid = ~valid_mask
+            if np.any(invalid):
+                dist, inds = distance_transform_edt(invalid, return_indices=True)
+                temp[invalid] = temp[inds[0][invalid], inds[1][invalid]]
             filtered = median_filter(temp, size=med_size)
             final_map[valid_mask] = filtered[valid_mask]
 
@@ -578,7 +614,7 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
             abs_math_residuals = np.abs(math_residuals) * 1.96
             
             if interp_idx == 0:
-                spatial_uncert_model = KNeighborsRegressor(n_neighbors=knn_k, weights="distance", n_jobs=n_jobs)
+                spatial_uncert_model = KNeighborsRegressor(n_neighbors=knn_k, weights=smooth_idw_weights, n_jobs=n_jobs)
             elif interp_idx == 1:
                 spatial_uncert_model = RobustSpatialKNN(n_neighbors=knn_k)
             else:
@@ -848,7 +884,7 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
 
     try:
         ens_idx = algorithm.parameterAsEnum(parameters, "ENSEMBLE_METHOD", context)
-        ens_map = {0: "Average", 1: "Median", 2: "Stacking"}
+        ens_map = {0: "Average", 1: "Median", 2: "Stacking", 3: "Uncertainty-Weighted Fusion"}
         ensemble_method = ens_map.get(ens_idx, "Average")
     except Exception:
         ensemble_method = "Average"

@@ -3,10 +3,10 @@ icon=icon.png
 name=Bathymetrix-AI
 qgisMinimumVersion=3.22
 qgisMaximumVersion=4.99
-version=6.4
+version=6.5
 author=Mohamed Aly Nasef
 email=Eng.m.nasef2017@gmail.com
-description=An advanced Machine Learning pipeline for Satellite-Derived Bathymetry (SDB). Features ICESat-2 integration, In-Situ Data filtering, Spatial Residual Stacking, and Multi-Year Coastal Dynamics.
+description=An advanced Machine Learning pipeline for Satellite-Derived Bathymetry (SDB). Features ICESat-2 integration, In-Situ Data filtering, Zero-Mean LOO Residual Refinement, Quantile Regression Uncertainty, Target ROI Sediment Analytics, and Multi-Year Coastal Dynamics.
 
 about=<h3>Bathymetrix-AI: Advanced SDB Modeling & Coastal Dynamics</h3>
     <p><b>Bathymetrix-AI</b> is a specialized QGIS research toolkit designed to derive high-precision bathymetry from corrected multispectral satellite imagery. It systematically integrates physics-based corrections with data-driven Machine Learning to overcome traditional SDB limitations, and features a state-of-the-art Temporal Intelligence engine for coastal monitoring.</p>
@@ -14,15 +14,15 @@ about=<h3>Bathymetrix-AI: Advanced SDB Modeling & Coastal Dynamics</h3>
     <p><b>Core Workflow (The 5-Phase System):</b></p>
     <ul>
         <li><b>Phase 01: Advanced Pre-processing:</b> Sun-glint correction (Hedley), <b>Advanced Water Masking</b> using 3-Indices (NDWI, MNDWI, NWI), physics-based Log-Ratio features computation (including NDWI, Log(Green)/Log(NIR), Log(Red)/Log(NIR)), and a <b>Deep Water Filter</b> customized for ML algorithms (featuring dynamic Elbow Point Detection and Polygon masking).</li>
-        <li><b>Phase 02: Robust Filtering:</b> Noise removal using Linear RANSAC, LS Variance Fit, or Huber Variance Fit (Zhang et al., 2021).</li>
+        <li><b>Phase 02: Robust Filtering:</b> Noise removal using Linear RANSAC, LS Variance Fit, or Huber Variance Fit (Zhang et al., 2021). Features multi-band robust percentile optical scaling.</li>
         <li><b>Phase 03: Global Auto-ML & Feature Analysis:</b> Optional feature correlation analysis (<b>Automatic-RANSAC, Automatic-Random Forest</b>), competitive benchmarking of <b>15+ ML algorithms</b> (including XGBoost, LightGBM, CatBoost), independent <b>Spatial Cross-Validation</b>, and hyperparameter optimization via Random Search, Grid Search, or Bayesian. Features automated chunk-based processing to prevent memory errors with large datasets.</li>
-        <li><b>Phase 04: Adaptive Refinement:</b> Spatially localized corrections, independent <b>Spatial Cross-Validation</b>, and residual analysis (Alevizos, 2020) to fix local biases.</li>
-        <li><b>Phase 05: Validation & Reporting:</b> Independent accuracy assessment on unseen test data.</li>
+        <li><b>Phase 04: Adaptive Refinement:</b> Zero-mean centered spatial residual corrections, Leave-One-Out (LOO) robust Huber weighting, $1/(d+1)$ smoothed IDW weighting, independent <b>Spatial Cross-Validation</b>, and empirical residual uncertainty modeling (Alevizos, 2020) to eliminate local spatial biases.</li>
+        <li><b>Phase 05: Validation & Reporting:</b> Independent accuracy assessment on unseen test data and IHO Order 1a/2 TVU compliance reporting.</li>
     </ul>
 
     <p><b>Standalone Modules:</b></p>
     <ul>
-        <li><b>Coastal Dynamics (Temporal Intelligence):</b> Multi-year <b>Volumetric Erosion/Accretion Trend</b> using Linear Regression, <b>Morphological Stability Index (MSI)</b>, and <b>Shoreline Migration Polygons</b>. Features auto-detection of depth/elevation formats and automated HTML reporting.</li>
+        <li><b>Coastal Dynamics (Temporal Intelligence):</b> Multi-year <b>Volumetric Erosion/Accretion Trend</b> using Linear Regression, <b>Target ROI Sub-Region Polygon Analytics</b>, <b>Quantile Regression (Adaptive σ) Uncertainty</b>, <b>Morphological Stability Index (MSI)</b>, and <b>Shoreline Migration Polygons</b>. Features auto-detection of depth/elevation formats, full process logging, and automated HTML reporting.</li>
         <li><b>ICESat-2 Downloader:</b> Specialized tool for querying and downloading ICESat-2 (ATL24) LiDAR data directly from NSIDC.</li>
     </ul>
 
@@ -43,6 +43,6 @@ homepage=https://github.com/Nasef2017/Bathymetrix-AI
 repository=https://github.com/Nasef2017/Bathymetrix-AI
 tracker=https://github.com/Nasef2017/Bathymetrix-AI/issues
 
-tags=sdb,bathymetry,machine learning,icesat-2,ransac,spatial correction,remote sensing,hydrography,satellite imagery,python,coastal dynamics,volumetric change
+tags=sdb,bathymetry,machine learning,icesat-2,ransac,spatial correction,remote sensing,hydrography,satellite imagery,python,coastal dynamics,volumetric change,quantile regression
 category=Raster
-changelog=v6.4: Added Coastal Dynamics Analysis (Linear Regression Volumetric Trends, MSI, Shoreline Change), New Band Indices (NDWI, Log(G/NIR), Log(R/NIR)), Dynamic Elbow Point OSW Filtering, Memory-efficient chunk-based ML prediction, Dynamic Outlier-Robust Plotting, and safe CRS reprojection.
+changelog=v6.5: Added Uncertainty-Weighted Pixel Fusion Ensemble Blending, Spatially-Adaptive Quantile Regression Uncertainty Mode, Target ROI Sub-Region Volumetric Polygon Analytics, Zero-Mean Centered Residual Refinement with LOO Robust Huber & Smoothed IDW Weighting, Native QGIS GIS Geometry Processing, and Automated Full Process File Logging.

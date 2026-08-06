@@ -200,7 +200,7 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
         p_ens_meth = QgsProcessingParameterEnum(
             self.ENSEMBLE_METHOD,
             "📊 Ensemble Blending Method",
-            options=["Average", "Median", "Stacking"],
+            options=["Average", "Median", "Stacking", "Uncertainty-Weighted Fusion"],
             defaultValue=0,
         )
         p_ens_meth.setFlags(p_ens_meth.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
@@ -374,18 +374,19 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
         return """
         <div style="font-family: Arial, sans-serif; line-height: 1.2;">
             <h2 style="margin-bottom: 5px;">📍 <span style="color: #2E86C1;">SDB Module 04</span>: Spatial Refinement</h2>
-            <p style="margin-top: 0; margin-bottom: 10px;">Corrects local biases and spatially varying errors using Residual Analysis (Stacking).</p>
+            <p style="margin-top: 0; margin-bottom: 10px;">Corrects local biases and spatially varying errors using Zero-Mean Centered Residual Analysis and Empirical Uncertainty Modeling.</p>
 
-            <b style="display: block; margin-bottom: 2px;">📉 Residual Analysis</b>
+            <b style="display: block; margin-bottom: 2px;">📉 Zero-Mean Residual Analysis & LOO Huber Interpolation</b>
             <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li>Calculates the error <i>(Residual = True Depth - Phase 03 Depth)</i> at training points.</li>
-                <li>Uses <b>KNN Spatial Interpolation</b> to create a continuous "Error Grid" across the entire image.</li>
+                <li>Subtracts mean residual offset (Zero-Mean Centering) to eliminate global drift.</li>
+                <li>Uses <b>Leave-One-Out (LOO) Robust Huber Weighting</b> and <b>Smoothed IDW Distance Decay (1 / (d + 1.0))</b> to create a spike-free continuous "Error Surface".</li>
             </ul>
 
-            <b style="display: block; margin-bottom: 2px;">📚 Stacked Learning</b>
+            <b style="display: block; margin-bottom: 2px;">📚 Stacked Learning & Empirical Uncertainty</b>
             <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
                 <li>Combines: <b>[Original Bands] + [Global Depth] + [Error Grid]</b>.</li>
-                <li>Trains a secondary "Refinement Model" (using selected algorithms & custom hyperparameters) to predict the final, corrected bathymetry.</li>
+                <li>Trains a secondary "Refinement Model" to predict the final, corrected bathymetry.</li>
+                <li>Generates an <b>Empirical Residual Uncertainty Map (95% Confidence)</b> to evaluate spatial prediction quality across every pixel.</li>
             </ul>
         </div>
         """

@@ -229,14 +229,16 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
 
             <b style="display: block; margin-bottom: 2px;">📍 Phase 04: Localized Adaptive Refinement</b>
             <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li><b>Residual Modeling:</b> Map local errors using Standard KNN, Robust KNN (Huber), or Kriging/GPR.</li>
-                <li><b>Flexible Refinement Stack:</b> Retrain on depth map, error grid, or full feature stack (unchecked by default).</li>
+                <li><b>Zero-Mean Residual Modeling:</b> Eliminates mean bias drift, mapping local errors using LOO Robust Huber Weighting and Smoothed IDW (1 / (d + 1.0)).</li>
+                <li><b>Empirical Residual Uncertainty:</b> Generates 95% Confidence Spatial Uncertainty Raster Map (4-Refined_Uncertainty.tif).</li>
+                <li><b>Flexible Refinement Stack:</b> Retrain on depth map, error grid, or full feature stack.</li>
                 <li><b>Ensemble Blending:</b> Blend top models for localized spatial corrections.</li>
             </ul>
 
-            <b style="display: block; margin-bottom: 2px;">📉 Phase 05: Scientific Validation</b>
+            <b style="display: block; margin-bottom: 2px;">📉 Phase 05: Scientific Validation & IHO Compliance</b>
             <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
                 <li><b>Accuracy Reports:</b> Computes RMSE, R², MAE, and wMAPE against unseen validation points.</li>
+                <li><b>IHO TVU Compliance:</b> Evaluates prediction uncertainty against International Hydrographic Organization (IHO) Order 1a/2 Total Vertical Uncertainty standards.</li>
                 <li><b>Visual Diagnostics:</b> Auto-generates density scatter, residuals, and error histogram plots.</li>
             </ul>
 
@@ -261,14 +263,14 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         """
 
     def helpString(self):
-        return """<b>SDB Master Workflow (Full Pipeline)</b><br><br>
+        return """<b>SDB Master Workflow (Full Pipeline - v6.5)</b><br><br>
         This tool executes a complete Auto-ML pipeline for Satellite-Derived Bathymetry (SDB) using a 5-phase scientific methodology.<br><br>
         <b>Outputs Explained:</b><br>
         • <b>Phase 01:</b> Outputs intermediate feature layers including sun-glint corrected bands, water masks, and physical log-ratio features.<br>
         • <b>Phase 02:</b> Outputs the filtered and robust ground truth altimetry data (e.g., ICESat-2).<br>
         • <b>Phase 03 (Initial SDB Map):</b> The base depth map produced after global machine learning benchmarking and hyperparameter optimization.<br>
-        • <b>Phase 04 (Refined SDB Map):</b> The final, highly accurate depth map after applying adaptive localized corrections based on spatial residual analysis.<br>
-        • <b>Phase 05 (Validation):</b> Outputs comprehensive accuracy assessment reports and error distribution charts.<br><br>
+        • <b>Phase 04 (Refined SDB Map & Uncertainty):</b> The final, highly accurate depth map after applying zero-mean centered LOO-IDW spatial residual corrections, along with a 95% spatial prediction uncertainty map.<br>
+        • <b>Phase 05 (Validation & IHO Compliance):</b> Outputs comprehensive accuracy assessment reports, IHO Order 1a/2 compliance evaluation, and error distribution charts.<br><br>
         <i>* Note: All output files are automatically saved to your specified 'Main Output Folder' and loaded cleanly into the map canvas upon completion.</i>
         """
 
@@ -646,7 +648,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
             QgsProcessingParameterEnum(
                 self.ENSEMBLE_METHOD,
                 "📊 [3] Ensemble Blending Method",
-                options=["Average", "Median", "Stacking"],
+                options=["Average", "Median", "Stacking", "Uncertainty-Weighted Fusion"],
                 defaultValue=0,
             )
         )
@@ -850,7 +852,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         p_ens_meth_p4 = QgsProcessingParameterEnum(
             self.ENSEMBLE_METHOD_P4,
             "📊 [Phase 04] Ensemble Blending Method",
-            options=["Average", "Median", "Stacking"],
+            options=["Average", "Median", "Stacking", "Uncertainty-Weighted Fusion"],
             defaultValue=0,
         )
         p_ens_meth_p4.setFlags(p_ens_meth_p4.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
