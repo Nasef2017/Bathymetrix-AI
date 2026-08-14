@@ -31,9 +31,19 @@ from .algorithms.ICESAT_V25 import SlideRuleFinalTool
 # 9. Tidal Datum
 from .algorithms.Tidal_Datum_Converter import TidalDatumConverter
 
-# 10. Temporal Intelligence (Multi-Year System)
-from .algorithms.SDB_Temporal_Intelligence import SDBTemporalIntelligence
+# 10. Temporal Intelligence (Multi-Year System) - REMOVED
 
+# 11. Spatiotemporal Flow
+from .algorithms.SDB_Spatiotemporal_Flow import SDBSpatiotemporalFlow
+
+# 11.5 SpatioSpectral Flow
+from .algorithms.SDB_SpatioSpectral_Flow import SDBSpatioSpectralFlow
+
+# 12. Coastal Dynamics Analysis
+from .algorithms.SDB_06_Coastal_Dynamics import SDBCoastalDynamics
+
+# 13. Post-SpatioSpectral Aggregator
+from .algorithms.SDB_07_SpatioSpectral_Aggregator import PostSpatioSpectralAggregator
 
 class SdbProvider(QgsProcessingProvider):
 
@@ -55,7 +65,11 @@ class SdbProvider(QgsProcessingProvider):
 
         self.addAlgorithm(SlideRuleFinalTool())
         self.addAlgorithm(TidalDatumConverter())
-        self.addAlgorithm(SDBTemporalIntelligence())
+
+        self.addAlgorithm(SDBSpatiotemporalFlow())
+        self.addAlgorithm(SDBSpatioSpectralFlow())
+        self.addAlgorithm(SDBCoastalDynamics())
+        self.addAlgorithm(PostSpatioSpectralAggregator())
 
     def id(self):
         return "sdb_tools"

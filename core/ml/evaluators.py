@@ -104,6 +104,22 @@ def convert_to_bayes(params_dict):
 
 
 def extract_values(ras, vec, fld, mode, logger_file, fb):
+    from qgis.PyQt.QtCore import QVariant
+    from Bathymetrix_AI.infrastructure.logging import append_log
+    
+    fields = vec.fields()
+    if not fld or fld not in fields.names():
+        numeric_types = [QVariant.Int, QVariant.Double, QVariant.LongLong]
+        found = False
+        for field in fields:
+            if field.type() in numeric_types:
+                fld = field.name()
+                append_log(f"   [Warning] Target field not specified/found. Auto-selected numeric field: {fld}", logger_file, fb)
+                found = True
+                break
+        if not found:
+            raise ValueError(f"No valid numeric depth field found in {vec.name()}!")
+
     with rasterio.open(ras) as ds:
         d = ds.read()
         h, w = ds.height, ds.width
@@ -482,7 +498,7 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
         append_log(f"   Fitting Robust Spatial KNN (Huber weights, K={knn_k})...", log_path, feedback)
         spatial_model = RobustSpatialKNN(n_neighbors=knn_k)
         spatial_model.fit(coords_tr, residuals)
-    else:
+    elif interp_idx == 2:
         interp_name = "Kriging/GP"
         append_log("   Fitting Gaussian Process Regression (Kriging)...", log_path, feedback)
         if len(coords_tr) > max_gpr_samples:
@@ -505,14 +521,16 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
             mask_arr = m.read(1)
             meta = m.profile
             h, w = m.height, m.width
-        water_indices = np.where(mask_arr == 1)
     else:
         with rasterio.open(global_path) as m:
             meta = m.profile
             h, w = m.height, m.width
         mask_arr = np.ones((h, w), dtype=np.uint8)
-        water_indices = np.where(mask_arr == 1)
+
+    with rasterio.open(global_path) as g:
+        p3_map = g.read(1)
         
+    water_indices = np.where((mask_arr > 0) & (p3_map != -9999.0))
     water_coords = np.column_stack((water_indices[0], water_indices[1]))
 
     residual_grid = np.zeros((h, w), dtype="float32")
@@ -548,8 +566,6 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
                     feat_names.append(f"Band_{i+1}")
         except Exception:
             feat_names = [f"Band_{i+1}" for i in range(orig_bands.shape[0])]
-    with rasterio.open(global_path) as g:
-        p3_map = g.read(1)
 
     try:
         stack_comps = algorithm.parameterAsEnums(parameters, "STACK_COMPONENTS", context)
@@ -576,7 +592,9 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
         append_log("   Computing final depth purely using Spatial Addition (Phase 03 Map + Residual Grid).", log_path, feedback)
         
         final_map = np.full((h, w), -9999.0, dtype="float32")
-        valid_mask = p3_map != -9999.0
+        valid_mask = (p3_map != -9999.0)
+        if mask_path and str(mask_path).strip() and mask_path != "None":
+            valid_mask = valid_mask & (mask_arr > 0)
         
         if 1 in stack_comps and 2 in stack_comps:
             final_map[valid_mask] = p3_map[valid_mask] + residual_grid[valid_mask]
@@ -816,7 +834,8 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
             append_log(f"   [Warning] No bands met threshold {corr_threshold:.3f}. Using all bands.", log_path, feedback)
             selected_indices = np.arange(num_bands)
         else:
-            append_log(f"   [Feature Analysis] Selected {len(selected_indices)} bands: {list(selected_indices)}", log_path, feedback)
+            selected_indices_list = [int(x) for x in selected_indices]
+            append_log(f"   [Feature Analysis] Selected {len(selected_indices)} bands: {selected_indices_list}", log_path, feedback)
             X_final = X_final[:, selected_indices]
             
         report_path = os.path.join(out_dir, "4_Feature_Analysis_Report.txt")

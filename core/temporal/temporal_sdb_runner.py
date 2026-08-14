@@ -130,10 +130,10 @@ class TemporalSDBRunner:
             run_params["FIELD_ADAPTIVE_DEPTH"] = self._resolve_depth_field(
                 year_info["control_path"], ui_adaptive_depth, feedback
             )
-            feedback.pushInfo(f"🎯 Control Points found for {year}: Phase 04 Adaptive Refinement ENABLED.")
+            feedback.pushInfo(f"🎯 Control Points found for {year}: Phase 04 Depth-Dependent Residual Calibration ENABLED.")
         else:
             run_params["ENABLE_ADAPTIVE"] = False
-            feedback.pushInfo(f"⏭️ No Control Points found for {year}: Phase 04 Adaptive Refinement SKIPPED.")
+            feedback.pushInfo(f"⏭️ No Control Points found for {year}: Phase 04 Depth-Dependent Residual Calibration SKIPPED.")
 
         if unseen_year_layer_path:
             run_params["ENABLE_VALIDATION"] = True

@@ -25,17 +25,7 @@ def resolve_depth_field(vector_layer, requested_field: str) -> str:
     if not field_names:
         return requested_field
 
-    # 1. Exact match
-    if requested_field in field_names:
-        return requested_field
-
-    # 2. Case-insensitive match
-    req_lower = requested_field.lower()
-    for f in field_names:
-        if f.lower() == req_lower:
-            return f
-
-    # 3. Known bathymetry depth field candidates
+    # Known bathymetry depth field candidates
     candidates = [
         "ortho_h",
         "h_mean",
@@ -48,6 +38,32 @@ def resolve_depth_field(vector_layer, requested_field: str) -> str:
         "value",
         "grid_code",
     ]
+
+    # 1. Exact match (Strictly respect user choice unless it's a known bad default)
+    # If the field is a known metadata field (usually auto-selected by QGIS as the first column),
+    # we override it ONLY if a better depth candidate exists.
+    bad_defaults = ["confidence", "fid", "id", "objectid", "track", "beam", "pair", "time", "date"]
+    
+    if requested_field.lower() in bad_defaults:
+        # Smart Override: Try to find a real depth candidate instead of the bad default
+        for cand in candidates:
+            for f in field_names:
+                if cand in f.lower():
+                    # Found a better candidate! Override the bad default.
+                    return f
+                    
+    # If not a bad default (e.g. user selected 'my_custom_depth'), or no better candidate was found,
+    # we STRICTLY respect the user's choice.
+    if requested_field in field_names:
+        return requested_field
+
+    # 2. Case-insensitive match
+    req_lower = requested_field.lower()
+    for f in field_names:
+        if f.lower() == req_lower:
+            return f
+
+    # 3. Fallback to first candidate match
     for cand in candidates:
         for f in field_names:
             if cand in f.lower():

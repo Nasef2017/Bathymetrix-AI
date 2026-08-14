@@ -3,7 +3,7 @@
 NODATA_VALUE = -9999.0
 
 # Masking Methods
-MASK_METHODS_NAMES = ["Otsu (Automatic NDWI)", "Manual NDWI Threshold"]
+MASK_METHODS_NAMES = ["Otsu (Automatic NDWI)", "Manual NDWI Threshold", "3 Indices Equation (NDWI, MNDWI, NWI)", "Smart Hybrid (Dynamic Auto)"]
 
 # Filtering Modes
 FILTER_MODES_NAMES = ["Linear RANSAC", "LS Variance Fit", "Huber Variance Fit"]

@@ -8,10 +8,27 @@ from qgis.core import QgsProcessingFeedback
 
 class TemporalAnalyticsEngine:
     """
-    Multi-Year Coastal Intelligence Engine:
-    - StatCD Hypothesis-Tested Bathymetric Change Detection (Z-score significance)
-    - Sediment Mass Balance & Volume Change (in m³)
-    - Morphological Stability Index Map (MSI)
+    Core Mathematical Engine for Coastal Dynamics & Temporal Intelligence.
+    
+    This engine computes the physical evolution of coastal bathymetry over time using 
+    spatially-aware map algebra, linear regression, and morphological stability indices.
+
+    ### Key Mathematical Models Implemented:
+    1. **Volumetric Sediment Change (Linear Regression):**
+       - $Z_{diff} = Z_{obs} - \bar{Z}$
+       - $\text{Slope} = \frac{\sum (T_{diff} \times Z_{diff})}{\sum (T_{diff}^2)}$
+       - Volume calculation includes Auto-Detection of Depth vs Elevation via `np.nanmean(z) > 0`.
+    
+    2. **Morphological Stability Index (MSI):**
+       - $MSI = 1.0 - \frac{\sigma_{true}}{|\mu| + 0.5}$
+       - Where $\sigma_{true} = \sqrt{\max(0, \sigma_{obs}^2 - \bar{\sigma}_u^2)}$
+       - Differentiates between true morphological volatility and inherent SDB model noise.
+
+    3. **Statistical Level of Detection (StatCD):**
+       - Enforces a volumetric noise floor. $\Delta Z$ must exceed $U_{comb}$.
+       - **Classical:** $U_{comb} = 1.96 \times \sqrt{\sigma_1^2 + \sigma_2^2}$
+       - **MAD:** $U_{comb} = 1.4826 \times \text{MAD}$
+       - **Quantile:** $U_{comb} = (q_{upper} - q_{lower}) / 1.349$
     """
 
     def _estimate_qr_sigma(self, sdb_raster_path, icesat_shp_path, depth_field, qr_alpha, feedback):
@@ -91,11 +108,47 @@ class TemporalAnalyticsEngine:
             feedback.pushWarning(f"⚠️ Quantile Regression failed for {os.path.basename(sdb_raster_path)}: {str(e)}. Falling back to Classical.")
             return None
 
-    def _compute_pair(self, y1, y2, sdb_maps, uncertainty_maps, output_dir, feedback, osw_shp, is_overall=False, all_years=None, overall_trend_method="Long-term Trend", analysis_type="Sequential", target_roi_path=None, uncertainty_mode="classical", qr_confidence=0.95, qr_sigma_1=None, qr_sigma_2=None):
+    def _calculate_otsu_threshold(self, data_array, data_min=0.0, data_max=1.0):
+        valid_data = data_array[(data_array >= data_min) & (data_array <= data_max) & ~np.isnan(data_array)]
+        if len(valid_data) == 0:
+            return (data_min + data_max) / 2.0
+            
+        hist, bin_edges = np.histogram(valid_data, bins=256, range=(data_min, data_max))
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
+        
+        weight1 = np.cumsum(hist)
+        weight2 = np.cumsum(hist[::-1])[::-1]
+        
+        mean1 = np.divide(np.cumsum(hist * bin_centers), weight1, out=np.zeros_like(weight1, dtype=float), where=weight1!=0)
+        mean2 = np.divide(np.cumsum((hist * bin_centers)[::-1]), weight2[::-1], out=np.zeros_like(weight2, dtype=float), where=weight2[::-1]!=0)[::-1]
+        
+        variance12 = weight1[:-1] * weight2[1:] * (mean1[:-1] - mean2[1:]) ** 2
+        idx = np.argmax(variance12)
+        return bin_centers[idx]
+
+    def _compute_pair(self, y1, y2, sdb_maps, uncertainty_maps, output_dir, feedback, osw_shp, is_overall=False, all_years=None, overall_trend_method="Long-term Trend", analysis_type="Sequential", target_roi_path=None, uncertainty_mode="classical", qr_confidence=0.95, qr_sigma_1=None, qr_sigma_2=None, uncert_thresh_mode="Auto", uncert_thresh=0.15, depth_noise_factor=0.10, max_analyzed_depth=20.0, msi_mode="Auto", msi_threshold=0.75):
+        """
+        Computes the spatiotemporal evolution between two epochs (y1, y2) or across a multi-year series.
+        
+        Logic Flow:
+        1. **Reprojection & Alignment:** Resamples `z2` to perfectly align with `z1` grid.
+        2. **Valid Masking:** Computes the common coverage area `(z1 != nodata) & (z2 != nodata)`.
+        3. **MSI Computation:** Calculates the temporal volatility (Standard Deviation / Mean) normalized against input noise.
+        4. **Trend Calculation:** If multi-year, applies Linear Regression to compute $\Delta Z$. Otherwise, $\Delta Z = z2 - z1$.
+        5. **Volumetric Masking (StatCD):** Applies the Uncertainty Threshold ($U_{comb}$) to nullify statistically insignificant changes.
+        6. **Auto-Depth Formatting:** Analyzes `np.nanmean(z1)` to determine if input is Depth (Positive) or Elevation (Negative), and scales outputs accordingly.
+        7. **File Generation:** Exports Raster maps and Shoreline vector polygons.
+        """
         from rasterio.warp import reproject, Resampling
         
-        statcd_raster_path = os.path.join(output_dir, f"Volumetric_Erosion_Accretion_{y1}_{y2}.tif")
-        msi_raster_path = os.path.join(output_dir, f"Morphological_Stability_Index_{y1}_{y2}.tif")
+        if is_overall and all_years and len(all_years) > 2 and overall_trend_method == "Long-term Trend":
+            period_str = f"Long-Term_Trend_({all_years[0]}-{all_years[-1]})"
+            statcd_raster_path = os.path.join(output_dir, f"Volumetric_Erosion_Accretion_{period_str}.tif")
+            msi_raster_path = os.path.join(output_dir, f"Morphological_Stability_Index_{period_str}.tif")
+        else:
+            period_str = f"{y1}_{y2}"
+            statcd_raster_path = os.path.join(output_dir, f"Volumetric_Erosion_Accretion_{period_str}.tif")
+            msi_raster_path = os.path.join(output_dir, f"Morphological_Stability_Index_{period_str}.tif")
 
         with rasterio.open(sdb_maps[y1]) as src_1, rasterio.open(sdb_maps[y2]) as src_2:
             z1 = src_1.read(1).astype(np.float32)
@@ -125,7 +178,7 @@ class TemporalAnalyticsEngine:
 
             abs_z1 = np.abs(z1)
             abs_z2 = np.abs(z2)
-            valid = (abs_z1 > 0.1) & (abs_z2 > 0.1) & (z1 != nodata_1) & (z2 != nodata_2) & (abs_z1 < 40) & (abs_z2 < 40)
+            valid = (abs_z1 > 0.1) & (abs_z2 > 0.1) & (z1 != nodata_1) & (z2 != nodata_2) & (abs_z1 < 15000) & (abs_z2 < 15000)
 
             from rasterio.features import rasterize
             import json
@@ -203,8 +256,15 @@ class TemporalAnalyticsEngine:
 
             # MSI and Robust Trend Prep
             z_stack = []
-            years_to_stack = all_years if is_overall and all_years else [y1, y2]
-            
+            if overall_trend_method == "Long-term Trend":
+                if is_overall:
+                    years_to_stack = all_years if all_years else [y1, y2]
+                elif analysis_type == "Baseline Reference":
+                    years_to_stack = [y for y in all_years if y1 <= y <= y2] if all_years else [y1, y2]
+                else:
+                    years_to_stack = [y1, y2]
+            else:
+                years_to_stack = [y1, y2]            
             for yr in years_to_stack:
                 if yr == y1:
                     z_stack.append(z1)
@@ -228,6 +288,12 @@ class TemporalAnalyticsEngine:
             z_arr[z_arr == -9999.0] = np.nan
             z_arr[z_arr == nodata_1] = np.nan
             z_arr[z_arr == nodata_2] = np.nan
+            z_arr[z_arr < -10000] = np.nan
+            z_arr[z_arr > 10000] = np.nan
+            z_arr[~np.isfinite(z_arr)] = np.nan
+            z_arr[np.abs(z_arr) > 15000] = np.nan
+            
+            valid_mask = np.all(np.abs(z_arr) > 0.1, axis=0) & np.all(~np.isnan(z_arr), axis=0)
             
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", category=RuntimeWarning)
@@ -237,16 +303,26 @@ class TemporalAnalyticsEngine:
             z_mean[np.isnan(z_mean) | (z_mean == 0)] = 0.001
             z_std[np.isnan(z_std)] = 0.0
 
-            # Delta Z calculation (Robust Linear Regression if overall trend)
+            # MSI Calculation
+            sigma_u_mean_sq = (u1**2 + u2**2) / 2.0
+            z_obs_var = z_std**2
+            z_true_var = np.maximum(0.0, z_obs_var - sigma_u_mean_sq)
+            z_true_std = np.sqrt(z_true_var)
+            msi = np.full_like(z1, -9999.0, dtype=np.float32)
+            msi[valid] = np.clip(1.0 - (z_true_std[valid] / (np.abs(z_mean[valid]) + 0.5)), 0.0, 1.0)
+            profile_float = src_1.profile.copy()
+            profile_float.update(count=1, dtype=rasterio.float32, nodata=-9999.0, compress="lzw")
+            with rasterio.open(msi_raster_path, "w", **profile_float) as dst:
+                dst.write(msi, 1)
+
             delta_z = np.zeros_like(z1)
-            sigma_delta = np.zeros_like(z1)
+            filtered_delta_z = np.zeros_like(z1)
             
-            if is_overall and all_years and len(all_years) > 2 and overall_trend_method == "Long-term Trend":
-                # Linear Regression: delta_z = slope * total_years
-                t = np.array(years_to_stack) - years_to_stack[0] # time in years
+            if len(years_to_stack) > 2 and overall_trend_method == "Long-term Trend":
+                t = np.array(years_to_stack) - years_to_stack[0]
                 t_mean = np.mean(t)
                 t_diff = t - t_mean
-                t_diff_2d = t_diff[:, None, None] # Broadcast to (N, H, W)
+                t_diff_2d = t_diff[:, None, None]
                 
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore", category=RuntimeWarning)
@@ -254,60 +330,59 @@ class TemporalAnalyticsEngine:
                     numerator = np.nansum(t_diff_2d * z_diff, axis=0)
                     denominator = np.sum(t_diff**2)
                     slope = numerator / denominator
-                    
-                    # Standard Error of the Regression Slope
-                    y_hat = z_mean + slope * t_diff_2d
-                    residuals = z_arr - y_hat
-                    n = len(years_to_stack)
-                    ss_res = np.nansum(residuals**2, axis=0)
-                    # Add epsilon to denominator to avoid division by zero
-                    se_slope = np.sqrt(ss_res / max(n - 2, 1)) / np.sqrt(denominator + 1e-6)
                 
                 slope[np.isnan(slope) | np.isinf(slope)] = 0.0
-                se_slope[np.isnan(se_slope) | np.isinf(se_slope)] = 0.001
-                
                 total_years = years_to_stack[-1] - years_to_stack[0]
                 delta_z[valid] = slope[valid] * total_years
-                sigma_delta[valid] = se_slope[valid] * total_years
             else:
-                # Sequential simple difference OR Net Difference for overall trend
                 delta_z[valid] = z2[valid] - z1[valid]
-                
-                if uncertainty_mode == "quantile_regression" and qr_sigma_1 is not None and qr_sigma_2 is not None:
-                    sigma_delta[valid] = np.sqrt(qr_sigma_1[valid]**2 + qr_sigma_2[valid]**2)
-                    sigma_delta[valid] = np.maximum(sigma_delta[valid], 0.05) # Floor
-                else:
-                    sigma_delta[valid] = np.sqrt(u1[valid]**2 + u2[valid]**2)
 
-            sigma_delta[sigma_delta == 0] = 0.001
-
-            from scipy import stats
-            z_crit = stats.norm.ppf(1 - (1 - qr_confidence) / 2) if uncertainty_mode == "quantile_regression" else 1.96
-
-            z_score = np.zeros_like(z1)
-            z_score[valid] = delta_z[valid] / sigma_delta[valid]
-
-            statcd_class = np.full(z1.shape, 255, dtype=np.uint8)
-            statcd_class[valid] = 1
-
-            # Determine if map is Positive (Depth) or Negative (Elevation)
-            is_positive_depth = np.nanmean(z1[valid]) > 0
-
-            # If Depth is positive (e.g., 5m -> 15m means getting deeper)
-            #   delta_z > 0 is Erosion
-            #   delta_z < 0 is Accretion
-            # If Depth is negative (e.g., -5m -> -15m means getting deeper)
-            #   delta_z < 0 is Erosion
-            #   delta_z > 0 is Accretion
-            
-            if is_positive_depth:
-                true_accretion = valid & (z_score < -z_crit)
-                true_erosion = valid & (z_score > z_crit)
+            # 1. MSI Logic (Completely Independent)
+            if msi_mode == "Auto":
+                actual_msi_thresh = self._calculate_otsu_threshold(msi[valid], 0.0, 1.0)
+                feedback.pushInfo(f"🧠 MSI Auto-Classifier (Otsu) applied for {y1}->{y2}. Optimal Threshold = {actual_msi_thresh:.3f}")
             else:
-                true_accretion = valid & (z_score > z_crit)
-                true_erosion = valid & (z_score < -z_crit)
+                actual_msi_thresh = msi_threshold
 
-            # Apply Spatial Coherence Filter (Minimum Mapping Unit - MMU) to eliminate isolated single-pixel noise artifacts (Lane & Chandler, Wheaton et al. 2010)
+            # Volumetric Masking (NO MSI INVOLVED)
+            is_positive_depth = np.nanmean(z1[valid]) > 0
+            
+            # Extract depth and delta_z arrays for calculation
+            delta_z_arr = z2 - z1
+            
+            # 2. Volumetric Noise Floor Step
+            abs_delta = np.abs(delta_z[valid])
+            if uncert_thresh_mode == "Auto":
+                max_val = np.max(abs_delta) if len(abs_delta) > 0 else 0.15
+                actual_uncert_thresh = self._calculate_otsu_threshold(abs_delta, 0.0, max_val)
+                feedback.pushInfo(f"🧠 Volumetric Auto-Regressor (Otsu) applied for {y1}->{y2}. Base Noise Floor = {actual_uncert_thresh:.3f}m")
+            else:
+                actual_uncert_thresh = uncert_thresh
+
+            # Depth of Closure Mask (Applies ONLY to Volumetric)
+            vol_valid = valid.copy()
+            if max_analyzed_depth > 0:
+                if is_positive_depth:
+                    vol_valid = vol_valid & (z1 <= max_analyzed_depth) & (z2 <= max_analyzed_depth)
+                else:
+                    vol_valid = vol_valid & (z1 >= -max_analyzed_depth) & (z2 >= -max_analyzed_depth)
+
+            # Apply Depth-Dependent Scaling Factor (Relative Error)
+            dynamic_uncert_thresh = np.zeros_like(delta_z)
+            dynamic_uncert_thresh[vol_valid] = actual_uncert_thresh + (depth_noise_factor * np.abs(z1[vol_valid]))
+
+            if is_positive_depth:
+                true_accretion = vol_valid & (delta_z < -dynamic_uncert_thresh)
+                true_erosion = vol_valid & (delta_z > dynamic_uncert_thresh)
+                filtered_delta_z[vol_valid] = -delta_z[vol_valid]
+            else:
+                true_accretion = vol_valid & (delta_z > dynamic_uncert_thresh)
+                true_erosion = vol_valid & (delta_z < -dynamic_uncert_thresh)
+                filtered_delta_z[vol_valid] = delta_z[vol_valid]
+
+            significant_change = true_accretion | true_erosion
+            filtered_delta_z[valid & ~significant_change] = 0.0
+
             try:
                 from scipy.ndimage import binary_opening
                 struct_elem = np.ones((3, 3), dtype=bool)
@@ -316,10 +391,9 @@ class TemporalAnalyticsEngine:
             except Exception:
                 pass
 
-            statcd_class[true_accretion] = 2
-            statcd_class[true_erosion] = 3
+            final_active = true_accretion | true_erosion
+            filtered_delta_z[valid & ~final_active] = 0.0
 
-            # Compute volumes with explicit sign consistency
             if is_positive_depth:
                 accretion_vol_m3 = float(np.sum(-delta_z[true_accretion]) * pixel_area_m2)
                 erosion_vol_m3 = float(np.sum(delta_z[true_erosion]) * pixel_area_m2)
@@ -329,7 +403,6 @@ class TemporalAnalyticsEngine:
 
             net_sediment_balance_m3 = accretion_vol_m3 - erosion_vol_m3
 
-            # Calculate Target ROI Volumes if provided
             target_accretion_vol_m3 = None
             target_erosion_vol_m3 = None
             target_net_balance_m3 = None
@@ -337,33 +410,17 @@ class TemporalAnalyticsEngine:
             if target_roi_path and os.path.exists(target_roi_path):
                 target_valid = apply_mask(target_roi_path, valid)
                 if is_positive_depth:
-                    target_accretion_vol_m3 = float(np.sum(-delta_z[target_valid & (z_score < -z_crit)]) * pixel_area_m2)
-                    target_erosion_vol_m3 = float(np.sum(delta_z[target_valid & (z_score > z_crit)]) * pixel_area_m2)
+                    target_accretion_vol_m3 = float(np.sum(-delta_z[target_valid & true_accretion]) * pixel_area_m2)
+                    target_erosion_vol_m3 = float(np.sum(delta_z[target_valid & true_erosion]) * pixel_area_m2)
                 else:
-                    target_accretion_vol_m3 = float(np.sum(delta_z[target_valid & (z_score > z_crit)]) * pixel_area_m2)
-                    target_erosion_vol_m3 = float(np.sum(-delta_z[target_valid & (z_score < -z_crit)]) * pixel_area_m2)
+                    target_accretion_vol_m3 = float(np.sum(delta_z[target_valid & true_accretion]) * pixel_area_m2)
+                    target_erosion_vol_m3 = float(np.sum(-delta_z[target_valid & true_erosion]) * pixel_area_m2)
                 target_net_balance_m3 = target_accretion_vol_m3 - target_erosion_vol_m3
 
             profile = src_1.profile.copy()
-            profile.update(count=1, dtype=rasterio.uint8, nodata=255, compress="lzw")
+            profile.update(count=1, dtype=rasterio.float32, nodata=-9999.0, compress="lzw")
             with rasterio.open(statcd_raster_path, "w", **profile) as dst:
-                dst.write(statcd_class, 1)
-
-            # Uncertainty-Aware Morphological Stability Index (Isolating True Physical Variance from Measurement Uncertainty)
-            # σ_obs² = σ_true² + σ_u²  =>  σ_true = sqrt(max(0, σ_obs² - σ_u²))
-            sigma_u_mean_sq = (u1**2 + u2**2) / 2.0
-            z_obs_var = z_std**2
-            z_true_var = np.maximum(0.0, z_obs_var - sigma_u_mean_sq)
-            z_true_std = np.sqrt(z_true_var)
-
-            msi = np.full_like(z1, -9999.0, dtype=np.float32)
-            # Add smoothing constant (0.5m) to denominator to prevent inflation in very shallow water
-            msi[valid] = np.clip(1.0 - (z_true_std[valid] / (np.abs(z_mean[valid]) + 0.5)), 0.0, 1.0)
-
-            profile_float = src_1.profile.copy()
-            profile_float.update(count=1, dtype=rasterio.float32, nodata=-9999.0, compress="lzw")
-            with rasterio.open(msi_raster_path, "w", **profile_float) as dst:
-                dst.write(msi, 1)
+                dst.write(filtered_delta_z, 1)
 
         feedback.pushInfo(
             f"✅ StatCD Change Detection ({y1} -> {y2}):\n"
@@ -376,7 +433,7 @@ class TemporalAnalyticsEngine:
             )
 
         return {
-            "period": f"{y1}_{y2}",
+            "period": period_str,
             "first_year": y1,
             "last_year": y2,
             "statcd_raster_path": statcd_raster_path,
@@ -404,7 +461,13 @@ class TemporalAnalyticsEngine:
         uncertainty_mode: str = "classical",
         qr_confidence: float = 0.95,
         training_maps: Dict[int, str] = None,
-        depth_field: str = None
+        depth_field: str = None,
+        uncert_thresh_mode: str = "Auto",
+        uncert_thresh: float = 0.15,
+        depth_noise_factor: float = 0.10,
+        max_analyzed_depth: float = 20.0,
+        msi_mode: str = "Auto",
+        msi_threshold: float = 0.75
     ) -> List[Dict[str, Any]]:
         """
         Executes multi-year bathymetric change detection sequentially or against baseline year, plus overall.
@@ -450,12 +513,20 @@ class TemporalAnalyticsEngine:
                     y1, y2, sdb_maps, uncertainty_maps,
                     output_dir, feedback, osw_shp,
                     is_overall=False,
+                    all_years=years,
+                    overall_trend_method=overall_trend_method,
                     analysis_type="Baseline Reference",
                     target_roi_path=target_roi_path,
                     uncertainty_mode=uncertainty_mode,
                     qr_confidence=qr_confidence,
                     qr_sigma_1=qr_sigmas.get(y1),
-                    qr_sigma_2=qr_sigmas.get(y2)
+                    qr_sigma_2=qr_sigmas.get(y2),
+                    uncert_thresh_mode=uncert_thresh_mode,
+                    uncert_thresh=uncert_thresh,
+                    depth_noise_factor=depth_noise_factor,
+                    max_analyzed_depth=max_analyzed_depth,
+                    msi_mode=msi_mode,
+                    msi_threshold=msi_threshold
                 )
                 results.append(res_pair)
         else: # Sequential (Year-to-Year)
@@ -465,29 +536,44 @@ class TemporalAnalyticsEngine:
                     y1, y2, sdb_maps, uncertainty_maps,
                     output_dir, feedback, osw_shp,
                     is_overall=False,
+                    all_years=years,
+                    overall_trend_method=overall_trend_method,
                     analysis_type="Sequential",
                     target_roi_path=target_roi_path,
                     uncertainty_mode=uncertainty_mode,
                     qr_confidence=qr_confidence,
                     qr_sigma_1=qr_sigmas.get(y1),
-                    qr_sigma_2=qr_sigmas.get(y2)
+                    qr_sigma_2=qr_sigmas.get(y2),
+                    uncert_thresh_mode=uncert_thresh_mode,
+                    uncert_thresh=uncert_thresh,
+                    depth_noise_factor=depth_noise_factor,
+                    max_analyzed_depth=max_analyzed_depth,
+                    msi_mode=msi_mode,
+                    msi_threshold=msi_threshold
                 )
                 results.append(res_seq)
 
         # 2. Overall Time Span (Robust Trend Analysis)
-        first_yr, last_yr = years[0], years[-1]
-        res_overall = self._compute_pair(
-            first_yr, last_yr, sdb_maps, uncertainty_maps, 
-            output_dir, feedback, osw_shp, 
-            is_overall=True, all_years=years,
-            overall_trend_method=overall_trend_method,
-            analysis_type="Overall Trend",
-            target_roi_path=target_roi_path,
-            uncertainty_mode=uncertainty_mode,
-            qr_confidence=qr_confidence,
-            qr_sigma_1=qr_sigmas.get(first_yr),
-            qr_sigma_2=qr_sigmas.get(last_yr)
-        )
-        results.append(res_overall)
+        if comparison_mode != "Baseline Reference (First Year Fixed)":
+            first_yr, last_yr = years[0], years[-1]
+            res_overall = self._compute_pair(
+                first_yr, last_yr, sdb_maps, uncertainty_maps, 
+                output_dir, feedback, osw_shp, 
+                is_overall=True, all_years=years,
+                overall_trend_method=overall_trend_method,
+                analysis_type="Overall Trend",
+                target_roi_path=target_roi_path,
+                uncertainty_mode=uncertainty_mode,
+                qr_confidence=qr_confidence,
+                qr_sigma_1=qr_sigmas.get(first_yr),
+                qr_sigma_2=qr_sigmas.get(last_yr),
+                uncert_thresh_mode=uncert_thresh_mode,
+                uncert_thresh=uncert_thresh,
+                depth_noise_factor=depth_noise_factor,
+                max_analyzed_depth=max_analyzed_depth,
+                msi_mode=msi_mode,
+                msi_threshold=msi_threshold
+            )
+            results.append(res_overall)
 
         return results

@@ -23,6 +23,102 @@ class ShorelineDynamicsTracker:
     def __init__(self):
         pass
 
+    def extract_water_mask_from_depth(self, year: int, depth_map_path: str, output_dir: str, feedback: QgsProcessingFeedback, shoreline_depth: float = 0.0) -> str:
+        """
+        Creates a binary water mask from a depth map based on the shoreline_depth threshold.
+        Pixels > shoreline_depth are water (1), otherwise land (0).
+        """
+        mask_path = os.path.join(output_dir, f"temp_water_mask_{year}.tif")
+        with rasterio.open(depth_map_path) as src:
+            depth = src.read(1)
+            water_mask = np.zeros_like(depth, dtype=np.uint8)
+            # Valid data pixels
+            valid = depth != src.nodata
+            # Apply threshold for water (Depth is negative, so < shoreline_depth is water)
+            water_mask[valid & (depth < shoreline_depth)] = 1
+            
+            profile = src.profile.copy()
+            profile.update(count=1, dtype=rasterio.uint8, nodata=255)
+            # Set nodata to 255 for the output mask so polygonize doesn't struggle
+            water_mask[~valid] = 255
+            
+            with rasterio.open(mask_path, "w", **profile) as dst:
+                dst.write(water_mask, 1)
+                
+        return mask_path
+
+    def process_shorelines(
+        self,
+        sdb_maps: Dict[int, str],
+        output_dir: str,
+        feedback: QgsProcessingFeedback,
+        osw_shp: str = None,
+        shoreline_depth: float = 0.0,
+        comparison_mode: str = "Sequential (Year-to-Year)"
+    ) -> List[str]:
+        feedback.pushInfo(f"🏖️ [SHORELINE TRACKER] Processing shorelines with depth threshold: {shoreline_depth}m")
+        
+        years = sorted(list(sdb_maps.keys()))
+        if len(years) < 2:
+            return []
+            
+        # 1. Create water masks for all years
+        water_masks = {}
+        for y in years:
+            mask = self.extract_water_mask_from_depth(y, sdb_maps[y], output_dir, feedback, shoreline_depth)
+            water_masks[y] = mask
+            
+        change_polygons = []
+        
+        # 2. Compute change polygons based on comparison mode
+        if "Baseline" in comparison_mode:
+            baseline_y = years[0]
+            for i in range(1, len(years)):
+                curr_y = years[i]
+                poly_shp = self.compute_shoreline_change_polygons(
+                    year_a=baseline_y,
+                    year_b=curr_y,
+                    mask_a_path=water_masks[baseline_y],
+                    mask_b_path=water_masks[curr_y],
+                    osw_shp=osw_shp,
+                    output_dir=output_dir,
+                    feedback=feedback
+                )
+                if poly_shp and os.path.exists(poly_shp):
+                    change_polygons.append(poly_shp)
+        else:
+            # Sequential
+            for i in range(len(years) - 1):
+                y1, y2 = years[i], years[i+1]
+                poly_shp = self.compute_shoreline_change_polygons(
+                    year_a=y1,
+                    year_b=y2,
+                    mask_a_path=water_masks[y1],
+                    mask_b_path=water_masks[y2],
+                    osw_shp=osw_shp,
+                    output_dir=output_dir,
+                    feedback=feedback
+                )
+                if poly_shp and os.path.exists(poly_shp):
+                    change_polygons.append(poly_shp)
+                    
+        # 3. Always compute Overall Trend (First vs Last) if not already done in baseline
+        if len(years) > 2 or "Sequential" in comparison_mode:
+            y_first, y_last = years[0], years[-1]
+            overall_poly_shp = self.compute_shoreline_change_polygons(
+                year_a=y_first,
+                year_b=y_last,
+                mask_a_path=water_masks[y_first],
+                mask_b_path=water_masks[y_last],
+                osw_shp=osw_shp,
+                output_dir=output_dir,
+                feedback=feedback
+            )
+            if overall_poly_shp and os.path.exists(overall_poly_shp):
+                change_polygons.append(overall_poly_shp)
+                
+        return change_polygons
+
     def extract_year_shoreline(
         self,
         year: int,
@@ -113,25 +209,21 @@ class ShorelineDynamicsTracker:
             }
         )
 
-        # 3. Filter Erosion (1) and Accretion (-1)
+        # 3. Filter Erosion (1) and Accretion (-1) using expression to avoid string/int mismatch
         erosion_poly = processing.run(
-            "native:extractbyattribute",
+            "native:extractbyexpression",
             {
                 "INPUT": poly_res["OUTPUT"],
-                "FIELD": "DN",
-                "OPERATOR": 0, # =
-                "VALUE": "1",
+                "EXPRESSION": '"DN" = 1',
                 "OUTPUT": "TEMPORARY_OUTPUT"
             }
         )["OUTPUT"]
 
         accretion_poly = processing.run(
-            "native:extractbyattribute",
+            "native:extractbyexpression",
             {
                 "INPUT": poly_res["OUTPUT"],
-                "FIELD": "DN",
-                "OPERATOR": 0, # =
-                "VALUE": "-1",
+                "EXPRESSION": '"DN" = -1',
                 "OUTPUT": "TEMPORARY_OUTPUT"
             }
         )["OUTPUT"]

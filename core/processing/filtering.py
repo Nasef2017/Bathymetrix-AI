@@ -96,6 +96,16 @@ def extract_and_calc_robust(ras_path, vec_layer, depth_fld, b_idx, g_idx, fb):
                 except Exception:
                     pass
 
+            # PROJ 6+ Strict Axis Order Fallback (Lat/Lon vs Lon/Lat)
+            if not in_bounds and 'trans_pt' in locals():
+                try:
+                    r_trans_swap, c_trans_swap = src.index(trans_pt.y(), trans_pt.x())
+                    if 0 <= r_trans_swap < src.height and 0 <= c_trans_swap < src.width:
+                        in_bounds = True
+                        r, c = r_trans_swap, c_trans_swap
+                except Exception:
+                    pass
+
             if not in_bounds:
                 count_out_of_bounds += 1
                 continue
@@ -188,9 +198,13 @@ def save_subset_with_uncert(
 
 def plot_physics_trend(X, y, mask, mode, path):
     plt.figure(figsize=(10, 6))
-    plt.scatter(X[mask], y[mask], c="dodgerblue", s=15, alpha=0.6, label="Accepted")
+    
+    n_acc = np.sum(mask)
+    n_rej = np.sum(~mask)
+    
+    plt.scatter(X[mask], y[mask], c="dodgerblue", s=15, alpha=0.6, label=f"Accepted ({n_acc})")
     plt.scatter(
-        X[~mask], y[~mask], c="gray", marker="x", s=15, alpha=0.4, label="Rejected"
+        X[~mask], y[~mask], c="gray", marker="x", s=15, alpha=0.4, label=f"Rejected ({n_rej})"
     )
 
     # Dynamic Outlier-Robust Axis Limiting (Percentile-based Zooming)
@@ -264,10 +278,15 @@ def plot_variance_analysis(depths, residuals, sigma_model, mode, path):
 
 def plot_envelope_analysis(depths, residuals, sigmas, mask, multiplier, mode, path):
     plt.figure(figsize=(10, 6))
+    
+    n_acc = np.sum(mask)
+    n_rej = np.sum(~mask)
+    
     d_abs = np.abs(depths)
     sort_idx = np.argsort(d_abs)
     d_sorted = d_abs[sort_idx]
     sigma_sorted = sigmas[sort_idx]
+
     upper = multiplier * sigma_sorted
     lower = -multiplier * sigma_sorted
 
@@ -275,7 +294,7 @@ def plot_envelope_analysis(depths, residuals, sigmas, mask, multiplier, mode, pa
     plt.plot(d_sorted, lower, "r-", lw=2, label=rf"Lower (-{multiplier}$\sigma$)")
     plt.fill_between(d_sorted, lower, upper, color="red", alpha=0.1)
     plt.scatter(
-        d_abs[mask], residuals[mask], c="dodgerblue", s=15, alpha=0.6, label="Accepted"
+        d_abs[mask], residuals[mask], c="dodgerblue", s=15, alpha=0.6, label=f"Accepted ({n_acc})"
     )
     plt.scatter(
         d_abs[~mask],
@@ -284,7 +303,7 @@ def plot_envelope_analysis(depths, residuals, sigmas, mask, multiplier, mode, pa
         marker="x",
         s=15,
         alpha=0.4,
-        label="Rejected",
+        label=f"Rejected ({n_rej})",
     )
     plt.axhline(0, c="black", lw=1)
     
@@ -325,15 +344,26 @@ def run_phase02_filtering(algorithm, parameters, context, feedback):
     # Safely reproject points to match stack before proceeding
     import processing
     r_temp = QgsRasterLayer(stack_path, "temp")
+    
+    if r_temp.isValid() and points_layer and points_layer.crs().isValid():
+        v_crs = points_layer.crs()
+        if v_crs == r_temp.crs() and not r_temp.crs().isGeographic():
+            bbox = points_layer.extent()
+            if bbox.xMinimum() >= -180 and bbox.xMaximum() <= 180 and bbox.yMinimum() >= -90 and bbox.yMaximum() <= 90:
+                v_crs = QgsCoordinateReferenceSystem("EPSG:4326")
+                points_layer.setCrs(v_crs)
+                feedback.pushInfo("   [DEBUG] Auto-detected geographic coordinates despite projected CRS. Forcing Vector CRS to EPSG:4326.")
+
     if r_temp.isValid() and points_layer and points_layer.crs().isValid() and points_layer.crs() != r_temp.crs():
         feedback.pushInfo(f"   [DEBUG] Reprojecting training points from {points_layer.crs().authid()} to {r_temp.crs().authid()}...")
         try:
+            out_reproj = os.path.join(out_dir, "1_Reprojected_Points.gpkg")
             res = processing.run("native:reprojectlayer", {
                 'INPUT': points_layer,
                 'TARGET_CRS': r_temp.crs(),
-                'OUTPUT': 'memory:'
+                'OUTPUT': out_reproj
             }, context=context, feedback=feedback)
-            points_layer = res['OUTPUT']
+            points_layer = QgsVectorLayer(out_reproj, "reprojected_points", "ogr")
         except Exception as e:
             feedback.pushWarning(f"Failed to reproject points natively: {e}")
 

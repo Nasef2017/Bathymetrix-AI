@@ -185,6 +185,123 @@ def generate_3d_seabed_png(raster_path, out_png_path, feedback=None):
             
             # Create real-world coordinate grids (meters from origin)
             x_coords = np.linspace(0, x_extent, grid_size)
+            y_coords = np.linspace(y_extent, 0, grid_size)
+            X, Y = np.meshgrid(x_coords, y_coords)
+            masked_Z = np.ma.masked_invalid(data_float)
+            
+            # Auto-calculate Vertical Exaggeration for visual clarity
+            valid_z = data_float[np.isfinite(data_float)]
+            if len(valid_z) > 0:
+                z_range = float(np.nanmax(valid_z) - np.nanmin(valid_z))
+                z_range = max(z_range, 0.1)
+                horizontal_extent = max(x_extent, y_extent)
+                # Target: Z should visually appear as ~35% of the longest horizontal axis
+                target_z_fraction = 0.35
+                ve = (target_z_fraction * horizontal_extent) / z_range
+                ve = max(2.0, ve)  # minimum VE = 2x
+            else:
+                ve = 3.0
+                z_range = 1.0
+                horizontal_extent = max(x_extent, y_extent)
+            
+            fig = plt.figure(figsize=(12, 9), facecolor='#020617')
+            ax = fig.add_subplot(111, projection='3d', facecolor='#020617')
+            
+            surf = ax.plot_surface(
+                X, Y, masked_Z,
+                cmap='Spectral_r',
+                linewidth=0,
+                antialiased=True,
+                alpha=0.92,
+                rcount=120, ccount=120
+            )
+            
+            # Set normalized box aspect: x_norm, y_norm relative to max_h, z = target fraction
+            max_h = max(x_extent, y_extent)
+            try:
+                ax.set_box_aspect([x_extent / max_h, y_extent / max_h, target_z_fraction])
+            except AttributeError:
+                pass
+            
+            ve_label = f"VE ≈ {ve:.1f}x"
+            ax.set_title(f"3D Seabed Topography Model\n", color='white', fontsize=14, fontweight='bold', pad=15)
+            ax.text2D(0.5, 0.93, ve_label, transform=ax.transAxes, ha='center', va='top',
+                      fontsize=9, color='#60a5fa',
+                      bbox=dict(boxstyle='round,pad=0.3', facecolor='#1e293b', edgecolor='#334155', alpha=0.85))
+            
+            # Format axis labels with real units
+            if x_extent > 2000:
+                ax.set_xlabel(f"Easting ({x_extent/1000:.1f} km)", color='#94a3b8', labelpad=10, fontsize=9)
+            else:
+                ax.set_xlabel(f"Easting ({x_extent:.0f} m)", color='#94a3b8', labelpad=10, fontsize=9)
+            if y_extent > 2000:
+                ax.set_ylabel(f"Northing ({y_extent/1000:.1f} km)", color='#94a3b8', labelpad=10, fontsize=9)
+            else:
+                ax.set_ylabel(f"Northing ({y_extent:.0f} m)", color='#94a3b8', labelpad=10, fontsize=9)
+            ax.set_zlabel("Depth (m)", color='#94a3b8', labelpad=10, fontsize=9)
+            
+            ax.tick_params(colors='#94a3b8', labelsize=7)
+            ax.xaxis.line.set_color('#334155')
+            ax.yaxis.line.set_color('#334155')
+            ax.zaxis.line.set_color('#334155')
+            ax.xaxis.pane.fill = False
+            ax.yaxis.pane.fill = False
+            ax.zaxis.pane.fill = False
+            ax.xaxis.pane.set_edgecolor('#1e293b')
+            ax.yaxis.pane.set_edgecolor('#1e293b')
+            ax.zaxis.pane.set_edgecolor('#1e293b')
+            ax.grid(True, color='#1e293b', linestyle='--', alpha=0.3)
+            
+            cbar = fig.colorbar(surf, ax=ax, shrink=0.55, aspect=14, pad=0.08)
+            cbar.set_label('Depth (m)', color='white', fontsize=10, labelpad=10)
+            cbar.ax.yaxis.set_tick_params(colors='#94a3b8', labelsize=8)
+            cbar.ax.yaxis.label.set_color('white')
+            
+            ax.view_init(elev=30, azim=-55)
+            
+            plt.savefig(out_png_path, dpi=150, facecolor=fig.get_facecolor(), bbox_inches='tight')
+            plt.close(fig)
+            if feedback:
+                feedback.pushInfo(f"Static 3D Seabed Plot generated successfully. {ve_label}")
+            return True
+    except Exception as e:
+        if feedback:
+            feedback.pushWarning(f"Failed to generate static 3D Seabed PNG: {str(e)}")
+        return False
+
+
+def generate_3d_seabed_png(raster_path, out_png_path, feedback=None):
+    if feedback:
+        feedback.pushInfo(f"--- Generating static 3D Seabed Plot: {out_png_path}")
+    try:
+        import rasterio
+        from rasterio.enums import Resampling
+        import numpy as np
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        from mpl_toolkits.mplot3d import Axes3D
+        
+        grid_size = 150
+        with rasterio.open(raster_path) as src:
+            data = src.read(
+                1,
+                out_shape=(grid_size, grid_size),
+                resampling=Resampling.bilinear
+            )
+            nodata = src.nodata if src.nodata is not None else -9999.0
+            transform = src.transform
+            bounds = src.bounds
+            
+            # Real-world extents in meters
+            x_extent = bounds.right - bounds.left
+            y_extent = bounds.top - bounds.bottom
+            
+            data_float = data.astype(float)
+            data_float[data_float == nodata] = np.nan
+            
+            # Create real-world coordinate grids (meters from origin)
+            x_coords = np.linspace(0, x_extent, grid_size)
             y_coords = np.linspace(0, y_extent, grid_size)
             X, Y = np.meshgrid(x_coords, y_coords)
             masked_Z = np.ma.masked_invalid(data_float)
@@ -270,7 +387,9 @@ def generate_3d_seabed_png(raster_path, out_png_path, feedback=None):
         return False
 
 
-def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, spatial_cv_p4=True, enable_ransac=False, filter_mode=0, field_depth=None, field_weight=None, collision_handling_idx=0, log_path=None, feedback=None, raster_name="Satellite Imagery", train_name="ICESat-2 (ATL24) LiDAR", test_name="In-situ Echosounder Surveys"):
+def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, spatial_cv_p4=True, enable_ransac=False, filter_mode=0, field_depth=None, field_weight=None, collision_handling_idx=0, log_path=None, feedback=None, raster_name="Satellite Imagery", train_name="ICESat-2 (ATL24) LiDAR", test_name="In-situ Echosounder Surveys", final_raster_path=None, is_spatiospectral=False, p2_dir=None):
+    import json
+    import csv
     benchmark_csv = os.path.join(p3_dir, "3_All_Algorithms_Benchmark.csv")
     p4_benchmark_csv = os.path.join(p4_dir, "4_All_Algorithms_Benchmark.csv") if p4_dir else None
     
@@ -286,19 +405,22 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
     import rasterio
     from rasterio.enums import Resampling
     
-    final_raster_path = None
-    if p4_dir:
-        for candidate in ["Phase04_Final_Depth_OSW_Clipped.tif", "Final_Depth_Cleaned.tif"]:
-            test_path = os.path.join(p4_dir, candidate)
-            if os.path.exists(test_path):
-                final_raster_path = test_path
-                break
+    p3_rel = os.path.relpath(p3_dir, out_dir).replace('\\', '/') if p3_dir else "Phase_03_Initial_Modeling"
+    p4_rel = os.path.relpath(p4_dir, out_dir).replace('\\', '/') if p4_dir else "Phase_04_Adaptive_Refinement"
+    
     if not final_raster_path:
-        for candidate in ["Phase03_Depth_OSW_Clipped.tif", "Phase3_Depth_Cleaned.tif", "3_Initial_Global_Depth.tif"]:
-            test_path = os.path.join(p3_dir, candidate)
-            if os.path.exists(test_path):
-                final_raster_path = test_path
-                break
+        if p4_dir:
+            for candidate in ["Phase04_Final_Depth_OSW_Clipped.tif", "Final_Depth_Cleaned.tif", "Phase4_Adaptive_Depth.tif", "4_Refined_Depth.tif"]:
+                test_path = os.path.join(p4_dir, candidate)
+                if os.path.exists(test_path):
+                    final_raster_path = test_path
+                    break
+        if not final_raster_path:
+            for candidate in ["Phase03_Depth_OSW_Clipped.tif", "Phase3_Depth_Cleaned.tif", "3_Initial_Global_Depth.tif", "3_Best_Depth_Map.tif"]:
+                test_path = os.path.join(p3_dir, candidate)
+                if os.path.exists(test_path):
+                    final_raster_path = test_path
+                    break
 
     z_data_json = "[]"
     x_coords_json = "[]"
@@ -327,7 +449,7 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                 
                 # Real-world coordinate arrays
                 x_arr = np.linspace(0, x_extent, grid_size).tolist()
-                y_arr = np.linspace(0, y_extent, grid_size).tolist()
+                y_arr = np.linspace(y_extent, 0, grid_size).tolist()
                 x_coords_json = json.dumps([round(v, 1) for v in x_arr])
                 y_coords_json = json.dumps([round(v, 1) for v in y_arr])
                 
@@ -440,7 +562,7 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
             <td class="px-6 py-4 text-sm font-medium text-blue-400">{rmse:.2f}m</td>
             <td class="px-6 py-4 text-sm font-medium text-indigo-400">{wmape:.2f}%</td>
             <td class="px-6 py-4 text-sm">
-                <a href="Phase_03_Initial_Modeling/{algo_folder}/Validation_Scatter_Plot.png" target="_blank" class="text-xs text-sky-400 hover:text-sky-300 font-semibold underline">View Plot</a>
+                <a href="{p3_rel}/{algo_folder}/Validation_Scatter_Plot.png" target="_blank" class="text-xs text-sky-400 hover:text-sky-300 font-semibold underline">View Plot</a>
             </td>
         </tr>
         """
@@ -501,7 +623,7 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
     # -------------------------------------------------------------
     html_p2_section = ""
     if enable_ransac:
-        p2_dir_path = os.path.join(out_dir, "Phase_02_Filtering")
+        p2_dir_path = p2_dir if p2_dir else os.path.join(out_dir, "Phase_02_Filtering")
         clean_shp_path = os.path.join(p2_dir_path, "2_Cleaned_Training_Data.shp")
         actual_shp_path = os.path.join(p3_dir, "3_Actual_Model_Input_Points.shp")
         
@@ -572,16 +694,21 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
         collision_handling = collision_list_names[collision_handling_idx] if 0 <= collision_handling_idx < len(collision_list_names) else "Unknown"
         
         filter_mode_name = "Unknown"
-        filter_plot_path = ""
+        
+        if p2_dir:
+            try:
+                rel_p2 = os.path.relpath(p2_dir, out_dir).replace("\\", "/")
+            except Exception:
+                rel_p2 = "Phase_02_Filtering"
+        else:
+            rel_p2 = "Phase_02_Filtering"
+
         if filter_mode == 0:
             filter_mode_name = "Linear RANSAC"
-            filter_plot_path = "Phase_02_Filtering/2_Plot_1_Trend.png"
         elif filter_mode == 1:
             filter_mode_name = "LS Variance Fit"
-            filter_plot_path = "Phase_02_Filtering/2_Plot_2_Variance.png"
         elif filter_mode == 2:
             filter_mode_name = "Huber Variance Fit"
-            filter_plot_path = "Phase_02_Filtering/2_Plot_3_Envelope.png"
             
         weight_stat_html = ""
         if has_weight_stats:
@@ -592,18 +719,29 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                         </div>
             """
             
+        plot_1 = f"""
+            <a href="{rel_p2}/2_Plot_1_Trend.png" target="_blank" class="block w-full">
+                <img src="{rel_p2}/2_Plot_1_Trend.png" alt="Trend Plot" class="w-full h-auto rounded-lg border border-slate-800 hover:opacity-90 transition-opacity" onerror="this.style.display='none'"/>
+            </a>"""
+        plot_2 = f"""
+            <a href="{rel_p2}/2_Plot_2_Variance.png" target="_blank" class="block w-full">
+                <img src="{rel_p2}/2_Plot_2_Variance.png" alt="Variance Plot" class="w-full h-auto rounded-lg border border-slate-800 hover:opacity-90 transition-opacity" onerror="this.style.display='none'"/>
+            </a>"""
+        plot_3 = f"""
+            <a href="{rel_p2}/2_Plot_3_Envelope.png" target="_blank" class="block w-full">
+                <img src="{rel_p2}/2_Plot_3_Envelope.png" alt="Envelope Plot" class="w-full h-auto rounded-lg border border-slate-800 hover:opacity-90 transition-opacity" onerror="this.style.display='none'"/>
+            </a>"""
+            
+        inner_plots = plot_1
+        if filter_mode == 1:
+            inner_plots += plot_2
+        else:
+            inner_plots += plot_3
+            
         plots_html = f"""
         <div class="bg-slate-900/50 rounded-xl p-4 border border-slate-800 flex flex-col justify-center items-center w-full space-y-4">
             <h4 class="text-xs font-semibold text-slate-400 mb-1 uppercase tracking-wider">Regression & Cleaned Data Fit</h4>
-            <a href="Phase_02_Filtering/2_Plot_1_Trend.png" target="_blank" class="block w-full">
-                <img src="Phase_02_Filtering/2_Plot_1_Trend.png" alt="Trend Plot" class="w-full h-auto rounded-lg border border-slate-800 hover:opacity-90 transition-opacity" onerror="this.style.display='none'"/>
-            </a>
-            <a href="Phase_02_Filtering/2_Plot_2_Variance.png" target="_blank" class="block w-full">
-                <img src="Phase_02_Filtering/2_Plot_2_Variance.png" alt="Variance Plot" class="w-full h-auto rounded-lg border border-slate-800 hover:opacity-90 transition-opacity" onerror="this.style.display='none'"/>
-            </a>
-            <a href="Phase_02_Filtering/2_Plot_3_Envelope.png" target="_blank" class="block w-full">
-                <img src="Phase_02_Filtering/2_Plot_3_Envelope.png" alt="Envelope Plot" class="w-full h-auto rounded-lg border border-slate-800 hover:opacity-90 transition-opacity" onerror="this.style.display='none'"/>
-            </a>
+            {inner_plots}
         </div>
         """
 
@@ -789,7 +927,7 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
         </header>
 
         <!-- Quick Metrics -->
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8" style="display: {'none' if is_spatiospectral else 'grid'};">
             <div class="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-6 backdrop-blur-sm">
                 <h3 class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2">Best Performing Algorithm</h3>
                 <div class="text-2xl font-bold text-slate-100">{best_algo}</div>
@@ -811,7 +949,7 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
             <!-- Left Column: Leaderboards -->
             <div class="{main_grid_col_class} space-y-8">
                 <!-- Phase 03 Leaderboard -->
-                <div class="bg-slate-800/30 border border-slate-700/30 rounded-2xl overflow-hidden">
+                <div class="bg-slate-800/30 border border-slate-700/30 rounded-2xl overflow-hidden" style="display: {'none' if is_spatiospectral else 'block'};">
                     <div class="px-6 py-5 border-b border-slate-800 bg-slate-800/50 flex justify-between items-center flex-wrap gap-2">
                         <div>
                             <h2 class="text-lg font-bold text-slate-100">🏆 Phase 03: Initial Modeling Leaderboard</h2>
@@ -841,8 +979,8 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                 {f'''<div class="bg-slate-800/30 border border-slate-700/30 rounded-2xl overflow-hidden">
                     <div class="px-6 py-5 border-b border-slate-800 bg-slate-800/50 flex justify-between items-center flex-wrap gap-2">
                         <div>
-                            <h2 class="text-lg font-bold text-slate-100">⚡ Phase 04: Adaptive Refinement Leaderboard</h2>
-                            <p class="text-xs text-slate-400 mt-1">Cross-Validation/Retraining performance after adaptive refinement</p>
+                            <h2 class="text-lg font-bold text-slate-100">⚡ Phase 04: Depth-Dependent Residual Calibration Leaderboard</h2>
+                            <p class="text-xs text-slate-400 mt-1">Cross-Validation/Retraining performance after Depth-Dependent Residual Calibration</p>
                         </div>
                         <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-violet-500/10 text-violet-400 border border-violet-500/20">{cv_type_p4}</span>
                     </div>
@@ -861,7 +999,7 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                             </tbody>
                         </table>
                     </div>
-                </div>''' if has_p4 else ''}
+                </div>''' if has_p4 and not is_spatiospectral else ''}
             </div>
 
             {f'''<!-- Right Column: Final Validation Outputs -->
@@ -1004,10 +1142,15 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
             feedback=feedback,
             raster_name=raster_name,
             train_name=train_name,
-            test_name=test_name
+            test_name=test_name,
+            is_spatiospectral=is_spatiospectral,
+            p2_dir=p2_dir
         )
     except Exception as e:
-        msg = f"Failed to invoke HTML report generation: {str(e)}"
+        msg = f"Failed to invoke HTML report generation: {str(e)}\n{__import__('traceback').format_exc()}"
+        if log_path:
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(msg + '\n')
         if feedback is not None:
             feedback.pushWarning(msg)
         elif log_path:
@@ -1020,10 +1163,69 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
 
 def run_master_pipeline(algorithm, parameters, context, feedback):
     """Execute SDB Master orchestration; `algorithm` is SDBMasterOrchestrator."""
+    import time
+    start_time = time.time()
+    start_str = time.strftime('%H:%M:%S', time.localtime(start_time))
+    
     out_dir = algorithm.parameterAsString(parameters, algorithm.OUTPUT_FOLDER, context)
     os.makedirs(out_dir, exist_ok=True)
 
     log_path = os.path.join(out_dir, "SDB_Full_Log.txt")
+    
+    with open(log_path, "w", encoding="utf-8") as f:
+        pass
+        
+    feedback = LoggingFeedback(feedback, log_path)
+    
+    append_log("════════════════════════════════════════════════════════════", log_path, feedback)
+    append_log("SDB Single Masterflow".center(60), log_path, feedback)
+    append_log("════════════════════════════════════════════════════════════", log_path, feedback)
+    append_log(f"Started: {start_str}", log_path, feedback)
+    append_log("════════════════════════════════════════════════════════════\n", log_path, feedback)
+    
+    # --- Pre-Scan Validation: Check if Depth Field exists ---
+    field_depth = algorithm.parameterAsString(parameters, algorithm.FIELD_DEPTH, context)
+    if field_depth:
+        from qgis.core import QgsVectorLayer, QgsProcessingException
+        append_log("→ Validating Depth Fields...", log_path, feedback)
+        
+        train_val = algorithm.parameterAsVectorLayer(parameters, algorithm.INPUT_TRAIN, context)
+        test_val = algorithm.parameterAsVectorLayer(parameters, algorithm.INPUT_TEST, context)
+        
+        try:
+            field_test_depth = algorithm.parameterAsString(parameters, algorithm.FIELD_TEST_DEPTH, context)
+        except Exception:
+            field_test_depth = None
+            
+        try:
+            adaptive_val = algorithm.parameterAsVectorLayer(parameters, algorithm.INPUT_ADAPTIVE_TRAIN, context)
+            field_adaptive_depth = algorithm.parameterAsString(parameters, algorithm.FIELD_ADAPTIVE_DEPTH, context)
+        except Exception:
+            adaptive_val = None
+            field_adaptive_depth = None
+            
+        checks = []
+        if train_val:
+            checks.append((train_val, "Training", field_depth))
+        if test_val:
+            checks.append((test_val, "Validation", field_test_depth if field_test_depth else field_depth))
+        if adaptive_val:
+            checks.append((adaptive_val, "Adaptive", field_adaptive_depth if field_adaptive_depth else field_depth))
+        
+        for layer, name, expected_field in checks:
+            if layer and layer.isValid() and expected_field:
+                fields = layer.fields().names()
+                matched = False
+                for f in fields:
+                    if f.lower() == expected_field.lower() or f.lower() == expected_field.lower()[:10] or expected_field.lower().startswith(f.lower()[:8]):
+                        matched = True
+                        break
+                if not matched:
+                    err_msg = f"✗ ERROR: Depth field '{expected_field}' not found in {name} dataset."
+                    append_log(err_msg, log_path, feedback)
+                    raise QgsProcessingException(err_msg)
+        append_log("✓ Validation completed\n", log_path, feedback)
+    # --- End Pre-Scan ---
     
     p1_dir = os.path.join(out_dir, "Phase_01_Preprocessing")
     p2_dir = os.path.join(out_dir, "Phase_02_Filtering")
@@ -1034,13 +1236,6 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
     os.makedirs(p2_dir, exist_ok=True)
     os.makedirs(p3_dir, exist_ok=True)
     os.makedirs(p4_dir, exist_ok=True)
-
-    with open(log_path, "w", encoding="utf-8") as f:
-        f.write(f"SDB LOG - {datetime.datetime.now()}\n\n")
-
-    feedback = LoggingFeedback(feedback, log_path)
-
-    append_log(">>> Workflow Started...", log_path, feedback)
 
     input_raster = algorithm.parameterAsRasterLayer(
         parameters, algorithm.INPUT_RASTER, context
@@ -1083,11 +1278,8 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
         parameters, algorithm.WATER_MASK_POLY, context
     )
     if water_mask_poly:
-        append_log(
-            "\n>>> Pre-Clipping: Applying Ready-made Water Mask Polygon...",
-            log_path,
-            feedback,
-        )
+        append_log("  [Phase 01] Pre-processing", log_path, feedback)
+        append_log("      → Applying Ready-made Water Mask Polygon...", log_path, feedback)
 
         temp_mask_path = os.path.join(p1_dir, "temp_water_mask.gpkg")
         final_water_mask = reproject_layer_if_needed(
@@ -1106,7 +1298,7 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
 
         if shrink_dist < 0:
             append_log(
-                f">>> Shrinking Water Polygon by {shrink_dist} units to remove Edge Effects...",
+                f"      → Shrinking Water Polygon by {shrink_dist} units...",
                 log_path,
                 feedback,
             )
@@ -1178,7 +1370,8 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
     )
 
     if enable_preproc:
-        append_log("\n>>> Phase 01: Pre-processing...", log_path, feedback)
+        append_log("  [Phase 01] Pre-processing", log_path, feedback)
+        append_log("      → Running extraction and masking...", log_path, feedback)
         p1 = processing.run(
             "sdb_tools:sdb_phase1_preprocessing",
             {
@@ -1215,7 +1408,8 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
             is_child_algorithm=True,
         )
     else:
-        append_log("\n>>> Phase 01: Pre-processing Skipped by User.", log_path, feedback)
+        append_log("  [Phase 01] Pre-processing", log_path, feedback)
+        append_log("      → Skipped by User.", log_path, feedback)
         p1 = {
             "OUTPUT_FEATURES": input_raster.source(),
             "OUTPUT_MASK": None,
@@ -1225,7 +1419,8 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
 
     path_clean = final_train
     if algorithm.parameterAsBool(parameters, algorithm.ENABLE_RANSAC, context):
-        append_log("\n>>> Phase 02: Filtering & Uncertainty...", log_path, feedback)
+        append_log("  [Phase 02] Filtering", log_path, feedback)
+        append_log("      → Removing outliers...", log_path, feedback)
         p2 = processing.run(
             "sdb_tools:sdb_02_filtering",
             {
@@ -1245,7 +1440,11 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
         )
         path_clean = p2["OUTPUT_CLEAN_VEC"]
 
-    append_log("\n>>> Phase 03: Global Modeling...", log_path, feedback)
+    append_log("  ✓ Phase 02 completed\n", log_path, feedback)
+
+    append_log("════════════════════════════════════════════════════════════", log_path, feedback)
+    append_log("Global Phase 03 | Initial Modeling".center(60), log_path, feedback)
+    append_log("════════════════════════════════════════════════════════════", log_path, feedback)
     p3_params = {
         "INPUT_STACK": p1["OUTPUT_FEATURES"],
         "INPUT_POINTS": path_clean,
@@ -1297,30 +1496,29 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
     )
 
     if "BEST_R2" in p3:
-        append_log(f"[Phase 03] R2: {p3['BEST_R2']:.4f}", log_path, feedback)
+        append_log(f"      → R2: {p3['BEST_R2']:.4f}", log_path, feedback)
+        append_log("  ✓ Phase 03 completed\n", log_path, feedback)
 
     path_refined = None
-    if algorithm.parameterAsBool(parameters, algorithm.ENABLE_ADAPTIVE, context):
-        append_log("\n>>> Phase 04: Adaptive Refinement...", log_path, feedback)
+    
+    # [USER REQUIREMENT] Phase 04 is STRICTLY for Control Points. 
+    # If no control points are provided, it is bypassed completely.
+    ad_layer = algorithm.parameterAsVectorLayer(parameters, algorithm.INPUT_ADAPTIVE_TRAIN, context)
+    
+    if ad_layer:
+        append_log("  [Phase 04] Adaptive Refinement", log_path, feedback)
+        append_log("      → Control Points found. Executing...", log_path, feedback)
 
-        ad_layer = algorithm.parameterAsVectorLayer(
-            parameters, algorithm.INPUT_ADAPTIVE_TRAIN, context
+        temp_adapt = os.path.join(p4_dir, "temp_reprojected_adaptive.gpkg")
+        final_ad = reproject_layer_if_needed(
+            ad_layer, target_crs, temp_adapt, context, feedback
         )
-        if ad_layer:
-            temp_adapt = os.path.join(p4_dir, "temp_reprojected_adaptive.gpkg")
-            final_ad = reproject_layer_if_needed(
-                ad_layer, target_crs, temp_adapt, context, feedback
-            )
-            field_ad_depth = algorithm.parameterAsString(
-                parameters, algorithm.FIELD_ADAPTIVE_DEPTH, context
-            )
-            final_ad = filter_by_depth(
-                final_ad, field_ad_depth, max_depth, context, feedback
-            )
-        else:
-            final_ad = path_clean
-            field_ad_depth = field_depth
-
+        field_ad_depth = algorithm.parameterAsString(
+            parameters, algorithm.FIELD_ADAPTIVE_DEPTH, context
+        )
+        final_ad = filter_by_depth(
+            final_ad, field_ad_depth, max_depth, context, feedback
+        )
 
         p4_thresh_idx = parameters.get(algorithm.FEATURE_CORR_THRESHOLD_P4, 0)
         p4_method = parameters.get(algorithm.FEATURE_CORR_METHOD_P4, 3)
@@ -1390,7 +1588,11 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
         path_refined = p4["OUTPUT_FINAL"]
 
         if "BEST_R2" in p4:
-            append_log(f"[Phase 04] R2: {p4['BEST_R2']:.4f}", log_path, feedback)
+            append_log(f"      → R2: {p4['BEST_R2']:.4f}", log_path, feedback)
+            append_log("  ✓ Phase 04 completed\n", log_path, feedback)
+    else:
+        append_log("  [Phase 04] Adaptive Refinement", log_path, feedback)
+        append_log("      → No Control Points found. SKIPPED.\n", log_path, feedback)
 
     feat_stack = p1["OUTPUT_FEATURES"]
 
@@ -1400,15 +1602,25 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
             p3["OUTPUT_DEPTH_MAP"], feat_stack, max_depth, p3_clamped, context, feedback
         )
 
+        current_p3 = p3_clamped
+
+        if apply_slope_filter:
+            p3_slope = os.path.join(p3_dir, "Phase03_Depth_Final_SlopeFiltered.tif")
+            current_p3 = slope_filter_depth(
+                current_p3,
+                slope_threshold=slope_threshold_val,
+                out_path=p3_slope,
+                context=context,
+                feedback=feedback,
+            )
+
         if remove_positives_flag:
             p3_no_pos = os.path.join(p3_dir, "Phase03_Depth_Final_NoPositives.tif")
-            remove_positive_pixels(p3_clamped, p3_no_pos, feedback)
+            remove_positive_pixels(current_p3, p3_no_pos, feedback)
             current_p3 = p3_no_pos
-        else:
-            current_p3 = p3_clamped
 
         if p1.get("OUTPUT_OSW_POLY") and os.path.exists(p1["OUTPUT_OSW_POLY"]):
-            append_log("\n>>> Clipping Phase 03 Map with OSW Polygon...", log_path, feedback)
+            append_log("  → Clipping Phase 03 Map with OSW Polygon...", log_path, feedback)
             p3_osw_clipped = os.path.join(p3_dir, "Phase03_Depth_OSW_Clipped.tif")
             processing.run(
                 "gdal:cliprasterbymasklayer",
@@ -1447,9 +1659,20 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
                 clean_depth_map(raw_lr_map, feat_stack, max_depth, lr_clamped, context, feedback)
                 
                 lr_current = lr_clamped
+
+                if apply_slope_filter:
+                    lr_slope = os.path.join(lr_dir, "Linear_Regression_SlopeFiltered.tif")
+                    lr_current = slope_filter_depth(
+                        lr_current,
+                        slope_threshold=slope_threshold_val,
+                        out_path=lr_slope,
+                        context=context,
+                        feedback=feedback,
+                    )
+
                 if remove_positives_flag:
                     lr_no_pos = os.path.join(lr_dir, "Linear_Regression_NoPositives.tif")
-                    remove_positive_pixels(lr_clamped, lr_no_pos, feedback)
+                    remove_positive_pixels(lr_current, lr_no_pos, feedback)
                     lr_current = lr_no_pos
                     
                 if p1.get("OUTPUT_OSW_POLY") and os.path.exists(p1["OUTPUT_OSW_POLY"]):
@@ -1478,9 +1701,9 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
                 elif os.path.exists(lr_current):
                     import shutil
                     shutil.copy2(lr_current, raw_lr_map)
-                append_log("   [Analytics] Linear Regression depth map successfully cleaned and OSW clipped.", log_path, feedback)
+                append_log("      → Linear Regression depth map cleaned and OSW clipped.", log_path, feedback)
             except Exception as e:
-                append_log(f"   [Warning] Failed to post-process Linear Regression depth map: {e}", log_path, feedback)
+                append_log(f"  ⚠ WARNING: Failed to post-process Linear Regression depth map: {e}", log_path, feedback)
 
         if os.path.exists(raw_lr_uncert):
             try:
@@ -1577,7 +1800,7 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
             path_refined = p4_no_pos
 
         if p1.get("OUTPUT_OSW_POLY") and os.path.exists(p1["OUTPUT_OSW_POLY"]):
-            append_log("\n>>> Clipping Phase 04 Map with OSW Polygon...", log_path, feedback)
+            append_log("  → Clipping Phase 04 Map with OSW Polygon...", log_path, feedback)
             p4_osw_clipped = os.path.join(p4_dir, "Phase04_Final_Depth_OSW_Clipped.tif")
             processing.run(
                 "gdal:cliprasterbymasklayer",
@@ -1636,7 +1859,8 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
             p4["OUTPUT_UNCERT"] = p4_uncert_clamped
 
     if enable_val and final_test:
-        append_log("\n>>> Phase 05: Validation...", log_path, feedback)
+        append_log("  [Phase 05] Validation", log_path, feedback)
+        append_log("      → Generating Evaluation Metrics...", log_path, feedback)
         processing.run(
             "sdb_tools:sdb_05_reporting",
             {
@@ -1716,14 +1940,22 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
         train_name=input_train_layer.name() if input_train_layer else "Unknown Vector",
         test_name=input_test_layer.name() if input_test_layer else "N/A"
     )
-    append_log("\n>>> Workflow Complete.", log_path, feedback)
+    import time
+    end_time = time.time()
+    elapsed = end_time - start_time
+    mins = int(elapsed // 60)
+    secs = int(elapsed % 60)
+    
+    append_log("════════════════════════════════════════════════════════════", log_path, feedback)
+    append_log(f"✓ SDB Single Masterflow Completed in {mins}m {secs}s".center(60), log_path, feedback)
+    append_log("════════════════════════════════════════════════════════════\n", log_path, feedback)
 
     return {}
 
 
-def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt_count, depth_min, depth_max, has_weight_stats, weight_min, weight_max, actual_pt_count, collision_handling, filter_mode_name, strat_rows, log_path=None, feedback=None, raster_name="Satellite Imagery", train_name="ICESat-2 (ATL24) LiDAR", test_name="In-situ Echosounder Surveys"):
+def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt_count, depth_min, depth_max, has_weight_stats, weight_min, weight_max, actual_pt_count, collision_handling, filter_mode_name, strat_rows, log_path=None, feedback=None, raster_name="Satellite Imagery", train_name="ICESat-2 (ATL24) LiDAR", test_name="In-situ Echosounder Surveys", is_spatiospectral=False, p2_dir=None):
     import datetime
-
+    
     date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     folder_name = os.path.basename(out_dir)
 
@@ -1807,18 +2039,24 @@ def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt
 
     # Phase 02 Plots
     p2_plots_html = ""
-    p2_plot1_path = os.path.abspath(os.path.join(out_dir, "Phase_02_Filtering/2_Plot_1_Trend.png")).replace("\\", "/")
-    p2_plot2_path = os.path.abspath(os.path.join(out_dir, "Phase_02_Filtering/2_Plot_2_Variance.png")).replace("\\", "/")
-    p2_plot3_path = os.path.abspath(os.path.join(out_dir, "Phase_02_Filtering/2_Plot_3_Envelope.png")).replace("\\", "/")
+    if not p2_dir:
+        p2_dir = os.path.join(out_dir, "Phase_02_Filtering")
+        
+    p2_plot1_path = os.path.abspath(os.path.join(p2_dir, "2_Plot_1_Trend.png")).replace("\\", "/")
+    p2_plot2_path = os.path.abspath(os.path.join(p2_dir, "2_Plot_2_Variance.png")).replace("\\", "/")
+    p2_plot3_path = os.path.abspath(os.path.join(p2_dir, "2_Plot_3_Envelope.png")).replace("\\", "/")
 
     # Check which plots exist and match the filter mode
     p2_plots_to_show = []
     if os.path.exists(p2_plot1_path):
         p2_plots_to_show.append((p2_plot1_path, "Figure 1: Regression Trend & Outlier Rejection"))
-    if os.path.exists(p2_plot2_path):
-        p2_plots_to_show.append((p2_plot2_path, "Figure 2: Depth vs Variance Analysis"))
-    if os.path.exists(p2_plot3_path):
-        p2_plots_to_show.append((p2_plot3_path, "Figure 3: Residuals & Uncertainty Envelope"))
+        
+    if filter_mode_name and "LS Variance" in filter_mode_name:
+        if os.path.exists(p2_plot2_path):
+            p2_plots_to_show.append((p2_plot2_path, "Figure 2: Depth vs Variance Analysis"))
+    else:
+        if os.path.exists(p2_plot3_path):
+            p2_plots_to_show.append((p2_plot3_path, "Figure 2: Residuals & Uncertainty Envelope"))
 
     if p2_plots_to_show:
         p2_plots_html = """
@@ -2107,7 +2345,8 @@ def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt
 
         {p2_plots_html}
 
-        <h2>🏆 Phase 03: AutoML Leaderboard (Global Model)</h2>
+        {
+        f'''<h2>🏆 Phase 03: AutoML Leaderboard (Global Model)</h2>
         <p style="color: #64748b; font-size: 8pt; margin-bottom: 5px;">
             The algorithms are optimized and evaluated against independent cross-validation blocks.
         </p>
@@ -2123,9 +2362,10 @@ def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt
             <tbody>
                 {p3_rows_html}
             </tbody>
-        </table>
+        </table>''' if not is_spatiospectral else ''
+        }
 
-        {f"<h2>🔄 Phase 04: Adaptive Refinement Leaderboard</h2><table border='1' cellspacing='0' cellpadding='6' bordercolor='#cbd5e1' style='width: 100%; border-collapse: collapse; margin-top: 8pt; margin-bottom: 12pt;'><thead><tr bgcolor='#f1f5f9'><th style='white-space: nowrap;'>Algorithm</th><th style='white-space: nowrap;'>R² Accuracy</th><th style='white-space: nowrap;'>RMSE (Vertical Error)</th><th style='white-space: nowrap;'>wMAPE (%)</th></tr></thead><tbody>{p4_rows_html}</tbody></table>" if has_p4 else ""}
+        {f"<h2>🔄 Phase 04: Depth-Dependent Residual Calibration Leaderboard</h2><table border='1' cellspacing='0' cellpadding='6' bordercolor='#cbd5e1' style='width: 100%; border-collapse: collapse; margin-top: 8pt; margin-bottom: 12pt;'><thead><tr bgcolor='#f1f5f9'><th style='white-space: nowrap;'>Algorithm</th><th style='white-space: nowrap;'>R² Accuracy</th><th style='white-space: nowrap;'>RMSE (Vertical Error)</th><th style='white-space: nowrap;'>wMAPE (%)</th></tr></thead><tbody>{p4_rows_html}</tbody></table>" if has_p4 and not is_spatiospectral else ""}
 
         <div class="footer">
             Report generated automatically by Bathymetrix-AI V6.4. All rights reserved. &copy; Mohamed Aly Nasef (2026).

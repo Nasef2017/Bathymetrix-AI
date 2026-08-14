@@ -62,7 +62,7 @@ class TidalDatumConverter(QgsProcessingAlgorithm):
         return "tidal_datum_converter"
 
     def displayName(self):
-        return self.tr("Tidal Datum Converter (FES2014)")
+        return self.tr("6. Tidal Datum Converter (FES2014)")
 
     def group(self):
         return ""
@@ -72,38 +72,36 @@ class TidalDatumConverter(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         return """
-        <div style="font-family: Arial, sans-serif; line-height: 1.2;">
-            <h2 style="margin-bottom: 5px;">🌊 <span style="color: #2E86C1;">Tidal-Mapper</span>: Vertical Datum Converter</h2>
-            <p style="margin-top: 0; margin-bottom: 10px;">A precision tool to transform vertical levels (Height/Depth) between tidal datums using the FES2014 global hydrodynamic model.</p>
-
-            <b style="display: block; margin-bottom: 2px;">⚙️ Workflow & Logic</b>
-            <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li><b>Extracts Constituents:</b> Reads M2, S2, K1, O1, etc., from NetCDF files.</li>
-                <li><b>Calculates Offsets:</b> Derives datum separation relative to Mean Sea Level (MSL).</li>
-                <li><b>Transformation Formula:</b><br>
-                <i>Final = Input + (Offset<sub>Target</sub> - Offset<sub>Source</sub>)</i></li>
-            </ul>
-
-            <b style="display: block; margin-bottom: 2px;">📏 Supported Datums</b>
-            <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li><b>Astronomical:</b> HAT, LAT <i>(Max/Min tidal range)</i>.</li>
-                <li><b>Mean Levels:</b> MSL, MHWS, MLWS, MHWN, MLWN.</li>
-                <li><b>Hydrographic:</b> MLLW <i>(Common chart datum)</i>.</li>
-            </ul>
-
-            <b style="display: block; margin-bottom: 2px;">🧠 Smart Features</b>
-            <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li><b>Smart Coastal Fix:</b> Automatically estimates values for near-shore points using a search radius if exact pixel is null.</li>
-                <li><b>Auto-Unit Conversion:</b> Handles FES2014 raw units (cm) to output meters.</li>
-            </ul>
-
-            <p style="margin-top: 10px; border-top: 1px solid #ccc; padding-top: 5px;">
-                <b style="color: #E74C3C;">⚠️ Requirement:</b> FES2014 'ocean_tide' folder containing .nc files.
+        <div style="font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.5; color: #2C3E50;">
+            <h2 style="margin-bottom: 5px; color: #2E86C1;">🌊 Bathymetrix-AI: Tidal Datum Converter</h2>
+            <p style="margin-top: 0; margin-bottom: 15px; font-size: 13px;">
+                A precision hydrodynamic transformation tool to convert and vertically align depth and elevation observations between tidal datums using the <b>FES2014 Global Hydrodynamic Tide Model</b>.
             </p>
 
-            <p style="margin-top: 5px;">
-                <b>Developer:</b> Mohamed Aly Nasef
+            <h3 style="color: #117A65; margin-bottom: 5px; border-bottom: 2px solid #117A65; padding-bottom: 3px;">⚙️ Hydrodynamic Engine & Formula</h3>
+            <ul style="font-size: 12px; margin-top: 5px; padding-left: 20px;">
+                <li><b>Harmonic Extraction:</b> Reads tidal constituents (M2, S2, K1, O1, N2, K2, P1, Q1, etc.) from FES2014 NetCDF grids.</li>
+                <li><b>Datum Offset Calculation:</b> Derives separation offsets relative to Mean Sea Level (MSL).</li>
+                <li><b>Transformation:</b> <code>Z_Target = Z_Source + (Offset_Target - Offset_Source)</code></li>
+            </ul>
+
+            <h3 style="color: #D35400; margin-top: 15px; margin-bottom: 5px; border-bottom: 2px solid #D35400; padding-bottom: 3px;">📏 Supported Tidal Datums</h3>
+            <ul style="font-size: 12px; margin-top: 5px; padding-left: 20px;">
+                <li><b>Astronomical Extremes:</b> Highest Astronomical Tide (HAT), Lowest Astronomical Tide (LAT).</li>
+                <li><b>Mean Tidal Levels:</b> Mean Sea Level (MSL), Mean High Water Springs (MHWS), Mean Low Water Springs (MLWS), Mean High Water Neaps (MHWN), Mean Low Water Neaps (MLWN).</li>
+                <li><b>Hydrographic Chart Datums:</b> Mean Lower Low Water (MLLW).</li>
+            </ul>
+
+            <h3 style="color: #8E44AD; margin-top: 15px; margin-bottom: 5px; border-bottom: 2px solid #8E44AD; padding-bottom: 3px;">🧠 Smart Features</h3>
+            <ul style="font-size: 12px; margin-top: 5px; padding-left: 20px;">
+                <li><b>Smart Coastal Fix:</b> Automatically interpolates and extrapolates nearshore points using a spatial search radius if an exact coastal grid cell is null.</li>
+                <li><b>Automatic Unit Conversion:</b> Accurately handles raw FES2014 units (cm) and converts them to standard hydrographic meters.</li>
+            </ul>
+
+            <p style="margin-top: 15px; background: #FDEDEC; border-left: 4px solid #E74C3C; padding: 8px 12px; font-size: 12px; color: #78281F;">
+                <b>⚠️ Requirements:</b> Requires local FES2014 <code>ocean_tide</code> directory containing NetCDF (.nc) constituent files.
             </p>
+            <br><b>Developer:</b> Mohamed Aly Nasef
         </div>
         """
 

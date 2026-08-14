@@ -42,6 +42,7 @@ class SDBModule02(QgsProcessingAlgorithm):
             QgsProcessingParameterField(
                 self.FIELD_DEPTH,
                 "Depth Field",
+                defaultValue="depth",
                 parentLayerParameterName=self.INPUT_POINTS,
                 type=QgsProcessingParameterField.Numeric,
             )
@@ -116,16 +117,24 @@ class SDBModule02(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         return """
-        <div style="font-family: Arial, sans-serif; line-height: 1.2;">
-            <h2 style="margin-bottom: 5px;">🧹 <span style="color: #2E86C1;">SDB Module 02</span>: Robust Data Filtering</h2>
-            <p style="margin-top: 0; margin-bottom: 10px;">Filters noisy ICESat-2 data (or other altimetry) using advanced statistical methods to ensure high-quality training points.</p>
+        <div style="font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.5; color: #2C3E50;">
+            <h2 style="margin-bottom: 5px; color: #2E86C1;">🧹 SDB Module 02: Robust Data Filtering</h2>
+            <p style="margin-top: 0; margin-bottom: 15px; font-size: 13px;">
+                Filters noisy ICESat-2 LiDAR tracks, sonar soundings, or other altimetry using advanced statistical outlier rejection strategies to produce a clean, reliable training dataset for AI modeling.
+            </p>
             
-            <b style="display: block; margin-bottom: 2px;">🧹 Phase 02: Robust Filtering Strategies</b>
-            <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li><b>Linear RANSAC:</b> Best for data with a clear linear relationship but contaminated with significant, random outliers.</li>
-                <li><b>LS Variance Fit:</b> Best for data with a non-linear trend where noise is constant across depths.</li>
-                <li><b>Huber Variance Fit:</b> Best for complex scenarios where data uncertainty increases with depth.</li>
+            <h3 style="color: #117A65; margin-bottom: 5px; border-bottom: 2px solid #117A65; padding-bottom: 3px;">🧹 Filtering Strategies</h3>
+            <ul style="font-size: 12px; margin-top: 5px; padding-left: 20px;">
+                <li><b>Linear RANSAC (Random Sample Consensus):</b> Highly effective for optical log-ratio relationships contaminated with extreme random outliers and photon scatter.</li>
+                <li><b>Least-Squares (LS) Variance Fit:</b> Adaptive filtering suitable for non-linear data distributions where noise dispersion remains relatively uniform.</li>
+                <li><b>Huber Variance Fit:</b> Robust estimator that penalizes gross outliers linearly while maintaining quadratic sensitivity for inliers; ideal where depth uncertainty scales with depth.</li>
             </ul>
+
+            <h3 style="color: #D35400; margin-top: 15px; margin-bottom: 5px; border-bottom: 2px solid #D35400; padding-bottom: 3px;">📊 Diagnostic Visualizations</h3>
+            <p style="font-size: 12px; margin-top: 5px;">
+                Generates dynamic percentile-based scatter and regression diagnostic plots to visualize rejected vs. accepted training observations without distortion from extreme outliers.
+            </p>
+            <br><b>Developer:</b> Mohamed Aly Nasef
         </div>
         """
 

@@ -108,7 +108,7 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
         )
         self.addParameter(
             QgsProcessingParameterVectorLayer(
-                self.INPUT_TRAIN, "Adaptive Training Points"
+                self.INPUT_TRAIN, "Residual Calibration Points"
             )
         )
         self.addParameter(
@@ -359,7 +359,7 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
         return "sdb_phase4_adaptive"
 
     def displayName(self):
-        return "4. SDB Module 04: Spatial Refinement"
+        return "4. SDB Module 04: Depth-Dependent Residual Calibration"
 
     def group(self):
         return "SDB Research Tools"
@@ -372,22 +372,26 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         return """
-        <div style="font-family: Arial, sans-serif; line-height: 1.2;">
-            <h2 style="margin-bottom: 5px;">📍 <span style="color: #2E86C1;">SDB Module 04</span>: Spatial Refinement</h2>
-            <p style="margin-top: 0; margin-bottom: 10px;">Corrects local biases and spatially varying errors using Zero-Mean Centered Residual Analysis and Empirical Uncertainty Modeling.</p>
+        <div style="font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.5; color: #2C3E50;">
+            <h2 style="margin-bottom: 5px; color: #2E86C1;">📍 SDB Module 04: Spatial Residual Correction</h2>
+            <p style="margin-top: 0; margin-bottom: 15px; font-size: 13px;">
+                Eliminates localized optical depth biases and compensates for spatially varying benthic/water-column errors using Zero-Mean Residual Modeling, stacked secondary retraining, and 95% empirical uncertainty mapping.
+            </p>
 
-            <b style="display: block; margin-bottom: 2px;">📉 Zero-Mean Residual Analysis & LOO Huber Interpolation</b>
-            <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li>Subtracts mean residual offset (Zero-Mean Centering) to eliminate global drift.</li>
-                <li>Uses <b>Leave-One-Out (LOO) Robust Huber Weighting</b> and <b>Smoothed IDW Distance Decay (1 / (d + 1.0))</b> to create a spike-free continuous "Error Surface".</li>
+            <h3 style="color: #D35400; margin-bottom: 5px; border-bottom: 2px solid #D35400; padding-bottom: 3px;">📉 Zero-Mean Residual Modeling & Spatial Correction</h3>
+            <ul style="font-size: 12px; margin-top: 5px; padding-left: 20px;">
+                <li><b>Zero-Mean Centering:</b> Subtracts mean residual offset to prevent artificial vertical datum drift during local error fitting.</li>
+                <li><b>Leave-One-Out (LOO) Robust Huber Weighting:</b> Attenuates leverage from local ground-truth anomalies to ensure a smooth, continuous error surface.</li>
+                <li><b>Smoothed IDW Distance Decay:</b> Interpolates spatial error fields with singularity protection: <code>Weight = 1 / (distance + 1.0)</code>.</li>
             </ul>
 
-            <b style="display: block; margin-bottom: 2px;">📚 Stacked Learning & Empirical Uncertainty</b>
-            <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li>Combines: <b>[Original Bands] + [Global Depth] + [Error Grid]</b>.</li>
-                <li>Trains a secondary "Refinement Model" to predict the final, corrected bathymetry.</li>
-                <li>Generates an <b>Empirical Residual Uncertainty Map (95% Confidence)</b> to evaluate spatial prediction quality across every pixel.</li>
+            <h3 style="color: #117A65; margin-top: 15px; margin-bottom: 5px; border-bottom: 2px solid #117A65; padding-bottom: 3px;">📚 Stacked Retraining & Uncertainty Estimation</h3>
+            <ul style="font-size: 12px; margin-top: 5px; padding-left: 20px;">
+                <li><b>Stacked Feature Ensemble:</b> Re-trains a secondary refinement model integrating <code>[Spectral Bands] + [Global Base Depth] + [Interpolated Error Grid]</code>.</li>
+                <li><b>95% Spatial Prediction Uncertainty:</b> Generates a pixel-wise Empirical Residual Uncertainty map (<code>4-Refined_Uncertainty.tif</code>) representing the 95% confidence interval across the entire scene.</li>
+                <li><b>IHO S-44 Assessment:</b> Assesses localized residual compliance with International Hydrographic Organization Order 1a/2 criteria.</li>
             </ul>
+            <br><b>Developer:</b> Mohamed Aly Nasef
         </div>
         """
 

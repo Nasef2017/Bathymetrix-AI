@@ -46,8 +46,23 @@ def extract_values(vec_layer, depth_field, p3_path, p4_path, feedback):
 
     obs, pred3, pred4 = [], [], []
 
+    fields = vec_layer.fields().names()
+    actual_depth_field = depth_field
+    if actual_depth_field not in fields:
+        # Attempt to find a matching field (handling 10-char shapefile truncation)
+        for f in fields:
+            if f.lower() == depth_field.lower()[:10] or depth_field.lower().startswith(f.lower()[:8]):
+                actual_depth_field = f
+                break
+        else:
+            raise QgsProcessingException(f"Depth field '{depth_field}' not found in validation layer. Available fields: {fields}")
+
     for feat in vec_layer.getFeatures():
-        raw_depth = feat[depth_field]
+        try:
+            raw_depth = feat[actual_depth_field]
+        except KeyError:
+            continue
+
         if raw_depth is None:
             continue
 
@@ -222,7 +237,7 @@ def write_final_verdict(out_dir, s3, s4, n_val, p3_name, p4_name):
             reason = "RMSE difference is within 0.01 m tolerance."
         elif s4["RMSE"] < s3["RMSE"]:
             winner = "Phase 04 (Refined / Best Map)"
-            reason = "Lower RMSE confirms improvement from adaptive refinement."
+            reason = "Lower RMSE confirms improvement from Depth-Dependent Residual Calibration."
         else:
             winner = "Phase 03 (Global Model)"
             reason = "Phase 04 did not improve RMSE — possible overfitting in adaptive step."
@@ -483,21 +498,27 @@ def run_phase05_reporting(algorithm, parameters, context, feedback):
         feedback.pushInfo("    P4 map : [Bypassed / Not Generated]")
     feedback.pushInfo("=" * 60)
 
-    feedback.pushInfo("\n  [1/5] Sampling rasters at validation points...")
-    y_val, val_p3, val_p4 = extract_values(val_lyr, val_fld, p3_path, p4_path, feedback)
-
-    if len(y_val) < 5:
-        raise QgsProcessingException(
-            f"Only {len(y_val)} valid validation points found — need at least 5."
-        )
-
-    feedback.pushInfo(f"  Valid validation samples: {len(y_val)}")
-
-    feedback.pushInfo("  Sampling rasters at training points (reference)...")
-    y_train, train_p3, train_p4 = extract_values(
-        train_lyr, train_fld, p3_path, p4_path, feedback
-    )
-    feedback.pushInfo(f"  Valid training samples: {len(y_train)}")
+    if val_lyr is None:
+        feedback.pushInfo("\n  [1/5] No Validation Points provided. Using TRAINING Points for final evaluation...")
+        y_val, val_p3, val_p4 = extract_values(train_lyr, train_fld, p3_path, p4_path, feedback)
+        y_train, train_p3, train_p4 = y_val, val_p3, val_p4
+        feedback.pushInfo(f"  Valid evaluation samples: {len(y_val)}")
+    else:
+        feedback.pushInfo("\n  [1/5] Sampling rasters at validation points...")
+        y_val, val_p3, val_p4 = extract_values(val_lyr, val_fld, p3_path, p4_path, feedback)
+    
+        if len(y_val) < 5:
+            feedback.pushWarning(f"  Only {len(y_val)} validation points found. Falling back to TRAINING points for evaluation...")
+            y_val, val_p3, val_p4 = extract_values(train_lyr, train_fld, p3_path, p4_path, feedback)
+            y_train, train_p3, train_p4 = y_val, val_p3, val_p4
+            feedback.pushInfo(f"  Valid evaluation samples: {len(y_val)}")
+        else:
+            feedback.pushInfo(f"  Valid validation samples: {len(y_val)}")
+            feedback.pushInfo("  Sampling rasters at training points (reference)...")
+            y_train, train_p3, train_p4 = extract_values(
+                train_lyr, train_fld, p3_path, p4_path, feedback
+            )
+            feedback.pushInfo(f"  Valid training samples: {len(y_train)}")
 
     feedback.pushInfo("\n  [2/5] Calculating statistics...")
     stats_p3 = calc_stats(y_val, val_p3)

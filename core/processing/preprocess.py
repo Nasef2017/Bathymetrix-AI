@@ -91,7 +91,7 @@ try:
 except ImportError:
     scipy_is_available = False
 
-MASK_METHODS = ["Otsu (Automatic NDWI)", "Manual NDWI Threshold", "3 Indices Equation (NDWI, MNDWI, NWI)"]
+MASK_METHODS = ["Otsu (Automatic NDWI)", "Manual NDWI Threshold", "3 Indices Equation (NDWI, MNDWI, NWI)", "Smart Hybrid (Dynamic Auto)"]
 
 FEATURE_OPTIONS = [
     "[All Raw] All Bands from Input Image",
@@ -195,6 +195,104 @@ def run_watermasking_plugin(in_f, out_f, b_idx, g_idx, r_idx, n_idx, s_idx, k_si
             dst.write(mask_uint8, 1)
 
 
+def run_smart_hybrid_masking(in_f, out_f, b_idx, g_idx, r_idx, n_idx, s_idx, k_size, fb):
+    import rasterio
+    import numpy as np
+    from rasterio.features import sieve
+    
+    with rasterio.open(in_f) as src:
+        b = src.read(b_idx).astype(np.float32)
+        g = src.read(g_idx).astype(np.float32)
+        r = src.read(r_idx).astype(np.float32)
+        n = src.read(n_idx).astype(np.float32)
+        s = src.read(s_idx).astype(np.float32)
+
+        valid_mask = (g > 0) & (n > 0) & (r > 0) & (s > 0) & (g != -9999) & (n != -9999)
+        
+        denom_ndwi = g + n
+        denom_ndwi[denom_ndwi == 0] = 1e-6
+        ndwi = (g - n) / denom_ndwi
+        
+        denom_mndwi = g + s
+        denom_mndwi[denom_mndwi == 0] = 1e-6
+        mndwi = (g - s) / denom_mndwi
+        
+        denom_ndvi = n + r
+        denom_ndvi[denom_ndvi == 0] = 1e-6
+        ndvi = (n - r) / denom_ndvi
+        
+        valid_ndwi = ndwi[valid_mask]
+        water_mask = np.zeros(ndwi.shape, dtype="uint8")
+        
+        if valid_ndwi.size > 100:
+            std_dev = np.std(valid_ndwi)
+            fb.pushInfo(f"      [Smart Hybrid] NDWI StdDev: {std_dev:.4f}")
+            
+            if std_dev < 0.05:
+                fb.pushInfo("      [Smart Hybrid] Scene is heavily unimodal. Using Physical thresholds.")
+                water_mask[(mndwi > -0.05) & (ndvi < 0.15) & valid_mask] = 1
+            else:
+                hist, bins = np.histogram(valid_ndwi, bins=256, range=(-1.0, 1.0))
+                total = valid_ndwi.size
+                
+                try:
+                    from scipy.ndimage import gaussian_filter1d
+                    hist_smoothed = gaussian_filter1d(hist.astype(float), sigma=2)
+                except ImportError:
+                    hist_smoothed = hist.astype(float)
+                
+                sum_total = np.dot(np.arange(256), hist)
+                max_val = 0
+                thresh_idx = 0
+                sum_b = 0
+                weight_b = 0
+                
+                for i in range(256):
+                    weight_b += hist[i]
+                    if weight_b == 0: continue
+                    weight_f = total - weight_b
+                    if weight_f == 0: break
+                    
+                    sum_b += i * hist[i]
+                    m_b = sum_b / weight_b
+                    m_f = (sum_total - sum_b) / weight_f
+                    var_b = weight_b * weight_f * (m_b - m_f) ** 2
+                    
+                    p_t = hist_smoothed[i] / total
+                    valley_weight = 1.0 - p_t
+                    score = valley_weight * var_b
+                    
+                    if score > max_val:
+                        max_val = score
+                        thresh_idx = i
+                        
+                otsu_thresh = bins[thresh_idx]
+                fb.pushInfo(f"      [Smart Hybrid] Valley-Emphasis Otsu NDWI Threshold: {otsu_thresh:.4f}")
+                
+                water_condition = ((ndwi > otsu_thresh) | (mndwi > -0.05)) & (ndvi < 0.15)
+                water_mask[water_condition & valid_mask] = 1
+                
+        else:
+            fb.pushWarning("      [Smart Hybrid] Not enough valid pixels. Defaulting to MNDWI > 0.")
+            water_mask[(mndwi > 0) & (ndvi < 0.1) & valid_mask] = 1
+            
+        if k_size > 0:
+            try:
+                from scipy import ndimage
+                struct = ndimage.generate_binary_structure(2, 2)
+                water_mask_closed = ndimage.binary_closing(water_mask, structure=struct, iterations=1).astype("uint8")
+                water_mask = sieve(water_mask_closed, size=k_size, connectivity=8)
+            except ImportError:
+                water_mask = sieve(water_mask, size=k_size, connectivity=8)
+                
+        water_mask[~valid_mask] = 255
+        
+        prof = src.profile
+        prof.update(count=1, dtype="uint8", nodata=255)
+        with rasterio.open(out_f, "w", **prof) as dst:
+            dst.write(water_mask.astype('uint8'), 1)
+
+
 def run_hedley(in_f, out_f, nir_idx, target_bands_idx, mask_f, percentile, fb):
     with rasterio.open(in_f) as src:
         prof = src.profile
@@ -251,6 +349,8 @@ def run_hedley(in_f, out_f, nir_idx, target_bands_idx, mask_f, percentile, fb):
 
                 fb.pushInfo(f"      Band {b} slope = {slope:.5f}")
                 corrected = band - slope * (nir - nir_min)
+                # Prevent negative or exact zero values from causing NaN/mask drops downstream
+                corrected = np.clip(corrected, 1e-4, None)
             else:
                 corrected = band
 
@@ -361,7 +461,10 @@ def generate_features(
         r_val = s.read(r).astype("float32")
         n_val = s.read(n).astype("float32")
 
-        mask_valid = (b_val > 0) & (g_val > 0) & np.isfinite(b_val)
+        # Relaxed valid mask to avoid dropping valid water pixels with negative or exact zero values
+        # A pixel is only NoData if it's -9999.0, NaN, or completely black (all bands 0)
+        nodata_mask = (b_val == 0) & (g_val == 0) & (r_val == 0)
+        mask_valid = (~nodata_mask) & (b_val != -9999.0) & np.isfinite(b_val)
 
         if mask_f and os.path.exists(mask_f):
             with rasterio.open(mask_f) as m_src:
@@ -800,7 +903,7 @@ def run_phase01_preprocessing(algorithm, parameters, context, feedback):
     n_idx = algorithm.parameterAsInt(parameters, algorithm.NIR_BAND, context)
     s_idx = algorithm.parameterAsInt(parameters, algorithm.SWIR_BAND, context)
 
-    feedback.pushInfo(f"\n>>> MODULE 01 START (Threads: {n_threads})...")
+    # feedback.pushInfo(f"\n>>> MODULE 01 START (Threads: {n_threads})...")
 
     water_poly_layer = algorithm.parameterAsVectorLayer(
         parameters, algorithm.INPUT_WATER_POLY, context
@@ -812,7 +915,7 @@ def run_phase01_preprocessing(algorithm, parameters, context, feedback):
     final_mask_path = None
 
     if water_poly_layer is not None:
-        feedback.pushInfo("   [1/3] Using provided Vector Polygon for Water Masking...")
+        feedback.pushInfo("      → [1/3] Using provided Vector Polygon for Water Masking...")
         run_polygon_mask(curr_img, p_mask, input_layer, water_poly_layer, feedback)
         final_mask_path = p_mask
 
@@ -827,24 +930,27 @@ def run_phase01_preprocessing(algorithm, parameters, context, feedback):
             adj = algorithm.parameterAsDouble(
                 parameters, algorithm.OTSU_ADJUSTMENT, context
             )
-            feedback.pushInfo("   [1/3] Generating Water Mask (Otsu NDWI)...")
+            feedback.pushInfo("      → [1/3] Generating Water Mask (Otsu NDWI)...")
             run_otsu_robust(curr_img, p_mask, g_idx, n_idx, adj, k_size, feedback)
         elif MASK_METHODS[masking_choice] == "Manual NDWI Threshold":
             manual_val = algorithm.parameterAsDouble(
                 parameters, algorithm.MANUAL_THRESHOLD, context
             )
-            feedback.pushInfo("   [1/3] Generating Water Mask (Manual NDWI)...")
+            feedback.pushInfo("      → [1/3] Generating Water Mask (Manual NDWI)...")
             run_manual_mask(
                 curr_img, p_mask, g_idx, n_idx, manual_val, k_size, feedback
             )
+        elif MASK_METHODS[masking_choice] == "Smart Hybrid (Dynamic Auto)":
+            feedback.pushInfo("      → [1/3] Generating Water Mask (Smart Hybrid Auto)...")
+            run_smart_hybrid_masking(curr_img, p_mask, b_idx, g_idx, r_idx, n_idx, s_idx, k_size, feedback)
         else:
-            feedback.pushInfo("   [1/3] Generating Water Mask (3 Indices: NDWI, MNDWI, NWI)...")
+            feedback.pushInfo("      → [1/3] Generating Water Mask (3 Indices)...")
             run_watermasking_plugin(curr_img, p_mask, b_idx, g_idx, r_idx, n_idx, s_idx, k_size, feedback)
         final_mask_path = p_mask
 
     else:
         feedback.pushInfo(
-            "   [1/3] Masking is completely Disabled. Proceeding with the entire image."
+            "      → [1/3] Masking is completely Disabled. Proceeding with the entire image."
         )
         final_mask_path = None
 
@@ -859,16 +965,16 @@ def run_phase01_preprocessing(algorithm, parameters, context, feedback):
 
         mask_status = "Mask" if final_mask_path else "Full Image"
         feedback.pushInfo(
-            f"   [2/3] Sunglint Correction (Float64 Math | Target: {mask_status})..."
+            f"      → [2/3] Sunglint Correction (Float64 Math | Target: {mask_status})..."
         )
         run_hedley(
             curr_img, p_glint, nir_band_idx, target_bands_idx, final_mask_path, perc, feedback
         )
         curr_img = p_glint
     else:
-        feedback.pushInfo("   [2/3] Sunglint Correction Skipped.")
+        feedback.pushInfo("      → [2/3] Sunglint Correction Skipped.")
 
-    feedback.pushInfo("   [3/3] Generating Features Stack...")
+    feedback.pushInfo("      → [3/3] Generating Features Stack...")
     selected_feats = algorithm.parameterAsEnums(
         parameters, algorithm.FEATURE_SELECTION, context
     )
@@ -892,7 +998,7 @@ def run_phase01_preprocessing(algorithm, parameters, context, feedback):
         feedback,
     )
 
-    feedback.pushInfo("   [4/4] Applying OSW Filter (Deep Water)...")
+    feedback.pushInfo("      → [4/4] Applying OSW Filter (Deep Water)...")
     
     apply_dw = algorithm.parameterAsBool(parameters, algorithm.APPLY_DEEPWATER, context)
     dw_method = algorithm.parameterAsInt(parameters, algorithm.DEEPWATER_METHOD, context)
@@ -930,7 +1036,7 @@ def run_phase01_preprocessing(algorithm, parameters, context, feedback):
         
         osw_mask_path = os.path.join(out_dir, "06_Final_OSW_Mask.tif")
         if os.path.exists(osw_mask_path) and os.path.exists(p_stack):
-            feedback.pushInfo("   [4/4] Masking Feature Stack with OSW...")
+            feedback.pushInfo("      → [4/4] Masking Feature Stack with OSW...")
             with rasterio.open(osw_mask_path) as msrc:
                 osw_mask = msrc.read(1)
             
@@ -940,8 +1046,23 @@ def run_phase01_preprocessing(algorithm, parameters, context, feedback):
                 for b_i in range(stack_data.shape[0]):
                     stack_data[b_i, osw_mask == 0] = nodata_val
                 src.write(stack_data)
+                
+            # Create a combined mask for prediction
+            if final_mask_path and os.path.exists(final_mask_path):
+                feedback.pushInfo("      → [4/4] Generating Combined Prediction Mask (Water + OSW)...")
+                combined_mask_path = os.path.join(out_dir, "08_Combined_Prediction_Mask.tif")
+                with rasterio.open(final_mask_path) as lw_src:
+                    lw_mask = lw_src.read(1)
+                    prof = lw_src.profile
+                
+                # Combine: 1 only if BOTH are 1
+                combined = (lw_mask == 1) & (osw_mask == 1)
+                with rasterio.open(combined_mask_path, "w", **prof) as dst:
+                    dst.write(combined.astype(np.uint8), 1)
+                
+                final_mask_path = combined_mask_path
     else:
-        feedback.pushInfo("      OSW Filter is completely disabled.")
+        feedback.pushInfo("      → OSW Filter is completely disabled.")
 
     output_dict = {"OUTPUT_FEATURES": p_stack}
     if final_mask_path:

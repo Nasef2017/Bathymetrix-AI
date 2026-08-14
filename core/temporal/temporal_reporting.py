@@ -1,5 +1,6 @@
 import os
 import json
+import numpy as np
 from typing import Dict, List, Any
 from qgis.core import (
     QgsProject,
@@ -15,7 +16,8 @@ from qgis.core import (
     QgsRasterShader,
     QgsColorRampShader,
     QgsRasterLayerTemporalProperties,
-    QgsDateTimeRange
+    QgsDateTimeRange,
+    QgsRasterBandStats
 )
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtCore import QDateTime, QDate, QTime
@@ -63,22 +65,6 @@ class TemporalReportGenerator:
                     except Exception as e:
                         feedback.pushInfo(f"⚠️ Could not copy {old_path} to {new_name}: {e}")
 
-                # Load all SDB layers and configure their temporal properties for timelapse
-                sdb_layer_name = f"SDB {yr}"
-                rlayer = QgsRasterLayer(res["sdb_depth_map"], sdb_layer_name)
-                if rlayer.isValid():
-                    # Set temporal properties
-                    t_prop = rlayer.temporalProperties()
-                    if t_prop is not None:
-                        t_prop.setIsActive(True)
-                        t_prop.setMode(QgsRasterLayerTemporalProperties.ModeFixedTemporalRange)
-                        start_date = QDateTime(QDate(int(yr), 1, 1), QTime(0, 0, 0))
-                        end_date = QDateTime(QDate(int(yr), 12, 31), QTime(23, 59, 59))
-                        time_range = QgsDateTimeRange(start_date, end_date)
-                        t_prop.setFixedTemporalRange(time_range)
-                    
-                    QgsProject.instance().addMapLayer(rlayer, True)
-
         # Add Benthic Layers
         for yr, res in sorted(benthic_results.items()):
             if res and res.get("benthic_map_path") and os.path.exists(res["benthic_map_path"]):
@@ -123,12 +109,39 @@ class TemporalReportGenerator:
                 layer_name = f"Volumetric Erosion Accretion Trend ({period})"
                 rlayer = QgsRasterLayer(res["statcd_raster_path"], layer_name)
                 if rlayer.isValid():
-                    classes = [
-                        QgsPalettedRasterRenderer.Class(1, QColor(255, 255, 191), "Stable"),
-                        QgsPalettedRasterRenderer.Class(2, QColor(166, 217, 106), "Accretion"),
-                        QgsPalettedRasterRenderer.Class(3, QColor(215, 25, 28), "Erosion")
+                    provider = rlayer.dataProvider()
+                    # Use sample size of 250000 to prevent QGIS UI from freezing on massive rasters
+                    stats = provider.bandStatistics(1, QgsRasterBandStats.All, rlayer.extent(), 250000)
+                    min_val = stats.minimumValue
+                    max_val = stats.maximumValue
+                    mean_val = stats.mean
+                    std_val = stats.stdDev
+                    
+                    # Robust mapping: use mean +/- 2.5 std to filter out extreme outliers that wash out the legend
+                    robust_min = mean_val - 2.5 * std_val
+                    robust_max = mean_val + 2.5 * std_val
+                    
+                    # Create symmetric bounds around 0 for diverging color ramp
+                    abs_max = max(abs(robust_min) if not np.isnan(robust_min) else 0.1, abs(robust_max) if not np.isnan(robust_max) else 0.1)
+                    if abs_max < 0.1:
+                        abs_max = 0.5
+                        
+                    fnc = QgsColorRampShader()
+                    fnc.setColorRampType(QgsColorRampShader.Interpolated)
+                    # Diverging Color Ramp for Continuous Change dynamically scaled
+                    lst = [
+                        QgsColorRampShader.ColorRampItem(-abs_max, QColor(215, 25, 28), f"High Erosion ({-abs_max:.2f}m)"),
+                        QgsColorRampShader.ColorRampItem(-abs_max/2, QColor(253, 174, 97), f"Erosion ({-abs_max/2:.2f}m)"),
+                        QgsColorRampShader.ColorRampItem(0.0, QColor(255, 255, 255, 0), "Stable / Noise (0.00m)"), 
+                        QgsColorRampShader.ColorRampItem(abs_max/2, QColor(166, 217, 106), f"Accretion (+{abs_max/2:.2f}m)"),
+                        QgsColorRampShader.ColorRampItem(abs_max, QColor(26, 150, 65), f"High Accretion (+{abs_max:.2f}m)")
                     ]
-                    renderer = QgsPalettedRasterRenderer(rlayer.dataProvider(), 1, classes)
+                    fnc.setColorRampItemList(lst)
+                    shader = QgsRasterShader()
+                    shader.setRasterShaderFunction(fnc)
+                    renderer = QgsSingleBandPseudoColorRenderer(rlayer.dataProvider(), 1, shader)
+                    renderer.setClassificationMin(-abs_max)
+                    renderer.setClassificationMax(abs_max)
                     rlayer.setRenderer(renderer)
                     
                     # Save style to qml
@@ -264,7 +277,7 @@ class TemporalReportGenerator:
                     html_content += f"""
                             <tr>
                                 <td>{res.get('period', 'N/A')}</td>
-                                <td>{"Overall Trend" if res.get('is_overall') else "Sequential"}</td>
+                                <td>{res.get('analysis_type', 'Sequential')}</td>
                                 <td style="color: #27AE60; font-weight: bold;">+ {res.get('accretion_volume_m3', 0):,.2f}</td>
                                 <td style="color: #C0392B; font-weight: bold;">- {res.get('erosion_volume_m3', 0):,.2f}</td>
                                 <td><b>{res.get('net_sediment_balance_m3', 0):,.2f}</b></td>

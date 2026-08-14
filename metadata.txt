@@ -1,48 +1,55 @@
 [general]
-icon=icon.png
 name=Bathymetrix-AI
 qgisMinimumVersion=3.22
 qgisMaximumVersion=4.99
-version=6.5
+version=7.0
 author=Mohamed Aly Nasef
-email=Eng.m.nasef2017@gmail.com
-description=An advanced Machine Learning pipeline for Satellite-Derived Bathymetry (SDB). Features ICESat-2 integration, In-Situ Data filtering, Zero-Mean LOO Residual Refinement, Quantile Regression Uncertainty, Target ROI Sediment Analytics, and Multi-Year Coastal Dynamics.
+email=Eng.m.nasef2017@gmail.com, Nasefm.aly@alexu.edu.eg
+description=A professional QGIS research toolkit for Satellite-Derived Bathymetry (SDB), integrating multispectral imagery with ICESat-2 LiDAR via Auto-ML, SpatioSpectral aggregation, SpatioTemporal modeling, Adaptive Refinement, and Coastal Dynamics.
 
-about=<h3>Bathymetrix-AI: Advanced SDB Modeling & Coastal Dynamics</h3>
-    <p><b>Bathymetrix-AI</b> is a specialized QGIS research toolkit designed to derive high-precision bathymetry from corrected multispectral satellite imagery. It systematically integrates physics-based corrections with data-driven Machine Learning to overcome traditional SDB limitations, and features a state-of-the-art Temporal Intelligence engine for coastal monitoring.</p>
+about=<h3>Bathymetrix-AI: Advanced SDB Toolkit & Coastal Dynamics</h3>
+    <p><b>Bathymetrix-AI</b> is a professional QGIS research toolkit for high-precision Satellite-Derived Bathymetry (SDB). The toolkit integrates multispectral satellite imagery with ICESat-2 (ATL24) LiDAR bathymetry through a modular and adaptive Machine Learning framework. It automates the end-to-end SDB processing pipeline while maintaining full control over data quality, model selection, spatial refinement, uncertainty estimation, and scientific validation.</p>
     
-    <p><b>Core Workflow (The 5-Phase System):</b></p>
+    <p><b>🔬 Scientific Methodology — Core 5-Phase System (SDB Single Masterflow):</b></p>
     <ul>
-        <li><b>Phase 01: Advanced Pre-processing:</b> Sun-glint correction (Hedley), <b>Advanced Water Masking</b> using 3-Indices (NDWI, MNDWI, NWI), physics-based Log-Ratio features computation (including NDWI, Log(Green)/Log(NIR), Log(Red)/Log(NIR)), and a <b>Deep Water Filter</b> customized for ML algorithms (featuring dynamic Elbow Point Detection and Polygon masking).</li>
-        <li><b>Phase 02: Robust Filtering:</b> Noise removal using Linear RANSAC, LS Variance Fit, or Huber Variance Fit (Zhang et al., 2021). Features multi-band robust percentile optical scaling.</li>
-        <li><b>Phase 03: Global Auto-ML & Feature Analysis:</b> Optional feature correlation analysis (<b>Automatic-RANSAC, Automatic-Random Forest</b>), competitive benchmarking of <b>15+ ML algorithms</b> (including XGBoost, LightGBM, CatBoost), independent <b>Spatial Cross-Validation</b>, and hyperparameter optimization via Random Search, Grid Search, or Bayesian. Features automated chunk-based processing to prevent memory errors with large datasets.</li>
-        <li><b>Phase 04: Adaptive Refinement:</b> Zero-mean centered spatial residual corrections, Leave-One-Out (LOO) robust Huber weighting, $1/(d+1)$ smoothed IDW weighting, independent <b>Spatial Cross-Validation</b>, and empirical residual uncertainty modeling (Alevizos, 2020) to eliminate local spatial biases.</li>
-        <li><b>Phase 05: Validation & Reporting:</b> Independent accuracy assessment on unseen test data and IHO Order 1a/2 TVU compliance reporting.</li>
+        <li><b>Phase 01: Advanced Pre-processing:</b> Isolates the aquatic domain, removes surface sun-glint using the Hedley model (with robust NaN/Inf handling), segments water using NDWI/MNDWI/NWI with adaptive thresholding, filters deep-water OSW boundaries (dynamic Elbow Point Detection & manual polygon masking), exports OSW vector GeoPackages preserving CRS, and generates physics-based Log-Ratio features (e.g. Blue/Green) and spectral indices.</li>
+        <li><b>Phase 02: Robust Filtering:</b> Identifies and eliminates noisy observations, outliers, and environmental artifacts in training depth data using Linear RANSAC, Least-Squares (LS) Variance Fit, Huber Variance Fit, and dynamic percentile-based diagnostic plotting.</li>
+        <li><b>Phase 03: Global Auto-ML & Feature Analysis:</b> Analyzes multicollinearity and feature importance (Pearson/Spearman correlation, Auto-RANSAC, Auto-Random Forest), benchmarks over 15 ML regressors (Random Forest, Gradient Boosting, XGBoost, LightGBM, CatBoost, SVR, MLP, etc.), performs hyperparameter optimization (Bayesian, Grid, Random Search), utilizes Spatial Block Cross-Validation, supports Ensemble Blending (Standard Average, Median, Stacking, and Uncertainty-Weighted Pixel Fusion), and executes memory-efficient chunked raster prediction.</li>
+        <li><b>Phase 04: Adaptive Refinement:</b> Mitigates local depth bias using Zero-Mean Centered Spatial Residuals, robust KNN spatial residual modeling, spatial cross-validation, adaptive re-training, and pixel fusion, evaluated against IHO Order 1a/2 Total Vertical Uncertainty (TVU) standards.</li>
+        <li><b>Phase 05: Validation & Reporting:</b> Conducts independent accuracy assessment against unseen validation points (R², RMSE, wMAPE, IHO S-44 Order 1a/2 TVU compliance) and exports interactive HTML validation dashboards and diagnostic reports.</li>
     </ul>
 
-    <p><b>Standalone Modules:</b></p>
+    <p><b>🚀 Masterflows & Standalone Modules:</b></p>
     <ul>
-        <li><b>Coastal Dynamics (Temporal Intelligence):</b> Multi-year <b>Volumetric Erosion/Accretion Trend</b> using Linear Regression, <b>Target ROI Sub-Region Polygon Analytics</b>, <b>Quantile Regression (Adaptive σ) Uncertainty</b>, <b>Morphological Stability Index (MSI)</b>, and <b>Shoreline Migration Polygons</b>. Features auto-detection of depth/elevation formats, full process logging, and automated HTML reporting.</li>
-        <li><b>ICESat-2 Downloader:</b> Specialized tool for querying and downloading ICESat-2 (ATL24) LiDAR data directly from NSIDC.</li>
+        <li><b>SDB Single Masterflow:</b> Complete automated end-to-end pipeline executing all 5 phases on a single satellite scene.</li>
+        <li><b>SDB SpatioSpectral Masterflow:</b> Independently evaluates multiple scenes over the same area and aggregates them using Best Scene Selection (High R² / Low RMSE), Weighted Median, Weighted Mean, or Median/Mean with IHO compliance and comprehensive HTML reporting.</li>
+        <li><b>SDB SpatioTemporal Masterflow:</b> Multi-year global spatiotemporal AI modeling that integrates 'Year' directly as an AI feature across multi-temporal imagery, followed by per-year adaptive refinement for consistent temporal depth series.</li>
+        <li><b>Coastal Dynamics Analysis (Module 06):</b> Multi-year coastal monitoring computing long-term bathymetric trends, Morphological Stability Index (MSI), Statistical Level of Detection (StatCD), erosion/accretion, shoreline movement, and volumetric sediment tracking with target ROI analytics.</li>
+        <li><b>ICESat-2 Downloader:</b> Specialized tool to query, filter, and download ICESat-2 (ATL24) LiDAR bathymetry directly from NSIDC.</li>
+        <li><b>Tidal Datum Converter:</b> Dedicated tool to convert and vertically align bathymetric observations across tidal reference datums (e.g., MSL to Chart Datum).</li>
     </ul>
 
-    <p><b>Key References:</b><br>
-    - <b>Stumpf et al. (2003):</b> Log-Ratio Algorithm for SDB inversion.<br>
-    - <b>Hedley et al. (2005):</b> Physics-based sun-glint correction.<br>
-    - <b>Fischler & Bolles (1981):</b> RANSAC algorithm for ICESat-2 data filtering.<br>
-    - <b>Zhang et al., (2021):</b> LS Variance Fit, or Huber Variance Fit for ICESat-2 data filtering.<br>
-    - <b>Alevizos (2020):</b> Residual analysis and spatial refinement in shallow waters.<br>
-    - <b>Bergstra & Bengio (2012):</b> Randomized search for hyperparameter optimization.<br>
-    - <b>Parrish et al. (2025):</b> Analysis and assessment of global ICESat-2 bathymetry.<br>
-    - <b>Wheaton et al. (2010):</b> Accounting for uncertainty in DEMs from repeat topographic surveys (StatCD / Volumetric significance).<br>
-    - <b>Lane & Chandler (2003):</b> The application of topographic surveying to fluvial studies (MMU spatial coherence filters).</p>
+    <p><b>📊 Performance Metrics:</b><br>
+    - <b>R² (Coefficient of Determination):</b> Goodness-of-fit measurement.<br>
+    - <b>RMSE (Root Mean Square Error):</b> Average vertical error in meters.<br>
+    - <b>wMAPE (Weighted Mean Absolute Percentage Error):</b> Relative error across depth intervals.<br>
+    - <b>IHO S-44 Standards:</b> Evaluates compliance with Order 1a and Order 2 TVU criteria.</p>
 
-    <p><i>Developed for scientific research and hydrographic applications. Creating the Codes and documentation optimized using <b>Google Gemini AI</b>.</i></p>
+    <p><b>📚 Key References:</b><br>
+    - <b>Stumpf et al. (2003):</b> Determination of shallow water bathymetry with high-resolution satellite imagery.<br>
+    - <b>Hedley et al. (2005):</b> Simple and robust removal of sun glint for high-resolution imagery.<br>
+    - <b>Fischler & Bolles (1981):</b> Random sample consensus (RANSAC) for model fitting.<br>
+    - <b>Zhang et al. (2021):</b> Adaptive variance fitting for satellite bathymetry noise reduction.<br>
+    - <b>Alevizos (2020):</b> Spatial residual refinement and error compensation in shallow coastal waters.<br>
+    - <b>Wheaton et al. (2010):</b> Accounting for uncertainty in DEMs from repeat topographic surveys.</p>
+
+    <p><i>Developed by <b>Mohamed Aly Nasef</b> for scientific research and hydrographic applications.<br>
+    Code architecture, algorithms, and technical documentation significantly enhanced and optimized using <b>Google Gemini AI</b>.</i></p>
 
 homepage=https://github.com/Nasef2017/Bathymetrix-AI
 repository=https://github.com/Nasef2017/Bathymetrix-AI
 tracker=https://github.com/Nasef2017/Bathymetrix-AI/issues
-
-tags=sdb,bathymetry,machine learning,icesat-2,ransac,spatial correction,remote sensing,hydrography,satellite imagery,python,coastal dynamics,volumetric change,quantile regression
+icon=icon.png
+tags=sdb,bathymetry,machine learning,icesat-2,ransac,spatial correction,remote sensing,hydrography,satellite imagery,python,coastal dynamics,volumetric change,quantile regression,spatiotemporal,spatiospectral,iho-s44
 category=Raster
-changelog=v6.5: Added Uncertainty-Weighted Pixel Fusion Ensemble Blending, Spatially-Adaptive Quantile Regression Uncertainty Mode, Target ROI Sub-Region Volumetric Polygon Analytics, Zero-Mean Centered Residual Refinement with LOO Robust Huber & Smoothed IDW Weighting, Native QGIS GIS Geometry Processing, and Automated Full Process File Logging.
+changelog=v7.0: Introduced SDB SpatioSpectral Masterflow (fusing multiple imageries with weighted median Post-SpatioSpectral Aggregation), separated Spatiotemporal global modeling from Coastal Dynamics (MSI and Volumetric Change calculation), and updated UI.

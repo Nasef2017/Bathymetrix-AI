@@ -109,6 +109,7 @@ class SDBModule03(QgsProcessingAlgorithm):
             QgsProcessingParameterField(
                 self.FIELD_DEPTH,
                 "Depth Field",
+                defaultValue="depth",
                 parentLayerParameterName=self.INPUT_POINTS,
                 type=QgsProcessingParameterField.Numeric,
             )
@@ -336,19 +337,27 @@ class SDBModule03(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         return """
-        <div style="font-family: Arial, sans-serif; line-height: 1.2;">
-            <h2 style="margin-bottom: 5px;">🤖 <span style="color: #2E86C1;">SDB Module 03</span>: Global Auto-ML & Feature Analysis</h2>
-            <p style="margin-top: 0; margin-bottom: 10px;">Performs automated machine learning to build a global bathymetry prediction model.</p>
+        <div style="font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.5; color: #2C3E50;">
+            <h2 style="margin-bottom: 5px; color: #2E86C1;">🤖 SDB Module 03: Global Auto-ML & Feature Analysis</h2>
+            <p style="margin-top: 0; margin-bottom: 15px; font-size: 13px;">
+                Executes an automated Machine Learning pipeline for optical bathymetry: handles feature selection, multicollinearity reduction, algorithm benchmarking, hyperparameter optimization, spatial cross-validation, and chunked raster prediction.
+            </p>
             
-            <b style="display: block; margin-bottom: 2px;">🤖 Phase 03: Global Auto-ML</b>
-            <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li><b>Feature Analysis:</b> Automatically drops weak bands based on their Pearson or Spearman correlation with target depth.</li>
-                <li><b>Algorithm Benchmarking:</b> Evaluates 15+ models to find the optimal fit.</li>
-                <li><b>Optimization:</b> Tunes hyperparameters via Random, Grid, or Bayesian Search.</li>
-                <li><b>Validation:</b> Supports Spatial Block Cross-Validation for base models.</li>
+            <h3 style="color: #D35400; margin-bottom: 5px; border-bottom: 2px solid #D35400; padding-bottom: 3px;">🤖 Core Machine Learning Features</h3>
+            <ul style="font-size: 12px; margin-top: 5px; padding-left: 20px;">
+                <li><b>Feature Selection & Collinearity:</b> Evaluates Pearson / Spearman correlation, Auto-RANSAC, and Auto-Random Forest to drop weak or redundant bands and spectral indices.</li>
+                <li><b>Model Benchmarking:</b> Automatically evaluates <b>15+ ML Regressors</b> (Random Forest, Gradient Boosting, XGBoost, LightGBM, CatBoost, SVR, MLP, Extra Trees, Ridge, Lasso, etc.).</li>
+                <li><b>Hyperparameter Tuning:</b> Searches optimal model hyperparameter space using <b>Bayesian Optimization</b> (Optuna / scikit-optimize), Random Search, or Grid Search.</li>
+                <li><b>Spatial Block Cross-Validation:</b> Validates model generalization across spatial coordinates to prevent spatial autocorrelation leakage.</li>
+                <li><b>Ensemble Blending:</b> Supports Standard Average, Median, Stacking, and <b>Uncertainty-Weighted Pixel Fusion</b>.</li>
+                <li><b>Memory-Efficient Prediction:</b> Employs block-chunked processing to safely predict high-resolution rasters without out-of-memory errors.</li>
             </ul>
+            <br><b>Developer:</b> Mohamed Aly Nasef
         </div>
         """
+
+    def helpString(self):
+        return self.shortHelpString()
 
     def processAlgorithm(self, parameters, context, feedback):
         from ...core.ml.trainers import run_phase03_initial_modeling

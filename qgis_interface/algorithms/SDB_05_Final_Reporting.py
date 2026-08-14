@@ -49,7 +49,7 @@ class SDBModule05(QgsProcessingAlgorithm):
 
         self.addParameter(
             QgsProcessingParameterVectorLayer(
-                self.INPUT_VALIDATION, "Unseen Validation Points"
+                self.INPUT_VALIDATION, "Unseen Validation Points", optional=True
             )
         )
         self.addParameter(
@@ -58,6 +58,7 @@ class SDBModule05(QgsProcessingAlgorithm):
                 "Depth Field (Validation)",
                 parentLayerParameterName=self.INPUT_VALIDATION,
                 type=QgsProcessingParameterField.Numeric,
+                optional=True,
             )
         )
 
@@ -84,24 +85,27 @@ class SDBModule05(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         return """
-        <div style="font-family: Arial, sans-serif; line-height: 1.2;">
-            <h2 style="margin-bottom: 5px;">📉 <span style="color: #2E86C1;">SDB Module 05</span>: Scientific Validation</h2>
-            <p style="margin-top: 0; margin-bottom: 10px;">Compares Phase 03 (global model) vs Phase 04 (best final map) against unseen validation points.</p>
+        <div style="font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.5; color: #2C3E50;">
+            <h2 style="margin-bottom: 5px; color: #2E86C1;">📉 SDB Module 05: Scientific Validation & IHO Compliance</h2>
+            <p style="margin-top: 0; margin-bottom: 15px; font-size: 13px;">
+                Performs independent scientific accuracy assessment and hydrographic standard compliance analysis by benchmarking predicted SDB depths against unseen validation observations.
+            </p>
 
-            <b style="display: block; margin-bottom: 2px;">📉 Phase 05: Validation Metrics</b>
-            <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li><b>RMSE:</b> Root Mean Square Error (main accuracy metric).</li>
-                <li><b>R²:</b> Coefficient of Determination (goodness of fit).</li>
-                <li><b>MAE:</b> Mean Absolute Error.</li>
-                <li><b>Bias:</b> Systematic over/under-estimation.</li>
-                <li><b>wMAPE:</b> Weighted Mean Absolute Percentage Error.</li>
+            <h3 style="color: #D35400; margin-bottom: 5px; border-bottom: 2px solid #D35400; padding-bottom: 3px;">📊 Statistical Metrics</h3>
+            <ul style="font-size: 12px; margin-top: 5px; padding-left: 20px;">
+                <li><b>R² (Coefficient of Determination):</b> Quantifies model goodness-of-fit and variance explanation.</li>
+                <li><b>RMSE (Root Mean Square Error):</b> Global vertical accuracy standard in meters.</li>
+                <li><b>MAE & Mean Bias:</b> Measures average magnitude and systematic positive/negative vertical drift.</li>
+                <li><b>wMAPE:</b> Weighted Mean Absolute Percentage Error tailored for bathymetry across depth ranges.</li>
             </ul>
 
-            <b style="display: block; margin-bottom: 2px;">📊 Detailed Analysis</b>
-            <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li><b>Stratified Analysis:</b> Accuracy broken down by depth zones (0-5m, 5-10m, etc.).</li>
-                <li><b>Output Plots:</b> Generates Scatter Comparisons, Residuals, and Error Histograms.</li>
+            <h3 style="color: #117A65; margin-top: 15px; margin-bottom: 5px; border-bottom: 2px solid #117A65; padding-bottom: 3px;">🌊 Depth-Stratified & IHO S-44 Assessment</h3>
+            <ul style="font-size: 12px; margin-top: 5px; padding-left: 20px;">
+                <li><b>Stratified Depth Bins:</b> Computes zoned error metrics (0–2m, 2–5m, 5–10m, 10–15m, 15m+) to isolate nearshore vs deep-water performance.</li>
+                <li><b>IHO S-44 Compliance:</b> Evaluates Total Vertical Uncertainty (TVU) against <b>Order 1a</b> and <b>Order 2</b> hydrographic surveying standards.</li>
+                <li><b>Interactive HTML Dashboard:</b> Generates a standalone scientific dashboard complete with interactive density scatter plots, residual distributions, and depth histogram diagnostics.</li>
             </ul>
+            <br><b>Developer:</b> Mohamed Aly Nasef
         </div>
         """
 

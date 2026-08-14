@@ -1,197 +1,46 @@
+import os
 import warnings
-
 from qgis.core import (
     QgsProcessing,
     QgsProcessingAlgorithm,
-    QgsProcessingParameterRasterLayer,
+    QgsProcessingParameterFile,
     QgsProcessingParameterVectorLayer,
+    QgsProcessingParameterRasterLayer,
     QgsProcessingParameterField,
-    QgsProcessingParameterNumber,
-    QgsProcessingParameterBand,
     QgsProcessingParameterFolderDestination,
-    QgsProcessingParameterBoolean,
     QgsProcessingParameterEnum,
+    QgsProcessingParameterNumber,
+    QgsProcessingParameterBoolean,
+    QgsProcessingParameterBand,
     QgsProcessingParameterString,
     QgsProcessingParameterDefinition,
+    QgsProcessingException,
+    QgsProcessingFeedback
 )
+
+from .SDB_MasterFlow import SDBMasterOrchestrator
+from ...core.spectral.spatiospectral_runner import SpatioSpectralSDBRunner
+from ...infrastructure.logging import append_log
 
 warnings.filterwarnings("ignore")
 
+class SDBSpatioSpectralFlow(SDBMasterOrchestrator):
+    """
+    SpatioSpectral Masterflow: Aggregates multiple scenes of the same year
+    (Phase 01, 02, 03 independent -> Pixel-wise Aggregation -> Phase 04, 05).
+    Inherits all parameters from the Single Masterflow.
+    """
+    
+    # We override the INPUT_RASTER to be a folder of images
+    INPUT_IMAGE_ROOT = "INPUT_IMAGE_ROOT"
+    OUTPUT_MASTER_FOLDER = "OUTPUT_MASTER_FOLDER"
+    SPATIOSPECTRAL_AGGREGATION = "SPATIOSPECTRAL_AGGREGATION"
 
-class SDBMasterOrchestrator(QgsProcessingAlgorithm):
-
-    # =======================================================================
-    # 1. PARAMETER CONSTANTS
-    # =======================================================================
-    SELECTED_ALGOS = "SELECTED_ALGOS"
-    INPUT_RASTER = "INPUT_RASTER"
-    OUTPUT_FOLDER = "OUTPUT_FOLDER"
-    NUM_THREADS = "NUM_THREADS"
-
-    # [1] Pre-processing (Bands, Sunglint, Masking, Features)
-    ENABLE_PREPROCESSING = "ENABLE_PREPROCESSING"
-    COASTAL_BAND = "COASTAL_BAND"
-    BLUE_BAND = "BLUE_BAND"
-    GREEN_BAND = "GREEN_BAND"
-    RED_BAND = "RED_BAND"
-    NIR_BAND = "NIR_BAND"
-    SWIR_BAND = "SWIR_BAND"
-
-    APPLY_SUNGLINT = "APPLY_SUNGLINT"
-    SUNGLINT_PERCENTILE = "SUNGLINT_PERCENTILE"
-
-    WATER_MASK_POLY = "WATER_MASK_POLY"
-    SHRINK_EDGE_DIST = "SHRINK_EDGE_DIST"
-    ENABLE_MASKING = "ENABLE_MASKING"
-    MASKING_METHOD = "MASKING_METHOD"
-    MANUAL_THRESHOLD = "MANUAL_THRESHOLD"
-    OTSU_ADJUSTMENT = "OTSU_ADJUSTMENT"
-    MASK_KERNEL_SIZE = "MASK_KERNEL_SIZE"
-
-    FEATURE_SELECTION = "FEATURE_SELECTION"
-    ENABLE_BAND_CALC = "ENABLE_BAND_CALC"
-    BAND_MATH_FORMULA = "BAND_MATH_FORMULA"
-
-    # OSW Filter
-    APPLY_DEEPWATER = "APPLY_DEEPWATER"
-    DEEPWATER_METHOD = "DEEPWATER_METHOD"
-    DEEPWATER_ROI = "DEEPWATER_ROI"
-    NIR_PERCENTILE_OSW = "NIR_PERCENTILE_OSW"
-    OSW_MEDIAN_SIZE = "OSW_MEDIAN_SIZE"
-    FILL_INTERNAL_HOLES = "FILL_INTERNAL_HOLES"
-    EXTRACT_POLYGON = "EXTRACT_POLYGON"
-
-    # [2] Filtering & Training Data
-    INPUT_TRAIN = "INPUT_TRAIN"
-    FIELD_DEPTH = "FIELD_DEPTH"
-    FIELD_WEIGHT = "FIELD_WEIGHT"
-    MAX_DEPTH_THRESHOLD = "MAX_DEPTH_THRESHOLD"
-
-    ENABLE_RANSAC = "ENABLE_RANSAC"
-    FILTER_MODE = "FILTER_MODE"
-    FILTER_NUMERATOR_BAND = "FILTER_NUMERATOR_BAND"
-    FILTER_DENOMINATOR_BAND = "FILTER_DENOMINATOR_BAND"
-    RANSAC_THRESHOLD = "RANSAC_THRESHOLD"
-    RANSAC_MAX_TRIALS = "RANSAC_MAX_TRIALS"
-
-    # [3] Global Modeling (Auto-ML)
-    SELECTED_ALGOS = "SELECTED_ALGOS"
-    OPTIMIZER_METHOD = "OPTIMIZER_METHOD"
-    COLLISION_HANDLING = "COLLISION_HANDLING"
-    N_ITERATIONS = "N_ITERATIONS"
-    MEDIAN_SIZE = "MEDIAN_SIZE"
-    FEATURE_CORR_METHOD = "FEATURE_CORR_METHOD"
-    FEATURE_CORR_THRESHOLD = "FEATURE_CORR_THRESHOLD"
-
-    PARAM_RF = "PARAM_RF"
-    PARAM_GB = "PARAM_GB"
-    PARAM_ET = "PARAM_ET"
-    PARAM_SVR = "PARAM_SVR"
-    PARAM_MLP = "PARAM_MLP"
-    PARAM_RIDGE = "PARAM_RIDGE"
-    PARAM_LASSO = "PARAM_LASSO"
-    PARAM_ELASTICNET = "PARAM_ELASTICNET"
-    PARAM_KNN = "PARAM_KNN"
-    PARAM_DT = "PARAM_DT"
-    PARAM_HUBER = "PARAM_HUBER"
-    PARAM_XGB = "PARAM_XGB"
-    PARAM_LGBM = "PARAM_LGBM"
-    PARAM_CATBOOST = "PARAM_CATBOOST"
-
-    ENABLE_ENSEMBLE = "ENABLE_ENSEMBLE"
-    ENABLE_DEPTH_VARIANCE_CORR = "ENABLE_DEPTH_VARIANCE_CORR"
-    ENSEMBLE_METHOD = "ENSEMBLE_METHOD"
-    ENSEMBLE_SIZE = "ENSEMBLE_SIZE"
-    RESIDUAL_INTERP_METHOD = "RESIDUAL_INTERP_METHOD"
-    KNN_NEIGHBORS = "KNN_NEIGHBORS"
-    SPATIAL_CV_P3 = "SPATIAL_CV_P3"
-    SPATIAL_CV_P4 = "SPATIAL_CV_P4"
-
-    TRAIN_TEST_SPLIT = "TRAIN_TEST_SPLIT"
-    RANDOM_STATE = "RANDOM_STATE"
-    CV_FOLDS = "CV_FOLDS"
-    UNCERT_TREES = "UNCERT_TREES"
-    MAX_GPR_SAMPLES = "MAX_GPR_SAMPLES"
-    OUTPUT_FORMAT = "OUTPUT_FORMAT"
-
-    # [4] Adaptive Refinement
-    ENABLE_ADAPTIVE = "ENABLE_ADAPTIVE"
-    ENABLE_ENSEMBLE_P4 = "ENABLE_ENSEMBLE_P4"
-    ENSEMBLE_METHOD_P4 = "ENSEMBLE_METHOD_P4"
-    ENABLE_DEPTH_VARIANCE_CORR = "ENABLE_DEPTH_VARIANCE_CORR"
-    ENSEMBLE_SIZE_P4 = "ENSEMBLE_SIZE_P4"
-    INPUT_ADAPTIVE_TRAIN = "INPUT_ADAPTIVE_TRAIN"
-    FIELD_ADAPTIVE_DEPTH = "FIELD_ADAPTIVE_DEPTH"
-    STACK_COMPONENTS_P4 = "STACK_COMPONENTS_P4"
-    FEATURE_CORR_METHOD_P4 = "FEATURE_CORR_METHOD_P4"
-    FEATURE_CORR_THRESHOLD_P4 = "FEATURE_CORR_THRESHOLD_P4"
-
-    # [5] Validation & Output Cleanup
-    ENABLE_VALIDATION = "ENABLE_VALIDATION"
-    INPUT_TEST = "INPUT_TEST"
-    FIELD_TEST_DEPTH = "FIELD_TEST_DEPTH"
-
-    ENABLE_SLOPE_FILTER = "ENABLE_SLOPE_FILTER"
-    SLOPE_THRESHOLD = "SLOPE_THRESHOLD"
-    REMOVE_POSITIVES = "REMOVE_POSITIVES"
-
-    # =======================================================================
-    # 2. OPTION LISTS (DROPDOWNS)
-    # =======================================================================
-    FILTER_MODES_NAMES = ["Linear RANSAC", "LS Variance Fit", "Huber Variance Fit"]
-    MODEL_LIST_NAMES = [
-        "Linear Regression",
-        "Random Forest",
-        "Gradient Boosting",
-        "Extra Trees",
-        "Ridge",
-        "Lasso",
-        "ElasticNet",
-        "KNN",
-        "Decision Tree",
-        "MLP",
-        "SVR",
-        "Huber Regressor",
-        "XGBoost",
-        "LightGBM",
-        "CatBoost",
-    ]
-    OPTIMIZER_LIST_NAMES = ["Random Search", "Grid Search", "Bayesian Search"]
-    COLLISION_LIST_NAMES = [
-        "Keep All Points",
-        "Highest Confidence",
-        "Closest to Pixel Center",
-        "Hybrid",
-        "Strict Center",
-    ]
-    MASK_METHODS_NAMES = ["Otsu (Automatic NDWI)", "Manual NDWI Threshold", "3 Indices Equation (NDWI, MNDWI, NWI)", "Smart Hybrid (Dynamic Auto)"]
-    OSW_METHODS_NAMES = ["Manual Polygon ROI", "Automatic (Lowest NIR Percentile)", "Shallow Water Bound (OSW Polygon)"]
-    FEATURE_CORR_THRESHOLDS = ["0.0", "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1.0"]
-    FEATURE_CORR_THRESHOLDS_P4 = ["Use Phase 03 (-1.0)", "0.0", "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1.0"]
-    FEATURE_OPTIONS_NAMES = [
-        "[All Raw] All Bands from Input Image",
-        "[Log] Log(Coastal)",
-        "[Log] Log(Blue)",
-        "[Log] Log(Green)",
-        "[Log] Log(Red)",
-        "[Log] Log(NIR)",
-        "[Ratio] Log(Blue) / Log(Green)",
-        "[Ratio] Log(Blue) / Log(Red)",
-        "[Ratio] Log(Coastal) / Log(Green)",
-        "[Ratio] Log(Green) / Log(NIR)",
-        "[Ratio] Log(Red) / Log(NIR)",
-        "[Index] NDWI (Green - NIR) / (Green + NIR)",
-        "[Custom] Band Math Calculator",
-    ]
-
-    # =======================================================================
-    # 3. ALGORITHM METADATA & HELP STRINGS
-    # =======================================================================
     def name(self):
-        return "sdb_master_orchestrator"
+        return "sdb_spatiospectral_flow"
 
     def displayName(self):
-        return "2. SDB Single Masterflow"
+        return "3. SDB SpatioSpectral Masterflow"
 
     def group(self):
         return ""
@@ -200,38 +49,39 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         return ""
 
     def createInstance(self):
-        return SDBMasterOrchestrator()
+        return SDBSpatioSpectralFlow()
 
     def shortHelpString(self):
         return """
         <div style="font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.5; color: #2C3E50;">
-            <h2 style="margin-bottom: 5px; color: #2E86C1;">🛰️ Bathymetrix-AI: Single Masterflow</h2>
+            <h2 style="margin-bottom: 5px; color: #8E44AD;">🛰️ Bathymetrix-AI: SpatioSpectral Masterflow</h2>
             <p style="margin-top: 0; margin-bottom: 15px; font-size: 13px;">
-                The standard end-to-end <b>Auto-ML Pipeline</b> for Satellite-Derived Bathymetry (SDB) from a single satellite scene. 
-                Seamlessly connects 5 scientific phases: atmospheric pre-processing, altimetry outlier rejection, global machine learning benchmarking, 
-                localized spatial error compensation, and independent scientific validation.
+                An advanced <b>SpatioSpectral Auto-ML Pipeline</b> designed to evaluate and fuse multiple overlapping satellite scenes for a <b>single time period</b>. 
+                Instead of relying on a single snapshot that might suffer from sun glint, clouds, or waves, this module iterates through all provided candidate scenes, 
+                generates independent AI depth models, and performs pixel-wise <b>SpatioSpectral Aggregation</b> (Weighted Median, Weighted Mean, Best Scene Selection, Median, or Mean) 
+                to synthesize a highly accurate, noise-free consensus depth map.
             </p>
 
-            <h3 style="color: #D35400; margin-bottom: 5px; border-bottom: 2px solid #D35400; padding-bottom: 3px;">⚙️ 5-Phase Scientific Methodology</h3>
+              <h3 style="color: #117A65; margin-bottom: 5px; border-bottom: 2px solid #117A65; padding-bottom: 3px;">📂 Required Workspace Structure</h3>
+              <pre style="background: #F8F9F9; padding: 10px; border-left: 4px solid #8E44AD; font-family: Consolas, monospace; font-size: 12px; margin-top: 5px; border-radius: 4px;">
+  📁 Input_Scenes_Folder/
+     ├── Scene_1.tif                  (Overlapping Scene 1 - GeoTIFF)
+     ├── Scene_2.tif                  (Overlapping Scene 2 - GeoTIFF)
+     ├── Scene_3.tif                  (Overlapping Scene 3 - GeoTIFF)
+     └── ...                          (Any .tif satellite scenes covering the area)
+              </pre>
+              <p style="margin-top: 10px; font-size: 12px;">
+                  <b>Note:</b> Simply place your candidate satellite scenes (e.g. <code>Scene_1.tif</code>, <code>Scene_2.tif</code>, <code>Scene_3.tif</code>, etc.) in one input folder, provide <b>one</b> global ICESat-2 training layer, and configure your parameters. The module will automatically align, project, and extract data across all scenes in the folder.
+              </p>
+            
+            <h3 style="color: #D35400; margin-top: 20px; margin-bottom: 5px; border-bottom: 2px solid #D35400; padding-bottom: 3px;">⚙️ Pipeline Phases</h3>
             <ul style="font-size: 12px; margin-top: 5px; padding-left: 20px;">
-                <li><b>Phase 01 — Advanced Pre-processing:</b> Sun-glint removal <i>(Hedley et al., 2005)</i> with robust NaN/Inf handling, water masking (NDWI, MNDWI, NWI with edge shrink), Optically Shallow Water (OSW) deep-water filtering (automatic NIR percentile / dynamic Elbow Point detection / polygon mask & vector export), and physics-based Log-Ratio features.</li>
-                <li><b>Phase 02 — Robust Altimetry Filtering:</b> Outlier rejection on ICESat-2 (ATL24) LiDAR / sonar training data using <b>Linear RANSAC</b>, <b>LS Variance Fit</b>, or <b>Huber Variance Fit</b> with dynamic percentile diagnostic plots.</li>
-                <li><b>Phase 03 — Global Auto-ML & Feature Analysis:</b> Multicollinearity analysis (Pearson / Spearman, Auto-RANSAC, Auto-Random Forest), benchmarks <b>15+ ML models</b> (RF, XGBoost, LightGBM, CatBoost, SVR, MLP, Extra Trees), hyperparameter tuning (Bayesian, Random, Grid), Spatial Block CV, and Ensemble Blending (Average, Median, Stacking, Uncertainty-Weighted Pixel Fusion).</li>
-                <li><b>Phase 04 — Spatial Residual Correction:</b> Zero-Mean Centered Spatial Residual modeling using <b>Leave-One-Out (LOO) Robust Huber Weighting</b> and Smoothed IDW (1 / (d + 1.0)) to eliminate local bias drift, secondary stacked retraining, and generates a <b>95% Confidence Spatial Uncertainty Raster Map</b>.</li>
-                <li><b>Phase 05 — Validation & IHO S-44 Compliance:</b> Evaluates accuracy against unseen validation data (RMSE, R², MAE, Bias, wMAPE), depth-stratified zoning (0–5m, 5–10m, etc.), <b>IHO Order 1a/2 Total Vertical Uncertainty (TVU)</b> compliance check, and automated interactive HTML dashboard generation.</li>
-            </ul>
-
-            <h3 style="color: #117A65; margin-top: 15px; margin-bottom: 5px; border-bottom: 2px solid #117A65; padding-bottom: 3px;">🧽 Output Cleanup & Export</h3>
-            <p style="font-size: 12px; margin-top: 5px;">
-                Includes automated removal of positive (land) pixels, physical slope spike filtering, and flexible precision formats (Float32, Float64, Int16).
-            </p>
-
-            <h3 style="color: #8E44AD; margin-top: 15px; margin-bottom: 5px; border-bottom: 2px solid #8E44AD; padding-bottom: 3px;">📚 Key References</h3>
-            <ul style="font-size: 11px; margin-top: 5px; padding-left: 20px; color: #555;">
-                <li><b>Stumpf et al. (2003):</b> Determination of shallow water bathymetry with high-resolution satellite imagery.</li>
-                <li><b>Hedley et al. (2005):</b> Simple and robust removal of sun glint for high-resolution imagery.</li>
-                <li><b>Fischler & Bolles (1981):</b> Random Sample Consensus (RANSAC).</li>
-                <li><b>Alevizos (2020):</b> Spatial residual refinement and error compensation in shallow coastal waters.</li>
+                <li><b>Phase 01:</b> Automated atmospheric/glint correction, water masking, and Log-Ratio feature engineering for each scene individually.</li>
+                <li><b>Phase 02:</b> Training point filtering and RANSAC / LS / Huber outlier rejection for each scene.</li>
+                <li><b>Phase 03:</b> <i>Scene-Specific AI Modeling</i> — benchmarks 15+ ML algorithms, generates independent Initial Depth Maps, and calculates scene accuracy weights (R² / RMSE).</li>
+                <li><b>Aggregation:</b> <i>Pixel-wise SpatioSpectral Synthesis</i> — merges all scene depth maps into one superior consensus map using <b>Weighted Median</b> (Recommended), <b>Weighted Mean</b>, <b>Select Best Scene</b>, or standard <b>Median / Mean</b>.</li>
+                <li><b>Phase 04:</b> Adaptive spatial residual correction (Zero-Mean Centering & LOO Huber IDW error surface) applied <i>strictly on the aggregated consensus map</i>, accompanied by 95% Confidence Spatial Uncertainty modeling.</li>
+                <li><b>Phase 05:</b> Independent scientific validation, <b>IHO S-44 (Order 1a/2 TVU)</b> compliance assessment, and automated interactive HTML dashboard reporting.</li>
             </ul>
             <br><b>Developer:</b> Mohamed Aly Nasef
         </div>
@@ -240,23 +90,24 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
     def helpString(self):
         return self.shortHelpString()
 
-    # =======================================================================
-    # 4. ALGORITHM INIT (QGIS FRONT-END UI SETUP)
-    # =======================================================================
     def initAlgorithm(self, config=None):
 
         # -------------------------------------------------------------------
         # [0] General Settings
         # -------------------------------------------------------------------
         self.addParameter(
-            QgsProcessingParameterRasterLayer(
-                self.INPUT_RASTER, "📁 [0] Input Satellite Image"
+            QgsProcessingParameterFile(self.INPUT_IMAGE_ROOT, "📁 [0.1] Input Folder containing multiple .tif Scenes (Same Year)", behavior=QgsProcessingParameterFile.Folder)
+        )
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.SPATIOSPECTRAL_AGGREGATION,
+                "🧩 [0.2] SpatioSpectral Aggregation Method",
+                options=["Median", "Mean", "Max (Deepest)", "Min (Shallowest)", "Weighted Median (R2/RMSE)", "Weighted Mean (R2/RMSE)", "Select Best Scene (High R2 / Low RMSE)"],
+                defaultValue=4, # Weighted Median default
             )
         )
         self.addParameter(
-            QgsProcessingParameterFolderDestination(
-                self.OUTPUT_FOLDER, "📁 [0] Main Output Folder"
-            )
+            QgsProcessingParameterFolderDestination(self.OUTPUT_MASTER_FOLDER, "📁 [0.3] Master Output Workspace")
         )
         self.addParameter(
             QgsProcessingParameterNumber(
@@ -281,7 +132,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
             QgsProcessingParameterBand(
                 self.COASTAL_BAND,
                 "📡 [1.1] Coastal Band",
-                parentLayerParameterName=self.INPUT_RASTER,
+                
                 defaultValue=1,
             )
         )
@@ -289,7 +140,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
             QgsProcessingParameterBand(
                 self.BLUE_BAND,
                 "📡 [1.1] Blue Band",
-                parentLayerParameterName=self.INPUT_RASTER,
+                
                 defaultValue=2,
             )
         )
@@ -297,7 +148,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
             QgsProcessingParameterBand(
                 self.GREEN_BAND,
                 "📡 [1.1] Green Band",
-                parentLayerParameterName=self.INPUT_RASTER,
+                
                 defaultValue=3,
             )
         )
@@ -305,7 +156,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
             QgsProcessingParameterBand(
                 self.RED_BAND,
                 "📡 [1.1] Red Band",
-                parentLayerParameterName=self.INPUT_RASTER,
+                
                 defaultValue=4,
             )
         )
@@ -313,7 +164,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
             QgsProcessingParameterBand(
                 self.NIR_BAND,
                 "🌍 [1] NIR Band",
-                parentLayerParameterName=self.INPUT_RASTER,
+                
                 defaultValue=8,
             )
         )
@@ -321,7 +172,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
             QgsProcessingParameterBand(
                 self.SWIR_BAND,
                 "🌍 [1] SWIR Band (For 3 Indices Mask)",
-                parentLayerParameterName=self.INPUT_RASTER,
+                
                 defaultValue=11,
             )
         )
@@ -499,7 +350,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
             QgsProcessingParameterField(
                 self.FIELD_DEPTH,
                 "📏 [2.1] Depth Field",
-                defaultValue="depth",
+                defaultValue="ortho_h",
                 parentLayerParameterName=self.INPUT_TRAIN,
             )
         )
@@ -507,6 +358,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
             QgsProcessingParameterField(
                 self.FIELD_WEIGHT,
                 "⚖️ [2.1] Weight Field",
+                defaultValue="confidence",
                 parentLayerParameterName=self.INPUT_TRAIN,
                 optional=True,
             )
@@ -539,7 +391,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
             QgsProcessingParameterBand(
                 self.FILTER_NUMERATOR_BAND,
                 "🧹 [2.2] Log-Ratio Numerator Band",
-                parentLayerParameterName=self.INPUT_RASTER,
+                
                 defaultValue=2,
             )
         )
@@ -547,7 +399,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
             QgsProcessingParameterBand(
                 self.FILTER_DENOMINATOR_BAND,
                 "🧹 [2.2] Log-Ratio Denominator Band",
-                parentLayerParameterName=self.INPUT_RASTER,
+                
                 defaultValue=3,
             )
         )
@@ -780,9 +632,9 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
             QgsProcessingParameterEnum(
                 self.STACK_COMPONENTS_P4,
                 "🎯 [4] Features for Retraining",
-                options=["Feature Stack (Phase 01)", "Phase 03 Depth Map", "Residual Error Grid"],
+                options=["Phase 03 Depth Map", "Residual Error Grid"],
                 allowMultiple=True,
-                defaultValue=[1, 2],
+                defaultValue=[0, 1],
             )
         )
         self.addParameter(
@@ -917,6 +769,56 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         )
 
     def processAlgorithm(self, parameters, context, feedback):
-        from ...core.pipeline import run_master_pipeline
+        image_root = self.parameterAsString(parameters, self.INPUT_IMAGE_ROOT, context)
+        global_train_layer = self.parameterAsVectorLayer(parameters, self.INPUT_TRAIN, context)
+        out_folder = self.parameterAsString(parameters, self.OUTPUT_MASTER_FOLDER, context)
+        
+        os.makedirs(out_folder, exist_ok=True)
+        log_file_path = os.path.join(out_folder, "SpatioSpectral_Master_Log.txt")
+        
+        class FileLoggingFeedback(QgsProcessingFeedback):
+            def __init__(self, inner, log_path):
+                super().__init__()
+                self.inner = inner
+                self.log_path = log_path
 
-        return run_master_pipeline(self, parameters, context, feedback)
+            def setProgressText(self, text):
+                append_log(text, self.log_path, None)
+                self.inner.setProgressText(text)
+
+            def pushInfo(self, info):
+                append_log(info, self.log_path, None)
+                self.inner.pushInfo(info)
+
+            def pushCommandInfo(self, info):
+                append_log(info, self.log_path, None)
+                self.inner.pushCommandInfo(info)
+
+            def pushDebugInfo(self, info):
+                append_log(info, self.log_path, None)
+                self.inner.pushDebugInfo(info)
+
+            def pushConsoleInfo(self, info):
+                append_log(info, self.log_path, None)
+                self.inner.pushConsoleInfo(info)
+
+            def reportError(self, error, fatalError=False):
+                append_log(f"ERROR: {error}", self.log_path, None)
+                self.inner.reportError(error, fatalError)
+
+            def isCanceled(self):
+                return self.inner.isCanceled()
+
+        custom_feedback = FileLoggingFeedback(feedback, log_file_path)
+
+        masterflow_params = {}
+        for k, v in parameters.items():
+            masterflow_params[k] = v
+
+        # Set default values for params that were removed/replaced
+        masterflow_params["OUTPUT_FOLDER"] = out_folder
+
+        runner = SpatioSpectralSDBRunner(out_folder)
+        results = runner.run_spatiospectral_flow(image_root, masterflow_params, self, context, custom_feedback)
+        
+        return results

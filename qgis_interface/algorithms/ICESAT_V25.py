@@ -54,7 +54,7 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
         return 'sliderule_icesat2_downloader'
 
     def displayName(self):
-        return self.tr('ICESat-2 Data Downloader')
+        return self.tr('1. ICESat-2 Data Downloader')
 
     def group(self):
         return self.tr('')
@@ -64,31 +64,30 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         return """
-        <div style="font-family: Arial, sans-serif; line-height: 1.2;">
-            <h2 style="margin-bottom: 5px;">🛰️ <span style="color: #2E86C1;">ICESat-2 Downloader</span>: NASA SlideRule Client</h2>
-            <p style="margin-top: 0; margin-bottom: 10px;">A powerful interface to NASA's SlideRule servers for on-demand processing and downloading of ICESat-2 photon & elevation data.</p>
-
-            <b style="display: block; margin-bottom: 2px;">📦 Data Scenarios</b>
-            <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li><b>ATL03 (Raw):</b> Geolocated photon data (with optional YAPC noise cleaning).</li>
-                <li><b>ATL06 (Land Ice):</b> Surface height standard product.</li>
-                <li><b>ATL24 (Bathymetry):</b> Specialized experimental bathymetry product.</li>
-            </ul>
-
-            <b style="display: block; margin-bottom: 2px;">🔍 Spatiotemporal Filters</b>
-            <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li><b>AOI:</b> Defined by input polygon extent.</li>
-                <li><b>Time:</b> Filter by specific date range (Start/End).</li>
-                <li><b>Track ID:</b> Specific RGT, Cycle, or Beam selection.</li>
-            </ul>
-
-            <p style="margin-top: 10px; border-top: 1px solid #ccc; padding-top: 5px;">
-                <b style="color: #E74C3C;">⚠️ Requirements:</b> Requires <i>sliderule</i> and <i>geopandas</i> Python libraries.
+        <div style="font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.5; color: #2C3E50;">
+            <h2 style="margin-bottom: 5px; color: #2E86C1;">🛰️ ICESat-2 Data Downloader</h2>
+            <p style="margin-top: 0; margin-bottom: 15px; font-size: 13px;">
+                A specialized interface to NASA's <b>SlideRule servers</b> for high-performance, on-demand querying, processing, and downloading of ICESat-2 photon altimetry and elevation products for integration into the Bathymetrix-AI pipelines.
             </p>
 
-            <p style="margin-top: 5px;">
-                <b>Developer:</b> Mohamed Aly Nasef
+            <h3 style="color: #D35400; margin-bottom: 5px; border-bottom: 2px solid #D35400; padding-bottom: 3px;">📦 Supported Data Scenarios</h3>
+            <ul style="font-size: 12px; margin-top: 5px; padding-left: 20px;">
+                <li><b>ATL24 (Bathymetry):</b> Specialized geolocated bathymetry photon product with refraction-corrected sea floor depths.</li>
+                <li><b>ATL03 (Raw Photons):</b> Full-rate geolocated photon events (with optional <b>YAPC</b> noise cleaning).</li>
+                <li><b>ATL06 (Land Ice Elevation):</b> Surface height product for terrestrial/ice elevation baselines.</li>
+            </ul>
+
+            <h3 style="color: #117A65; margin-top: 15px; margin-bottom: 5px; border-bottom: 2px solid #117A65; padding-bottom: 3px;">🔍 Spatiotemporal & Track Filters</h3>
+            <ul style="font-size: 12px; margin-top: 5px; padding-left: 20px;">
+                <li><b>AOI Extent:</b> Spatially bounded by an input vector polygon (Shapefile / GeoPackage).</li>
+                <li><b>Temporal Range:</b> Start and End date filters for targeted satellite passes.</li>
+                <li><b>Orbital Filtering:</b> Target specific Reference Ground Tracks (RGT), Cycles, and Beams (gt1l, gt1r, gt2l, gt2r, gt3l, gt3r).</li>
+            </ul>
+
+            <p style="margin-top: 15px; background: #FDEDEC; border-left: 4px solid #E74C3C; padding: 8px 12px; font-size: 12px; color: #78281F;">
+                <b>⚠️ Requirements:</b> Requires active internet connection and the <code>sliderule</code> and <code>geopandas</code> Python libraries.
             </p>
+            <br><b>Developer:</b> Mohamed Aly Nasef
         </div>
         """
 

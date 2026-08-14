@@ -251,8 +251,19 @@ def _get_pixel_coords(geom, src, v_crs, r_crs):
 def extract_samples(ras_path, vec_layer, d_fld, w_fld, mode):
     rlayer = QgsRasterLayer(ras_path)
     
+    if isinstance(vec_layer, str):
+        from qgis.core import QgsVectorLayer
+        vec_layer = QgsVectorLayer(vec_layer, "pts", "ogr")
+    
     v_crs = vec_layer.crs() if vec_layer and vec_layer.crs().isValid() else QgsCoordinateReferenceSystem("EPSG:4326")
     r_crs = rlayer.crs() if rlayer and rlayer.crs().isValid() else QgsCoordinateReferenceSystem("EPSG:4326")
+
+    # Auto-detect if QGIS incorrectly assigned the raster's projected CRS to a Lat/Long file
+    if v_crs == r_crs and not r_crs.isGeographic():
+        bbox = vec_layer.extent()
+        if bbox.xMinimum() >= -180 and bbox.xMaximum() <= 180 and bbox.yMinimum() >= -90 and bbox.yMaximum() <= 90:
+            v_crs = QgsCoordinateReferenceSystem("EPSG:4326")
+            vec_layer.setCrs(v_crs)
     
     from ...infrastructure.vector_io import resolve_depth_field
     actual_d_fld = resolve_depth_field(vec_layer, d_fld)
@@ -1023,7 +1034,7 @@ def run_benchmarking(
     }
 
 
-def predict_map(model, stack_path, mask_path, out_path, med_size, output_format="float32", selected_indices=None):
+def predict_map(model, stack_path, mask_path, out_path, med_size, output_format="float32", selected_indices=None, extra_features=None, feedback=None):
     with rasterio.open(stack_path) as s:
         d = s.read()
         h, w = s.height, s.width
@@ -1036,7 +1047,7 @@ def predict_map(model, stack_path, mask_path, out_path, med_size, output_format=
     else:
         mask_arr = np.ones(h * w, dtype=np.uint8)
         
-    water_idx = np.where(mask_arr == 1)[0]
+    water_idx = np.where(mask_arr > 0)[0]
     if len(water_idx) == 0:
         return
         
@@ -1049,10 +1060,19 @@ def predict_map(model, stack_path, mask_path, out_path, med_size, output_format=
     n_pixels = len(water_idx)
     
     for start in range(0, n_pixels, chunk_size):
+        if feedback and feedback.isCanceled():
+            break
+        if feedback:
+            feedback.setProgress(int((start / n_pixels) * 100))
+            
         end = min(start + chunk_size, n_pixels)
         batch_idx = water_idx[start:end]
         
         X_chunk = d_flat[batch_idx]
+        if extra_features is not None:
+            extra_cols = np.tile(extra_features, (X_chunk.shape[0], 1))
+            X_chunk = np.hstack((X_chunk, extra_cols))
+            
         if selected_indices is not None and len(selected_indices) > 0:
             X_chunk = X_chunk[:, selected_indices]
             
@@ -1086,41 +1106,50 @@ def predict_map(model, stack_path, mask_path, out_path, med_size, output_format=
         dst.write(out_img, 1)
 
 
-def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
-    out_dir = algorithm.parameterAsString(parameters, algorithm.OUTPUT_FOLDER, context)
+def run_phase03_initial_modeling(algorithm, parameters, context, feedback, pre_extracted_data=None):
+    if "OUTPUT_FOLDER" in parameters and isinstance(parameters["OUTPUT_FOLDER"], str) and parameters["OUTPUT_FOLDER"]:
+        out_dir = parameters["OUTPUT_FOLDER"]
+        log_path = parameters.get("LOG_FILE", os.path.join(out_dir, "Phase_03_Log.txt"))
+    elif hasattr(algorithm, "OUTPUT_FOLDER"):
+        out_dir = algorithm.parameterAsString(parameters, getattr(algorithm, "OUTPUT_FOLDER", "OUTPUT_FOLDER"), context)
+        log_path = algorithm.parameterAsString(parameters, getattr(algorithm, "LOG_FILE", "LOG_FILE"), context)
+    else:
+        out_dir = algorithm.parameterAsString(parameters, getattr(algorithm, "OUTPUT_MASTER_FOLDER", "OUTPUT_MASTER_FOLDER"), context)
+        out_dir = os.path.join(out_dir, "Global_Model")
+        log_path = os.path.join(out_dir, "Global_Model_Log.txt")
+        
     os.makedirs(out_dir, exist_ok=True)
-    log_path = algorithm.parameterAsString(parameters, algorithm.LOG_FILE, context)
 
     custom_params = {
         "Random Forest": parse_param_string(
-            algorithm.parameterAsString(parameters, algorithm.PARAM_RF, context)
+            algorithm.parameterAsString(parameters, getattr(algorithm, "PARAM_RF", "PARAM_RF"), context)
         ),
         "Gradient Boosting": parse_param_string(
-            algorithm.parameterAsString(parameters, algorithm.PARAM_GB, context)
+            algorithm.parameterAsString(parameters, getattr(algorithm, "PARAM_GB", "PARAM_GB"), context)
         ),
         "Extra Trees": parse_param_string(
-            algorithm.parameterAsString(parameters, algorithm.PARAM_ET, context)
+            algorithm.parameterAsString(parameters, getattr(algorithm, "PARAM_ET", "PARAM_ET"), context)
         ),
         "SVR": parse_param_string(
-            algorithm.parameterAsString(parameters, algorithm.PARAM_SVR, context)
+            algorithm.parameterAsString(parameters, getattr(algorithm, "PARAM_SVR", "PARAM_SVR"), context)
         ),
         "MLP (Neural Net)": parse_param_string(
-            algorithm.parameterAsString(parameters, algorithm.PARAM_MLP, context)
+            algorithm.parameterAsString(parameters, getattr(algorithm, "PARAM_MLP", "PARAM_MLP"), context)
         ),
         "Ridge": parse_param_string(
-            algorithm.parameterAsString(parameters, algorithm.PARAM_RIDGE, context)
+            algorithm.parameterAsString(parameters, getattr(algorithm, "PARAM_RIDGE", "PARAM_RIDGE"), context)
         ),
         "Lasso": parse_param_string(
-            algorithm.parameterAsString(parameters, algorithm.PARAM_LASSO, context)
+            algorithm.parameterAsString(parameters, getattr(algorithm, "PARAM_LASSO", "PARAM_LASSO"), context)
         ),
         "ElasticNet": parse_param_string(
-            algorithm.parameterAsString(parameters, algorithm.PARAM_ELASTICNET, context)
+            algorithm.parameterAsString(parameters, getattr(algorithm, "PARAM_ELASTICNET", "PARAM_ELASTICNET"), context)
         ),
         "KNN": parse_param_string(
-            algorithm.parameterAsString(parameters, algorithm.PARAM_KNN, context)
+            algorithm.parameterAsString(parameters, getattr(algorithm, "PARAM_KNN", "PARAM_KNN"), context)
         ),
         "Decision Tree": parse_param_string(
-            algorithm.parameterAsString(parameters, algorithm.PARAM_DT, context)
+            algorithm.parameterAsString(parameters, getattr(algorithm, "PARAM_DT", "PARAM_DT"), context)
         ),
         "Huber Regressor": parse_param_string(
             algorithm.parameterAsString(parameters, "PARAM_HUBER", context)
@@ -1136,13 +1165,13 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
         ),
     }
 
-    train_ratio = algorithm.parameterAsDouble(parameters, algorithm.TRAIN_TEST_SPLIT, context)
+    train_ratio = algorithm.parameterAsDouble(parameters, getattr(algorithm, "TRAIN_TEST_SPLIT", "TRAIN_TEST_SPLIT"), context)
     test_size = 1.0 - train_ratio
     if test_size <= 0.0 or test_size >= 1.0:
         test_size = 0.2
     
-    random_state = algorithm.parameterAsInt(parameters, algorithm.RANDOM_STATE, context)
-    n_jobs = algorithm.parameterAsInt(parameters, algorithm.NUM_THREADS, context)
+    random_state = algorithm.parameterAsInt(parameters, getattr(algorithm, "RANDOM_STATE", "RANDOM_STATE"), context)
+    n_jobs = algorithm.parameterAsInt(parameters, getattr(algorithm, "NUM_THREADS", "NUM_THREADS"), context)
     
     cv_folds = 3
     if algorithm.parameterDefinition("CV_FOLDS"):
@@ -1158,46 +1187,51 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
             if val > 0: uncert_trees = val
         except: pass
 
-    fmt_idx = algorithm.parameterAsEnum(parameters, algorithm.OUTPUT_FORMAT, context)
+    fmt_idx = algorithm.parameterAsEnum(parameters, getattr(algorithm, "OUTPUT_FORMAT", "OUTPUT_FORMAT"), context)
     fmt_map = {0: "float32", 1: "float64", 2: "uint16"}
     output_format = fmt_map.get(fmt_idx, "float32")
 
-    stack_path = algorithm.parameterAsRasterLayer(
-        parameters, algorithm.INPUT_STACK, context
-    ).source()
+    stack_layer = algorithm.parameterAsRasterLayer(
+        parameters, getattr(algorithm, "INPUT_STACK", "INPUT_STACK"), context
+    )
+    stack_path = stack_layer.source() if stack_layer else parameters.get(getattr(algorithm, "INPUT_STACK", "INPUT_STACK"))
+
     mask_layer = algorithm.parameterAsRasterLayer(
-        parameters, algorithm.INPUT_MASK, context
+        parameters, getattr(algorithm, "INPUT_MASK", "INPUT_MASK"), context
     )
-    mask_path = mask_layer.source() if mask_layer else None
+    mask_path = mask_layer.source() if mask_layer else parameters.get(getattr(algorithm, "INPUT_MASK", "INPUT_MASK"))
+
     points_layer = algorithm.parameterAsVectorLayer(
-        parameters, algorithm.INPUT_POINTS, context
+        parameters, getattr(algorithm, "INPUT_POINTS", "INPUT_POINTS"), context
     )
-    depth_fld = algorithm.parameterAsString(parameters, algorithm.FIELD_DEPTH, context)
+    if points_layer is None:
+        points_layer = parameters.get(getattr(algorithm, "INPUT_POINTS", "INPUT_POINTS"))
+    depth_fld = algorithm.parameterAsString(parameters, getattr(algorithm, "FIELD_DEPTH", "FIELD_DEPTH"), context)
     weight_fld = algorithm.parameterAsString(
-        parameters, algorithm.FIELD_WEIGHT, context
+        parameters, getattr(algorithm, "FIELD_WEIGHT", "FIELD_WEIGHT"), context
     )
     if not weight_fld:
         weight_fld = None
 
-    n_iter = algorithm.parameterAsInt(parameters, algorithm.N_ITERATIONS, context)
-    med_size = algorithm.parameterAsInt(parameters, algorithm.MEDIAN_SIZE, context)
-    sel_idx = algorithm.parameterAsEnums(parameters, algorithm.SELECTED_ALGOS, context)
-    opt_idx = algorithm.parameterAsInt(parameters, algorithm.OPTIMIZER_METHOD, context)
+    n_iter = algorithm.parameterAsInt(parameters, getattr(algorithm, "N_ITERATIONS", "N_ITERATIONS"), context)
+    med_size = algorithm.parameterAsInt(parameters, getattr(algorithm, "MEDIAN_SIZE", "MEDIAN_SIZE"), context)
+    sel_idx = algorithm.parameterAsEnums(parameters, getattr(algorithm, "SELECTED_ALGOS", "SELECTED_ALGOS"), context)
+    opt_idx = algorithm.parameterAsInt(parameters, getattr(algorithm, "OPTIMIZER_METHOD", "OPTIMIZER_METHOD"), context)
     col_mode = algorithm.parameterAsInt(
-        parameters, algorithm.COLLISION_HANDLING, context
+        parameters, getattr(algorithm, "COLLISION_HANDLING", "COLLISION_HANDLING"), context
     )
     
     try:
-        val_idx = algorithm.parameterAsEnum(parameters, algorithm.FEATURE_CORR_THRESHOLD, context)
+        val_idx = algorithm.parameterAsEnum(parameters, getattr(algorithm, "FEATURE_CORR_THRESHOLD", "FEATURE_CORR_THRESHOLD"), context)
         corr_threshold = val_idx * 0.1
     except:
         try:
-            corr_threshold = algorithm.parameterAsDouble(parameters, algorithm.FEATURE_CORR_THRESHOLD, context)
+            corr_threshold = algorithm.parameterAsDouble(parameters, getattr(algorithm, "FEATURE_CORR_THRESHOLD", "FEATURE_CORR_THRESHOLD"), context)
         except:
             corr_threshold = 0.2
 
     try:
-        corr_method_idx = algorithm.parameterAsEnum(parameters, algorithm.FEATURE_CORR_METHOD, context)
+        corr_method_idx = algorithm.parameterAsEnum(parameters, getattr(algorithm, "FEATURE_CORR_METHOD", "FEATURE_CORR_METHOD"), context)
     except:
         corr_method_idx = 3
 
@@ -1205,9 +1239,16 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
         f"MODULE 03 START: Optimizer = {OPTIMIZER_LIST[opt_idx]}", log_path, feedback
     )
 
-    X, y, final_weights, coords = extract_samples(
-        stack_path, points_layer, depth_fld, weight_fld, col_mode
-    )
+    if pre_extracted_data is not None:
+        X = pre_extracted_data["X"]
+        y = pre_extracted_data["y"]
+        final_weights = pre_extracted_data["weights"]
+        coords = pre_extracted_data["coords"]
+        append_log(">>> Using PRE-EXTRACTED Global Matrix data.", log_path, feedback)
+    else:
+        X, y, final_weights, coords = extract_samples(
+            stack_path, points_layer, depth_fld, weight_fld, col_mode
+        )
     if len(y) < 10:
         raise QgsProcessingException("Critically low training points (<10).")
     append_log(f"   Extracted {len(y)} training pixels.", log_path, feedback)
@@ -1215,20 +1256,23 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
     actual_pts_path = os.path.join(out_dir, "3_Actual_Model_Input_Points.shp")
     
     # Try to extract feature names
-    feature_names = []
-    try:
-        import rasterio
-        with rasterio.open(stack_path) as src:
-            for i, desc in enumerate(src.descriptions):
-                if desc and str(desc).strip():
-                    feature_names.append(str(desc).strip())
-                else:
-                    feature_names.append(f"Band_{i+1}")
-    except Exception:
-        feature_names = [f"Band_{i+1}" for i in range(X.shape[1])]
-    
-    if not feature_names or len(feature_names) != X.shape[1]:
-        feature_names = [f"Band_{i+1}" for i in range(X.shape[1])]
+    if pre_extracted_data is not None and "feature_names" in pre_extracted_data:
+        feature_names = pre_extracted_data["feature_names"]
+    else:
+        feature_names = []
+        try:
+            import rasterio
+            with rasterio.open(stack_path) as src:
+                for i, desc in enumerate(src.descriptions):
+                    if desc and str(desc).strip():
+                        feature_names.append(str(desc).strip())
+                    else:
+                        feature_names.append(f"Band_{i+1}")
+        except Exception:
+            feature_names = [f"Band_{i+1}" for i in range(X.shape[1])]
+        
+        if not feature_names or len(feature_names) != X.shape[1]:
+            feature_names = [f"Band_{i+1}" for i in range(X.shape[1])]
 
     save_training_points(
         actual_pts_path,
@@ -1346,7 +1390,8 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
             append_log(f"   [Warning] No bands met threshold {corr_threshold:.3f}. Using all bands.", log_path, feedback)
             selected_indices = np.arange(num_bands)
         else:
-            append_log(f"   [Feature Analysis] Selected {len(selected_indices)} bands: {list(selected_indices)}", log_path, feedback)
+            selected_indices_list = [int(x) for x in selected_indices]
+            append_log(f"   [Feature Analysis] Selected {len(selected_indices)} bands: {selected_indices_list}", log_path, feedback)
             X = X[:, selected_indices]
             
         report_path = os.path.join(out_dir, "3_Feature_Analysis_Report.txt")
@@ -1399,9 +1444,16 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
         ensemble_method = "Average"
 
     try:
-        spatial_cv = algorithm.parameterAsBool(parameters, "SPATIAL_CV", context)
+        enable_depth_variance_corr = algorithm.parameterAsBool(parameters, "ENABLE_DEPTH_VARIANCE_CORR", context)
     except Exception:
-        spatial_cv = False
+        enable_depth_variance_corr = False
+
+    spatial_cv = parameters.get("SPATIAL_CV")
+    if not isinstance(spatial_cv, bool):
+        try:
+            spatial_cv = algorithm.parameterAsBool(parameters, "SPATIAL_CV", context)
+        except Exception:
+            spatial_cv = False
 
     try:
         ensemble_size = algorithm.parameterAsInt(parameters, "ENSEMBLE_SIZE", context)
@@ -1440,48 +1492,49 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
     # ---------------------------------------------------------
     # [NEW] Generate strictly Linear Regression SDB for Analytics
     # ---------------------------------------------------------
-    lr_algo_name = "Linear Regression"
-    lr_model = None
+    if pre_extracted_data is None:
+        lr_algo_name = "Linear Regression"
+        lr_model = None
 
-    if lr_algo_name in results_df["Algorithm"].values:
-        lr_model = results_df[results_df["Algorithm"] == lr_algo_name].iloc[0]["Model"]
-        append_log("   [Analytics] Linear Regression was manually selected. Generating its depth map...", log_path, feedback)
-    else:
-        append_log("   [Analytics] Linear Regression not manually selected. Running it isolated for analytics...", log_path, feedback)
-        try:
-            lr_df, lr_best = run_benchmarking(
-                X, y, final_weights, [0], n_iter, out_dir, feedback, opt_idx, log_path, custom_params,
-                test_size, random_state, n_jobs, False, "Average", spatial_cv, coords, selected_indices, 3, feature_names, cv_folds
-            )
-            lr_model = lr_best["model"]
-        except Exception as e:
-            append_log(f"   [Warning] Isolated Linear Regression failed: {e}", log_path, feedback)
+        if lr_algo_name in results_df["Algorithm"].values:
+            lr_model = results_df[results_df["Algorithm"] == lr_algo_name].iloc[0]["Model"]
+            append_log("   [Analytics] Linear Regression was manually selected. Generating its depth map...", log_path, feedback)
+        else:
+            append_log("   [Analytics] Linear Regression not manually selected. Running it isolated for analytics...", log_path, feedback)
+            try:
+                lr_df, lr_best = run_benchmarking(
+                    X, y, final_weights, [0], n_iter, out_dir, feedback, opt_idx, log_path, custom_params,
+                    test_size, random_state, n_jobs, False, "Average", spatial_cv, coords, selected_indices, 3, feature_names, cv_folds
+                )
+                lr_model = lr_best["model"]
+            except Exception as e:
+                append_log(f"   [Warning] Isolated Linear Regression failed: {e}", log_path, feedback)
 
-    if lr_model is not None:
-        lr_dir = os.path.join(out_dir, "Linear_Regression")
-        os.makedirs(lr_dir, exist_ok=True)
-        lr_map_path = os.path.join(lr_dir, "Linear_Regression_Depth.tif")
-        lr_uncert_path = os.path.join(lr_dir, "Linear_Regression_Uncertainty.tif")
-        try:
-            from sklearn.base import clone
-            final_lr_model = clone(lr_model)
-            fit_kwargs = {"sample_weight": final_weights}
-            final_lr_model.fit(X, y, **fit_kwargs)
-            
-            predict_map(final_lr_model, stack_path, mask_path, lr_map_path, med_size, output_format, selected_indices)
-            joblib.dump(final_lr_model, os.path.join(lr_dir, "Linear_Regression_Model.pkl"))
+        if lr_model is not None:
+            lr_dir = os.path.join(out_dir, "Linear_Regression")
+            os.makedirs(lr_dir, exist_ok=True)
+            lr_map_path = os.path.join(lr_dir, "Linear_Regression_Depth.tif")
+            lr_uncert_path = os.path.join(lr_dir, "Linear_Regression_Uncertainty.tif")
+            try:
+                from sklearn.base import clone
+                final_lr_model = clone(lr_model)
+                fit_kwargs = {"sample_weight": final_weights}
+                final_lr_model.fit(X, y, **fit_kwargs)
+                
+                predict_map(final_lr_model, stack_path, mask_path, lr_map_path, med_size, output_format, selected_indices, feedback=feedback)
+                joblib.dump(final_lr_model, os.path.join(lr_dir, "Linear_Regression_Model.pkl"))
 
-            # Generate Uncertainty map for Linear Regression
-            y_lr_pred = final_lr_model.predict(X)
-            lr_abs_residuals = np.abs(y - y_lr_pred) * 1.96
-            from sklearn.ensemble import RandomForestRegressor
-            lr_uncert_model = RandomForestRegressor(n_estimators=uncert_trees, random_state=random_state, n_jobs=n_jobs)
-            lr_uncert_model.fit(X, lr_abs_residuals)
-            predict_map(lr_uncert_model, stack_path, mask_path, lr_uncert_path, med_size, "float32", selected_indices)
+                # Generate Uncertainty map for Linear Regression
+                y_lr_pred = final_lr_model.predict(X)
+                lr_abs_residuals = np.abs(y - y_lr_pred) * 1.96
+                from sklearn.ensemble import RandomForestRegressor
+                lr_uncert_model = RandomForestRegressor(n_estimators=uncert_trees, random_state=random_state, n_jobs=n_jobs)
+                lr_uncert_model.fit(X, lr_abs_residuals)
+                predict_map(lr_uncert_model, stack_path, mask_path, lr_uncert_path, med_size, "float32", selected_indices, feedback=feedback)
 
-            append_log(f"   [Analytics] Linear Regression depth & uncertainty analytics saved to: {lr_dir}", log_path, feedback)
-        except Exception as e:
-            append_log(f"   [Warning] Failed to generate Linear Regression map: {e}", log_path, feedback)
+                append_log(f"   [Analytics] Linear Regression depth & uncertainty analytics saved to: {lr_dir}", log_path, feedback)
+            except Exception as e:
+                append_log(f"   [Warning] Failed to generate Linear Regression map: {e}", log_path, feedback)
     # ---------------------------------------------------------
 
     win_name = best_algo_data["name"]
@@ -1496,13 +1549,53 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
     )
     p_map = os.path.join(out_dir, "3_Initial_Global_Depth.tif")
 
+    if enable_depth_variance_corr:
+        append_log("   [Phase 03] Fitting Depth Variance Correction (Huber) model...", log_path, feedback)
+        try:
+            from sklearn.linear_model import HuberRegressor
+            y_train_pred = best_algo_data["model"].predict(X)
+            raw_residuals = y - y_train_pred
+            mean_bias = float(np.mean(raw_residuals))
+            append_log(f"   [Phase 03] Raw mean residual offset for variance correction: {mean_bias:.4f}m", log_path, feedback)
+            residuals = raw_residuals - mean_bias
+
+            huber_model = HuberRegressor(epsilon=1.35)
+            huber_model.fit(y_train_pred.reshape(-1, 1), residuals)
+            
+            joblib.dump({"model": huber_model, "bias": mean_bias}, os.path.join(out_dir, "3_Huber_Variance_Model.pkl"))
+        except Exception as e:
+            append_log(f"   [Warning] Failed to train Phase 03 Depth Variance Correction: {e}", log_path, feedback)
+            huber_model = None
+            mean_bias = 0.0
+
     append_log("   Generating prediction map...", log_path, feedback)
-    predict_map(best_algo_data["model"], stack_path, mask_path, p_map, med_size, output_format, selected_indices)
+    if pre_extracted_data is None:
+        predict_map(best_algo_data["model"], stack_path, mask_path, p_map, med_size, output_format, selected_indices, feedback=feedback)
+        
+        if enable_depth_variance_corr and 'huber_model' in locals() and huber_model is not None:
+            append_log("   Applying Depth Variance Correction to prediction map...", log_path, feedback)
+            try:
+                with rasterio.open(p_map, "r+") as dst:
+                    depth_arr = dst.read(1)
+                    valid_mask = (depth_arr != -9999.0)
+                    if np.any(valid_mask):
+                        valid_depths = depth_arr[valid_mask]
+                        residual_grid = huber_model.predict(valid_depths.reshape(-1, 1))
+                        corrected_depths = valid_depths + residual_grid + mean_bias
+                        depth_arr[valid_mask] = corrected_depths
+                        dst.write(depth_arr, 1)
+                append_log("   [Phase 03] Depth Variance Correction applied successfully.", log_path, feedback)
+            except Exception as e:
+                append_log(f"   [Warning] Failed to apply Depth Variance Correction: {e}", log_path, feedback)
+
+    else:
+        append_log("   [Global Model] Skipping map generation since pre_extracted_data was used (to be done per-year).", log_path, feedback)
     # Direct layer addition removed to prevent auto-loading in panel.
     # The output is returned to the processing framework instead.
     # QgsProject.instance().addMapLayer(QgsRasterLayer(p_map, f"3_Initial_Global_Depth ({win_name})"))
 
     p_uncert_map = os.path.join(out_dir, "3_Initial_Global_Uncertainty.tif")
+    p_uncert_model = os.path.join(out_dir, "3_Uncertainty_Global_Model.pkl")
     try:
         append_log("   Fitting Phase 03 uncertainty model (Empirical Residual Regressor)...", log_path, feedback)
         y_train_pred = best_algo_data["model"].predict(X)
@@ -1513,16 +1606,26 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback):
         uncertainty_model = RandomForestRegressor(n_estimators=uncert_trees, random_state=random_state, n_jobs=n_jobs)
         uncertainty_model.fit(X, uncert_y)
         
+        joblib.dump(uncertainty_model, p_uncert_model)
+        
         append_log("   Generating Phase 03 uncertainty prediction map...", log_path, feedback)
-        predict_map(uncertainty_model, stack_path, mask_path, p_uncert_map, med_size, "float32", selected_indices)
+        if pre_extracted_data is None:
+            predict_map(uncertainty_model, stack_path, mask_path, p_uncert_map, med_size, "float32", selected_indices, feedback=feedback)
+        else:
+            append_log("   [Global Model] Skipping map generation since pre_extracted_data was used (to be done per-year).", log_path, feedback)
+            p_uncert_map = None
     except Exception as e:
-        append_log(f"   [Warning] Failed to generate Phase 03 uncertainty map: {e}", log_path, feedback)
+        append_log(f"   [Warning] Failed to generate Phase 03 uncertainty model: {e}", log_path, feedback)
         p_uncert_map = None
+        p_uncert_model = None
 
     return {
         "OUTPUT_DEPTH_MAP": p_map,
         "OUTPUT_UNCERT_MAP": p_uncert_map,
         "OUTPUT_MODEL_PKL": os.path.join(out_dir, "3_Best_Global_Model.pkl"),
+        "OUTPUT_UNCERT_MODEL_PKL": p_uncert_model,
         "BEST_R2": best_algo_data["r2"],
         "BEST_RMSE": best_algo_data["rmse"],
+        "SELECTED_INDICES": selected_indices
     }
+

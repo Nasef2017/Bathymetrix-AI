@@ -68,7 +68,7 @@ class SDBPhase1Preprocessing(QgsProcessingAlgorithm):
 
     NUM_THREADS = "NUM_THREADS"
 
-    MASK_METHODS = ["Otsu (Automatic NDWI)", "Manual NDWI Threshold", "3 Indices Equation (NDWI, MNDWI, NWI)"]
+    MASK_METHODS = ["Otsu (Automatic NDWI)", "Manual NDWI Threshold", "3 Indices Equation (NDWI, MNDWI, NWI)", "Smart Hybrid (Dynamic Auto)"]
     OSW_METHODS = ["Manual Polygon ROI", "Automatic (Lowest NIR Percentile)", "Shallow Water Bound (OSW Polygon)"]
 
     FEATURE_OPTIONS = [
@@ -355,17 +355,21 @@ class SDBPhase1Preprocessing(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         return """
-        <div style="font-family: Arial, sans-serif; line-height: 1.2;">
-            <h2 style="margin-bottom: 5px;">🌊 <span style="color: #2E86C1;">SDB Module 01</span>: Advanced Pre-processing</h2>
-            <p style="margin-top: 0; margin-bottom: 10px;">Prepares satellite imagery by isolating the aquatic domain and correcting radiometric noise.</p>
+        <div style="font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.5; color: #2C3E50;">
+            <h2 style="margin-bottom: 5px; color: #2E86C1;">🌊 SDB Module 01: Pre-processing</h2>
+            <p style="margin-top: 0; margin-bottom: 15px; font-size: 13px;">
+                Prepares multispectral satellite imagery for optical bathymetry by isolating the aquatic domain, eliminating sun-glint, and extracting depth-sensitive Log-Ratio features.
+            </p>
             
-            <b style="display: block; margin-bottom: 2px;">🌊 Phase 01: Advanced Pre-processing</b>
-            <ul style="margin-top: 0; margin-bottom: 8px; padding-left: 20px;">
-                <li>Sun-glint correction <i>(Hedley et al., 2005)</i>.</li>
-                <li>Advanced Water Masking</li>
-                <li>Physics-based Log-Ratio features computation.</li>
-                <li>Deep Water Filter (OSW Mask)</li>
+            <h3 style="color: #117A65; margin-bottom: 5px; border-bottom: 2px solid #117A65; padding-bottom: 3px;">⚙️ Key Capabilities</h3>
+            <ul style="font-size: 12px; margin-top: 5px; padding-left: 20px;">
+                <li><b>Sun-Glint Removal:</b> Physics-based de-glinting <i>(Hedley et al., 2005)</i> with robust NaN and Infinity protection to improve shallow seabed contrast.</li>
+                <li><b>Automated Water Masking:</b> Aquatic domain segmentation via NDWI, MNDWI, or 3-Indices formulas with optional shoreline edge shrinking to avoid land-water mixing.</li>
+                <li><b>Deep Water OSW Filtering:</b> Removes light-extinct deep waters via automatic NIR percentile thresholding, dynamic Elbow Point Detection, or manual polygon boundary masking.</li>
+                <li><b>OSW Vector Export:</b> Automatically saves and exports the Optically Shallow Water boundary as a GeoPackage vector layer matching source CRS.</li>
+                <li><b>Log-Ratio Spectral Features:</b> Computes physics-based log-transformed spectral ratios (e.g. ln(Blue)/ln(Green), ln(Coastal)/ln(Yellow)) based on differential light attenuation.</li>
             </ul>
+            <br><b>Developer:</b> Mohamed Aly Nasef
         </div>
         """
 
