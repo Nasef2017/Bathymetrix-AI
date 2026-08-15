@@ -1043,7 +1043,21 @@ def predict_map(model, stack_path, mask_path, out_path, med_size, output_format=
     
     if mask_path and str(mask_path).strip() and mask_path != "None":
         with rasterio.open(mask_path) as m:
-            mask_arr = m.read(1).flatten()
+            if m.shape == (h, w) and m.crs == prof['crs'] and m.transform == prof['transform']:
+                mask_arr = m.read(1).flatten()
+            else:
+                from rasterio.warp import reproject, Resampling
+                mask_resampled = np.zeros((h, w), dtype=np.uint8)
+                reproject(
+                    source=m.read(1),
+                    destination=mask_resampled,
+                    src_transform=m.transform,
+                    src_crs=m.crs,
+                    dst_transform=prof['transform'],
+                    dst_crs=prof['crs'],
+                    resampling=Resampling.nearest,
+                )
+                mask_arr = mask_resampled.flatten()
     else:
         mask_arr = np.ones(h * w, dtype=np.uint8)
         
@@ -1490,51 +1504,38 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback, pre_e
     )
 
     # ---------------------------------------------------------
-    # [NEW] Generate strictly Linear Regression SDB for Analytics
+    # Generate strictly Linear Regression SDB ONLY if manually selected by user
     # ---------------------------------------------------------
     if pre_extracted_data is None:
         lr_algo_name = "Linear Regression"
-        lr_model = None
-
         if lr_algo_name in results_df["Algorithm"].values:
             lr_model = results_df[results_df["Algorithm"] == lr_algo_name].iloc[0]["Model"]
             append_log("   [Analytics] Linear Regression was manually selected. Generating its depth map...", log_path, feedback)
-        else:
-            append_log("   [Analytics] Linear Regression not manually selected. Running it isolated for analytics...", log_path, feedback)
-            try:
-                lr_df, lr_best = run_benchmarking(
-                    X, y, final_weights, [0], n_iter, out_dir, feedback, opt_idx, log_path, custom_params,
-                    test_size, random_state, n_jobs, False, "Average", spatial_cv, coords, selected_indices, 3, feature_names, cv_folds
-                )
-                lr_model = lr_best["model"]
-            except Exception as e:
-                append_log(f"   [Warning] Isolated Linear Regression failed: {e}", log_path, feedback)
+            if lr_model is not None:
+                lr_dir = os.path.join(out_dir, "Linear_Regression")
+                os.makedirs(lr_dir, exist_ok=True)
+                lr_map_path = os.path.join(lr_dir, "Linear_Regression_Depth.tif")
+                lr_uncert_path = os.path.join(lr_dir, "Linear_Regression_Uncertainty.tif")
+                try:
+                    from sklearn.base import clone
+                    final_lr_model = clone(lr_model)
+                    fit_kwargs = {"sample_weight": final_weights}
+                    final_lr_model.fit(X, y, **fit_kwargs)
+                    
+                    predict_map(final_lr_model, stack_path, mask_path, lr_map_path, med_size, output_format, selected_indices, feedback=feedback)
+                    joblib.dump(final_lr_model, os.path.join(lr_dir, "Linear_Regression_Model.pkl"))
 
-        if lr_model is not None:
-            lr_dir = os.path.join(out_dir, "Linear_Regression")
-            os.makedirs(lr_dir, exist_ok=True)
-            lr_map_path = os.path.join(lr_dir, "Linear_Regression_Depth.tif")
-            lr_uncert_path = os.path.join(lr_dir, "Linear_Regression_Uncertainty.tif")
-            try:
-                from sklearn.base import clone
-                final_lr_model = clone(lr_model)
-                fit_kwargs = {"sample_weight": final_weights}
-                final_lr_model.fit(X, y, **fit_kwargs)
-                
-                predict_map(final_lr_model, stack_path, mask_path, lr_map_path, med_size, output_format, selected_indices, feedback=feedback)
-                joblib.dump(final_lr_model, os.path.join(lr_dir, "Linear_Regression_Model.pkl"))
+                    # Generate Uncertainty map for Linear Regression
+                    y_lr_pred = final_lr_model.predict(X)
+                    lr_abs_residuals = np.abs(y - y_lr_pred) * 1.96
+                    from sklearn.ensemble import RandomForestRegressor
+                    lr_uncert_model = RandomForestRegressor(n_estimators=uncert_trees, random_state=random_state, n_jobs=n_jobs)
+                    lr_uncert_model.fit(X, lr_abs_residuals)
+                    predict_map(lr_uncert_model, stack_path, mask_path, lr_uncert_path, med_size, "float32", selected_indices, feedback=feedback)
 
-                # Generate Uncertainty map for Linear Regression
-                y_lr_pred = final_lr_model.predict(X)
-                lr_abs_residuals = np.abs(y - y_lr_pred) * 1.96
-                from sklearn.ensemble import RandomForestRegressor
-                lr_uncert_model = RandomForestRegressor(n_estimators=uncert_trees, random_state=random_state, n_jobs=n_jobs)
-                lr_uncert_model.fit(X, lr_abs_residuals)
-                predict_map(lr_uncert_model, stack_path, mask_path, lr_uncert_path, med_size, "float32", selected_indices, feedback=feedback)
-
-                append_log(f"   [Analytics] Linear Regression depth & uncertainty analytics saved to: {lr_dir}", log_path, feedback)
-            except Exception as e:
-                append_log(f"   [Warning] Failed to generate Linear Regression map: {e}", log_path, feedback)
+                    append_log(f"   [Analytics] Linear Regression depth & uncertainty analytics saved to: {lr_dir}", log_path, feedback)
+                except Exception as e:
+                    append_log(f"   [Warning] Failed to generate Linear Regression map: {e}", log_path, feedback)
     # ---------------------------------------------------------
 
     win_name = best_algo_data["name"]

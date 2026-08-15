@@ -7,7 +7,7 @@ from qgis.core import QgsProcessingFeedback
 
 
 class TemporalAnalyticsEngine:
-    """
+    r"""
     Core Mathematical Engine for Coastal Dynamics & Temporal Intelligence.
     
     This engine computes the physical evolution of coastal bathymetry over time using 
@@ -44,7 +44,7 @@ class TemporalAnalyticsEngine:
             from sklearn.linear_model import QuantileRegressor
             from qgis.core import QgsVectorLayer
             try:
-                from ...core.ml.trainers import extract_samples
+                from ..ml.trainers import extract_samples
             except Exception:
                 from Bathymetrix_AI.core.ml.trainers import extract_samples
 
@@ -59,7 +59,13 @@ class TemporalAnalyticsEngine:
                 feedback.pushWarning(f"⚠️ Not enough training points for QR on {os.path.basename(sdb_raster_path)}. Falling back to Classical.")
                 return None
 
-            alpha_lo = (1.0 - qr_alpha) / 2.0
+            # Normalize qr_alpha (e.g. 0.95 or 95.0)
+            alpha_val = float(qr_alpha)
+            if alpha_val > 1.0:
+                alpha_val = alpha_val / 100.0
+            alpha_val = max(0.50, min(0.99, alpha_val))
+
+            alpha_lo = (1.0 - alpha_val) / 2.0
             alpha_hi = 1.0 - alpha_lo
 
             feedback.pushInfo(f"⏳ Fitting Quantile Regression Models (alpha={alpha_lo:.3f} and {alpha_hi:.3f}) for {os.path.basename(sdb_raster_path)}...")
@@ -93,7 +99,7 @@ class TemporalAnalyticsEngine:
                 pred_hi = qr_hi.predict(X_pred)
                 
                 from scipy import stats
-                z_crit = stats.norm.ppf(1 - (1 - qr_alpha) / 2)
+                z_crit = stats.norm.ppf(1 - (1 - alpha_val) / 2)
                 
                 # Calculate sigma: (q_hi - q_lo) / (2 * z_crit)
                 sigma_pred = (pred_hi - pred_lo) / (2 * z_crit)
@@ -127,7 +133,7 @@ class TemporalAnalyticsEngine:
         return bin_centers[idx]
 
     def _compute_pair(self, y1, y2, sdb_maps, uncertainty_maps, output_dir, feedback, osw_shp, is_overall=False, all_years=None, overall_trend_method="Long-term Trend", analysis_type="Sequential", target_roi_path=None, uncertainty_mode="classical", qr_confidence=0.95, qr_sigma_1=None, qr_sigma_2=None, uncert_thresh_mode="Auto", uncert_thresh=0.15, depth_noise_factor=0.10, max_analyzed_depth=20.0, msi_mode="Auto", msi_threshold=0.75):
-        """
+        r"""
         Computes the spatiotemporal evolution between two epochs (y1, y2) or across a multi-year series.
         
         Logic Flow:
@@ -316,7 +322,8 @@ class TemporalAnalyticsEngine:
                 dst.write(msi, 1)
 
             delta_z = np.zeros_like(z1)
-            filtered_delta_z = np.zeros_like(z1)
+            filtered_delta_z = np.full_like(z1, -9999.0, dtype=np.float32)
+            filtered_delta_z[valid] = 0.0
             
             if len(years_to_stack) > 2 and overall_trend_method == "Long-term Trend":
                 t = np.array(years_to_stack) - years_to_stack[0]
@@ -553,8 +560,8 @@ class TemporalAnalyticsEngine:
                 )
                 results.append(res_seq)
 
-        # 2. Overall Time Span (Robust Trend Analysis)
-        if comparison_mode != "Baseline Reference (First Year Fixed)":
+        # 2. Overall Time Span (Robust Trend Analysis) ONLY if more than 2 years exist
+        if comparison_mode != "Baseline Reference (First Year Fixed)" and len(years) > 2:
             first_yr, last_yr = years[0], years[-1]
             res_overall = self._compute_pair(
                 first_yr, last_yr, sdb_maps, uncertainty_maps, 

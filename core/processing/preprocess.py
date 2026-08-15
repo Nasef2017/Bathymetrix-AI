@@ -143,11 +143,18 @@ def run_watermasking_plugin(in_f, out_f, b_idx, g_idx, r_idx, n_idx, s_idx, k_si
     from rasterio.features import sieve
     
     with rasterio.open(in_f) as src:
-        b = src.read(b_idx).astype(np.float32)
-        g = src.read(g_idx).astype(np.float32)
-        r = src.read(r_idx).astype(np.float32)
-        n = src.read(n_idx).astype(np.float32)
-        s = src.read(s_idx).astype(np.float32)
+        nbands = src.count
+        b_safe = min(max(1, b_idx), nbands)
+        g_safe = min(max(1, g_idx), nbands)
+        r_safe = min(max(1, r_idx), nbands)
+        n_safe = min(max(1, n_idx), nbands)
+        s_safe = min(max(1, s_idx), nbands) if s_idx <= nbands else n_safe
+
+        b = src.read(b_safe).astype(np.float32)
+        g = src.read(g_safe).astype(np.float32)
+        r = src.read(r_safe).astype(np.float32)
+        n = src.read(n_safe).astype(np.float32)
+        s = src.read(s_safe).astype(np.float32)
 
         # Handle NoData properly: A pixel is NoData only if ALL bands equal the nodata value
         nodata = src.nodata if src.nodata is not None else -9999.0
@@ -201,11 +208,18 @@ def run_smart_hybrid_masking(in_f, out_f, b_idx, g_idx, r_idx, n_idx, s_idx, k_s
     from rasterio.features import sieve
     
     with rasterio.open(in_f) as src:
-        b = src.read(b_idx).astype(np.float32)
-        g = src.read(g_idx).astype(np.float32)
-        r = src.read(r_idx).astype(np.float32)
-        n = src.read(n_idx).astype(np.float32)
-        s = src.read(s_idx).astype(np.float32)
+        nbands = src.count
+        b_safe = min(max(1, b_idx), nbands)
+        g_safe = min(max(1, g_idx), nbands)
+        r_safe = min(max(1, r_idx), nbands)
+        n_safe = min(max(1, n_idx), nbands)
+        s_safe = min(max(1, s_idx), nbands) if s_idx <= nbands else n_safe
+
+        b = src.read(b_safe).astype(np.float32)
+        g = src.read(g_safe).astype(np.float32)
+        r = src.read(r_safe).astype(np.float32)
+        n = src.read(n_safe).astype(np.float32)
+        s = src.read(s_safe).astype(np.float32)
 
         valid_mask = (g > 0) & (n > 0) & (r > 0) & (s > 0) & (g != -9999) & (n != -9999)
         
@@ -300,7 +314,8 @@ def run_hedley(in_f, out_f, nir_idx, target_bands_idx, mask_f, percentile, fb):
         rows = src.height
         band_count = src.count
 
-        nir = src.read(nir_idx).astype(np.float64)
+        nir_safe = min(max(1, nir_idx), band_count)
+        nir = src.read(nir_safe).astype(np.float64)
 
         nodata_val = src.nodata
         if nodata_val is not None:
@@ -364,8 +379,10 @@ def run_hedley(in_f, out_f, nir_idx, target_bands_idx, mask_f, percentile, fb):
 
 def run_manual_mask(in_f, out_f, g_idx, n_idx, threshold, k_size, fb):
     with rasterio.open(in_f) as src:
-        g = src.read(g_idx).astype("float32")
-        n = src.read(n_idx).astype("float32")
+        g_safe = min(max(1, g_idx), src.count)
+        n_safe = min(max(1, n_idx), src.count)
+        g = src.read(g_safe).astype("float32")
+        n = src.read(n_safe).astype("float32")
         denom = g + n
         denom[denom == 0] = 1e-6
         ndwi = (g - n) / denom
@@ -386,8 +403,10 @@ def run_manual_mask(in_f, out_f, g_idx, n_idx, threshold, k_size, fb):
 
 def run_otsu_robust(in_f, out_f, g_idx, n_idx, adjustment, k_size, fb):
     with rasterio.open(in_f) as src:
-        g = src.read(g_idx).astype("float32")
-        n = src.read(n_idx).astype("float32")
+        g_safe = min(max(1, g_idx), src.count)
+        n_safe = min(max(1, n_idx), src.count)
+        g = src.read(g_safe).astype("float32")
+        n = src.read(n_safe).astype("float32")
         denom = g + n
         denom[denom == 0] = 1e-6
         ndwi = (g - n) / denom
@@ -455,11 +474,17 @@ def generate_features(
         nbands = s.count
         selected_indices = [int(i) for i in selected_indices_str]
 
-        c_val = s.read(c).astype("float32")
-        b_val = s.read(b).astype("float32")
-        g_val = s.read(g).astype("float32")
-        r_val = s.read(r).astype("float32")
-        n_val = s.read(n).astype("float32")
+        b_safe = min(max(1, b), nbands)
+        g_safe = min(max(1, g), nbands)
+        r_safe = min(max(1, r), nbands)
+        n_safe = min(max(1, n), nbands)
+        c_safe = min(max(1, c), nbands) if (c and 1 <= c <= nbands) else b_safe
+
+        c_val = s.read(c_safe).astype("float32")
+        b_val = s.read(b_safe).astype("float32")
+        g_val = s.read(g_safe).astype("float32")
+        r_val = s.read(r_safe).astype("float32")
+        n_val = s.read(n_safe).astype("float32")
 
         # Relaxed valid mask to avoid dropping valid water pixels with negative or exact zero values
         # A pixel is only NoData if it's -9999.0, NaN, or completely black (all bands 0)

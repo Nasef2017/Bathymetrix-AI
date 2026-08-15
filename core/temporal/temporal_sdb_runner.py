@@ -185,10 +185,9 @@ class TemporalSDBRunner:
         feedback.pushInfo(f"✅ Year {year} SDB Completed: {os.path.basename(sdb_depth_map)}")
 
         # ---------------------------------------------------------
-        # [NEW] Locate strictly Linear Regression SDB for MSI & Volumetric Change
+        # Locate SDB Depth & Uncertainty Maps for Analytics
         # ---------------------------------------------------------
-        feedback.pushInfo(f"📈 [TEMPORAL SDB] Locating isolated Linear Regression SDB for Analytics...")
-        sdb_linear_map = sdb_depth_map # Fallback in case of failure
+        sdb_linear_map = sdb_depth_map
         linear_uncertainty_map = uncertainty_map
         
         candidate_lr_map = os.path.join(year_out_dir, "Phase_03_Initial_Modeling", "Linear_Regression", "Linear_Regression_Depth.tif")
@@ -201,9 +200,7 @@ class TemporalSDBRunner:
             
         if os.path.exists(candidate_lr_map):
             sdb_linear_map = candidate_lr_map
-            feedback.pushInfo(f"✅ Found isolated Linear Regression SDB for {year}.")
-        else:
-            feedback.pushWarning(f"⚠️ Linear Regression map not found at {candidate_lr_map}. Falling back to primary map.")
+            feedback.pushInfo(f"   → Found Linear Regression SDB for {year}.")
 
         if os.path.exists(candidate_lr_uncert):
             linear_uncertainty_map = candidate_lr_uncert

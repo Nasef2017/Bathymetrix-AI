@@ -533,9 +533,10 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
             else:
                 fields.append(QgsField(col, QVariant.String))
 
+        dest_crs = QgsCoordinateReferenceSystem("EPSG:4326")
         (sink, dest_id) = self.parameterAsSink(parameters, self.OUTPUT, context, fields, QgsWkbTypes.Point, dest_crs)
-
-        total = len(gdf)
+        if not sink:
+            raise QgsProcessingException("Failed to create output sink for ICESat-2 layer.")
         count = 0
         features = []
 

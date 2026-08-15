@@ -145,7 +145,7 @@ def spatiospectral_aggregate(input_rasters, output_path, method="Median", weight
                             median_idx = np.argmax(cum_weights >= target[None, :, :], axis=0)
                             agg_data = np.take_along_axis(sorted_data, median_idx[None, :, :], axis=0).squeeze(axis=0)
                             
-                            all_nan = ~np.any(mask, axis=0)
+                            all_nan = ~np.any(mask, axis=0) | (total_weights <= 0)
                             agg_data[all_nan] = np.nan
                         else:
                             agg_data = np.nanmedian(stacked_array, axis=0)

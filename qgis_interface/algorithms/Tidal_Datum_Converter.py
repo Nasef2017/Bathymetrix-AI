@@ -302,8 +302,15 @@ class TidalDatumConverter(QgsProcessingAlgorithm):
             if x < 0:
                 x += 360
 
-            r = np.clip(np.searchsorted(lat_grid, y), 0, max_r)
-            c = np.clip(np.searchsorted(lon_grid, x), 0, max_c)
+            if lat_grid[-1] < lat_grid[0]:
+                r = np.clip(np.searchsorted(-lat_grid, -y), 0, max_r)
+            else:
+                r = np.clip(np.searchsorted(lat_grid, y), 0, max_r)
+
+            if lon_grid[-1] < lon_grid[0]:
+                c = np.clip(np.searchsorted(-lon_grid, -x), 0, max_c)
+            else:
+                c = np.clip(np.searchsorted(lon_grid, x), 0, max_c)
 
             # Get Amplitudes
             m2 = get_amp_meters("m2", r, c)

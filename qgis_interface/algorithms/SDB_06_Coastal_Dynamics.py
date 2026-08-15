@@ -130,7 +130,7 @@ class SDBCoastalDynamics(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterVectorLayer(
                 self.SHORELINE_ROI,
-                "🎯 [1] Target ROI (Volume & Analytics Boundary Polygon)",
+                "🎯 [1] Study Area / Target ROI (Boundary & Clip Polygon)",
                 types=[QgsProcessing.TypeVectorPolygon],
                 optional=True,
             )
@@ -403,7 +403,7 @@ class SDBCoastalDynamics(QgsProcessingAlgorithm):
             uncertainty_maps=uncert_maps,
             output_dir=bathymetric_out_folder,
             feedback=feedback,
-            osw_shp=None,
+            osw_shp=target_roi_path,
             overall_trend_method=trend_method_str,
             comparison_mode=comp_mode_str,
             target_roi_path=target_roi_path,
@@ -431,7 +431,7 @@ class SDBCoastalDynamics(QgsProcessingAlgorithm):
             sdb_maps=sdb_maps,
             output_dir=shoreline_out_folder,
             feedback=feedback,
-            osw_shp=None,
+            osw_shp=target_roi_path,
             shoreline_depth=shoreline_depth,
             comparison_mode=comp_mode_str
         )

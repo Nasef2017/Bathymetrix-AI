@@ -129,7 +129,7 @@ def extract_and_calc_robust(ras_path, vec_layer, depth_fld, b_idx, g_idx, fb):
         fb.pushInfo(f"   [DEBUG] Invalid Depth (0/None): {count_invalid_depth}")
         fb.pushInfo(f"   [DEBUG] Out of Bounds: {count_out_of_bounds}")
         fb.pushInfo(f"   [DEBUG] NoData/Masked Pixels: {count_nodata}")
-        fb.pushInfo(f"   [DEBUG] Valid for Training: {count_valid}")
+        fb.pushInfo(f"   [DEBUG] Candidate Points for Filtering: {count_valid}")
 
         if count_valid == 0:
             hint = (
@@ -168,11 +168,14 @@ def save_subset_with_uncert(
         fields.append(QgsField("SDB_Uncert", QVariant.Double))
         uncert_idx = fields.count() - 1
 
-    if os.path.exists(out_path):
-        try:
-            os.remove(out_path)
-        except Exception:  # nosec B110
-            pass
+    base, _ = os.path.splitext(out_path)
+    for ext in [".shp", ".shx", ".dbf", ".prj", ".cpg", ".qpj"]:
+        f_to_del = base + ext
+        if os.path.exists(f_to_del):
+            try:
+                os.remove(f_to_del)
+            except Exception:
+                pass
     writer = QgsVectorFileWriter(
         out_path,
         "UTF-8",
@@ -507,5 +510,18 @@ def run_phase02_filtering(algorithm, parameters, context, feedback):
         mode_idx,
         os.path.join(out_dir, "2_Plot_3_Envelope.png"),
     )
+
+    n_acc = int(np.sum(final_mask))
+    n_rej = int(np.sum(~final_mask))
+    pct_acc = (n_acc / len(final_mask)) * 100.0 if len(final_mask) > 0 else 0.0
+    pct_rej = (n_rej / len(final_mask)) * 100.0 if len(final_mask) > 0 else 0.0
+
+    feedback.pushInfo("   ══════════════════════════════════════════════════")
+    feedback.pushInfo(f"   📊 [Phase 02 Summary - {FILTER_MODES[mode_idx]} Output]:")
+    feedback.pushInfo(f"      • Initial Candidates: {len(final_mask)}")
+    feedback.pushInfo(f"      • Accepted (Cleaned Inliers): {n_acc} ({pct_acc:.1f}%)")
+    feedback.pushInfo(f"      • Rejected (Outliers Filtered): {n_rej} ({pct_rej:.1f}%)")
+    feedback.pushInfo(f"      • Cleaned Output Layer: {clean_shp}")
+    feedback.pushInfo("   ══════════════════════════════════════════════════")
 
     return {"OUTPUT_CLEAN_VEC": clean_shp}

@@ -23,7 +23,6 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
     # =======================================================================
     # 1. PARAMETER CONSTANTS
     # =======================================================================
-    SELECTED_ALGOS = "SELECTED_ALGOS"
     INPUT_RASTER = "INPUT_RASTER"
     OUTPUT_FOLDER = "OUTPUT_FOLDER"
     NUM_THREADS = "NUM_THREADS"
@@ -118,7 +117,6 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
     ENABLE_ADAPTIVE = "ENABLE_ADAPTIVE"
     ENABLE_ENSEMBLE_P4 = "ENABLE_ENSEMBLE_P4"
     ENSEMBLE_METHOD_P4 = "ENSEMBLE_METHOD_P4"
-    ENABLE_DEPTH_VARIANCE_CORR = "ENABLE_DEPTH_VARIANCE_CORR"
     ENSEMBLE_SIZE_P4 = "ENSEMBLE_SIZE_P4"
     INPUT_ADAPTIVE_TRAIN = "INPUT_ADAPTIVE_TRAIN"
     FIELD_ADAPTIVE_DEPTH = "FIELD_ADAPTIVE_DEPTH"

@@ -1,16 +1,7 @@
-from qgis.core import QgsApplication
-from .qgis_interface.provider import SdbProvider
+# -*- coding: utf-8 -*-
+"""
+Bathymetrix-AI Plugin Entry Point (Compatibility Alias)
+"""
+from .sdb_tools_plugin import SdbToolsPlugin
 
-
-class SdbToolsPlugin:
-    def __init__(self, iface):
-        self.iface = iface
-        self.provider = None
-
-    def initGui(self):
-        self.provider = SdbProvider()
-        QgsApplication.processingRegistry().addProvider(self.provider)
-
-    def unload(self):
-        if self.provider:
-            QgsApplication.processingRegistry().removeProvider(self.provider)
+__all__ = ["SdbToolsPlugin"]

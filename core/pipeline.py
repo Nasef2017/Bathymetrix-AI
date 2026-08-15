@@ -155,33 +155,65 @@ def write_qml_style(tif_path):
 
 def generate_3d_seabed_png(raster_path, out_png_path, feedback=None):
     if feedback:
-        feedback.pushInfo(f"--- Generating static 3D Seabed Plot: {out_png_path}")
+        feedback.pushInfo(f"--- Generating high-definition 3D Seabed Plot: {out_png_path}")
     try:
         import rasterio
         from rasterio.enums import Resampling
+        from rasterio.windows import Window
         import numpy as np
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         from mpl_toolkits.mplot3d import Axes3D
         
-        grid_size = 150
+        grid_size = 160
         with rasterio.open(raster_path) as src:
-            data = src.read(
-                1,
-                out_shape=(grid_size, grid_size),
-                resampling=Resampling.bilinear
-            )
+            full_data = src.read(1)
             nodata = src.nodata if src.nodata is not None else -9999.0
-            transform = src.transform
-            bounds = src.bounds
             
-            # Real-world extents in meters
-            x_extent = bounds.right - bounds.left
-            y_extent = bounds.top - bounds.bottom
+            # Find tight bounding box of valid bathymetry data
+            valid_mask = np.isfinite(full_data) & (full_data != nodata) & (full_data > -9000) & (full_data < 9000)
+            
+            if np.any(valid_mask):
+                rows = np.where(np.any(valid_mask, axis=1))[0]
+                cols = np.where(np.any(valid_mask, axis=0))[0]
+                
+                r_min, r_max = rows[0], rows[-1]
+                c_min, c_max = cols[0], cols[-1]
+                
+                # Add 4% padding around the surveyed bathymetry domain
+                pad_r = max(2, int((r_max - r_min) * 0.04))
+                pad_c = max(2, int((c_max - c_min) * 0.04))
+                
+                r_min = max(0, r_min - pad_r)
+                r_max = min(src.height - 1, r_max + pad_r)
+                c_min = max(0, c_min - pad_c)
+                c_max = min(src.width - 1, c_max + pad_c)
+                
+                win = Window(c_min, r_min, (c_max - c_min + 1), (r_max - r_min + 1))
+                data = src.read(
+                    1,
+                    window=win,
+                    out_shape=(grid_size, grid_size),
+                    resampling=Resampling.bilinear
+                )
+                
+                pixel_size_x = abs(src.res[0])
+                pixel_size_y = abs(src.res[1])
+                x_extent = (c_max - c_min + 1) * pixel_size_x
+                y_extent = (r_max - r_min + 1) * pixel_size_y
+            else:
+                data = src.read(
+                    1,
+                    out_shape=(grid_size, grid_size),
+                    resampling=Resampling.bilinear
+                )
+                bounds = src.bounds
+                x_extent = bounds.right - bounds.left
+                y_extent = bounds.top - bounds.bottom
             
             data_float = data.astype(float)
-            data_float[data_float == nodata] = np.nan
+            data_float[(data_float == nodata) | (data_float < -9000)] = np.nan
             
             # Create real-world coordinate grids (meters from origin)
             x_coords = np.linspace(0, x_extent, grid_size)
@@ -189,42 +221,80 @@ def generate_3d_seabed_png(raster_path, out_png_path, feedback=None):
             X, Y = np.meshgrid(x_coords, y_coords)
             masked_Z = np.ma.masked_invalid(data_float)
             
-            # Auto-calculate Vertical Exaggeration for visual clarity
             valid_z = data_float[np.isfinite(data_float)]
             if len(valid_z) > 0:
-                z_range = float(np.nanmax(valid_z) - np.nanmin(valid_z))
-                z_range = max(z_range, 0.1)
+                z_min = float(np.nanmin(valid_z))
+                z_max = float(np.nanmax(valid_z))
+                z_range = max(z_max - z_min, 0.1)
+                
+                # Smart Camera Angle Calculation:
+                # Determine whether shallow is near 0 and deep is negative or positive
+                is_neg = np.nanmean(valid_z) < 0
+                p25 = np.percentile(valid_z, 25)
+                p75 = np.percentile(valid_z, 75)
+                
+                if is_neg:
+                    shallow_mask = (data_float >= p75) & np.isfinite(data_float)
+                    deep_mask = (data_float <= p25) & np.isfinite(data_float)
+                else:
+                    shallow_mask = (data_float <= p25) & np.isfinite(data_float)
+                    deep_mask = (data_float >= p75) & np.isfinite(data_float)
+                
+                if np.any(shallow_mask) and np.any(deep_mask):
+                    sy, sx = np.where(shallow_mask)
+                    dy, dx = np.where(deep_mask)
+                    c_sx, c_sy = np.mean(sx), np.mean(sy)
+                    c_dx, c_dy = np.mean(dx), np.mean(dy)
+                    
+                    # Vector pointing from deep water towards shallow shore
+                    vec_x = c_sx - c_dx
+                    vec_y = -(c_sy - c_dy)
+                    
+                    # Position camera in deep water looking up at the seabed slope (3/4 perspective)
+                    slope_angle = np.degrees(np.arctan2(vec_y, vec_x))
+                    optimal_azim = (slope_angle - 180 + 35) % 360 - 180
+                else:
+                    optimal_azim = -55
+                
+                # Balanced Vertical Exaggeration on tight extent
                 horizontal_extent = max(x_extent, y_extent)
-                # Target: Z should visually appear as ~35% of the longest horizontal axis
-                target_z_fraction = 0.35
+                target_z_fraction = 0.30
                 ve = (target_z_fraction * horizontal_extent) / z_range
-                ve = max(2.0, ve)  # minimum VE = 2x
+                ve = min(max(2.0, ve), 25.0)
             else:
                 ve = 3.0
                 z_range = 1.0
+                z_min, z_max = 0.0, 1.0
                 horizontal_extent = max(x_extent, y_extent)
+                optimal_azim = -55
             
-            fig = plt.figure(figsize=(12, 9), facecolor='#020617')
+            fig = plt.figure(figsize=(13, 9.5), facecolor='#020617')
             ax = fig.add_subplot(111, projection='3d', facecolor='#020617')
             
             surf = ax.plot_surface(
                 X, Y, masked_Z,
                 cmap='Spectral_r',
-                linewidth=0,
+                linewidth=0.1,
+                edgecolor=(1, 1, 1, 0.08),
                 antialiased=True,
-                alpha=0.92,
-                rcount=120, ccount=120
+                alpha=0.94,
+                rcount=140, ccount=140
             )
             
-            # Set normalized box aspect: x_norm, y_norm relative to max_h, z = target fraction
+            # Optional contour projection at the base
+            if len(valid_z) > 0:
+                offset_z = z_min - 0.06 * z_range
+                ax.contourf(X, Y, masked_Z, zdir='z', offset=offset_z, cmap='Spectral_r', alpha=0.30)
+                ax.set_zlim(offset_z, z_max + 0.05 * z_range)
+            
             max_h = max(x_extent, y_extent)
             try:
                 ax.set_box_aspect([x_extent / max_h, y_extent / max_h, target_z_fraction])
             except AttributeError:
                 pass
             
-            ve_label = f"VE ≈ {ve:.1f}x"
-            ax.set_title(f"3D Seabed Topography Model\n", color='white', fontsize=14, fontweight='bold', pad=15)
+            ve_label = f"VE ≈ {ve:.1f}x (Optimal Front Perspective)"
+            ax.set_title("3D Seabed Topography & Bathymetry Model\n", color='white', fontsize=14, fontweight='bold', pad=15)
             ax.text2D(0.5, 0.93, ve_label, transform=ax.transAxes, ha='center', va='top',
                       fontsize=9, color='#60a5fa',
                       bbox=dict(boxstyle='round,pad=0.3', facecolor='#1e293b', edgecolor='#334155', alpha=0.85))
@@ -257,126 +327,9 @@ def generate_3d_seabed_png(raster_path, out_png_path, feedback=None):
             cbar.ax.yaxis.set_tick_params(colors='#94a3b8', labelsize=8)
             cbar.ax.yaxis.label.set_color('white')
             
-            ax.view_init(elev=30, azim=-55)
+            ax.view_init(elev=28, azim=optimal_azim)
             
-            plt.savefig(out_png_path, dpi=150, facecolor=fig.get_facecolor(), bbox_inches='tight')
-            plt.close(fig)
-            if feedback:
-                feedback.pushInfo(f"Static 3D Seabed Plot generated successfully. {ve_label}")
-            return True
-    except Exception as e:
-        if feedback:
-            feedback.pushWarning(f"Failed to generate static 3D Seabed PNG: {str(e)}")
-        return False
-
-
-def generate_3d_seabed_png(raster_path, out_png_path, feedback=None):
-    if feedback:
-        feedback.pushInfo(f"--- Generating static 3D Seabed Plot: {out_png_path}")
-    try:
-        import rasterio
-        from rasterio.enums import Resampling
-        import numpy as np
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        from mpl_toolkits.mplot3d import Axes3D
-        
-        grid_size = 150
-        with rasterio.open(raster_path) as src:
-            data = src.read(
-                1,
-                out_shape=(grid_size, grid_size),
-                resampling=Resampling.bilinear
-            )
-            nodata = src.nodata if src.nodata is not None else -9999.0
-            transform = src.transform
-            bounds = src.bounds
-            
-            # Real-world extents in meters
-            x_extent = bounds.right - bounds.left
-            y_extent = bounds.top - bounds.bottom
-            
-            data_float = data.astype(float)
-            data_float[data_float == nodata] = np.nan
-            
-            # Create real-world coordinate grids (meters from origin)
-            x_coords = np.linspace(0, x_extent, grid_size)
-            y_coords = np.linspace(0, y_extent, grid_size)
-            X, Y = np.meshgrid(x_coords, y_coords)
-            masked_Z = np.ma.masked_invalid(data_float)
-            
-            # Auto-calculate Vertical Exaggeration for visual clarity
-            valid_z = data_float[np.isfinite(data_float)]
-            if len(valid_z) > 0:
-                z_range = float(np.nanmax(valid_z) - np.nanmin(valid_z))
-                z_range = max(z_range, 0.1)
-                horizontal_extent = max(x_extent, y_extent)
-                # Target: Z should visually appear as ~35% of the longest horizontal axis
-                target_z_fraction = 0.35
-                ve = (target_z_fraction * horizontal_extent) / z_range
-                ve = max(2.0, ve)  # minimum VE = 2x
-            else:
-                ve = 3.0
-                z_range = 1.0
-                horizontal_extent = max(x_extent, y_extent)
-            
-            fig = plt.figure(figsize=(12, 9), facecolor='#020617')
-            ax = fig.add_subplot(111, projection='3d', facecolor='#020617')
-            
-            surf = ax.plot_surface(
-                X, Y, masked_Z,
-                cmap='Spectral_r',
-                linewidth=0,
-                antialiased=True,
-                alpha=0.92,
-                rcount=120, ccount=120
-            )
-            
-            # Set normalized box aspect: x_norm, y_norm relative to max_h, z = target fraction
-            max_h = max(x_extent, y_extent)
-            try:
-                ax.set_box_aspect([x_extent / max_h, y_extent / max_h, target_z_fraction])
-            except AttributeError:
-                pass
-            
-            ve_label = f"VE ≈ {ve:.1f}x"
-            ax.set_title(f"3D Seabed Topography Model\n", color='white', fontsize=14, fontweight='bold', pad=15)
-            ax.text2D(0.5, 0.93, ve_label, transform=ax.transAxes, ha='center', va='top',
-                      fontsize=9, color='#60a5fa',
-                      bbox=dict(boxstyle='round,pad=0.3', facecolor='#1e293b', edgecolor='#334155', alpha=0.85))
-            
-            # Format axis labels with real units
-            if x_extent > 2000:
-                ax.set_xlabel(f"Easting ({x_extent/1000:.1f} km)", color='#94a3b8', labelpad=10, fontsize=9)
-            else:
-                ax.set_xlabel(f"Easting ({x_extent:.0f} m)", color='#94a3b8', labelpad=10, fontsize=9)
-            if y_extent > 2000:
-                ax.set_ylabel(f"Northing ({y_extent/1000:.1f} km)", color='#94a3b8', labelpad=10, fontsize=9)
-            else:
-                ax.set_ylabel(f"Northing ({y_extent:.0f} m)", color='#94a3b8', labelpad=10, fontsize=9)
-            ax.set_zlabel("Depth (m)", color='#94a3b8', labelpad=10, fontsize=9)
-            
-            ax.tick_params(colors='#94a3b8', labelsize=7)
-            ax.xaxis.line.set_color('#334155')
-            ax.yaxis.line.set_color('#334155')
-            ax.zaxis.line.set_color('#334155')
-            ax.xaxis.pane.fill = False
-            ax.yaxis.pane.fill = False
-            ax.zaxis.pane.fill = False
-            ax.xaxis.pane.set_edgecolor('#1e293b')
-            ax.yaxis.pane.set_edgecolor('#1e293b')
-            ax.zaxis.pane.set_edgecolor('#1e293b')
-            ax.grid(True, color='#1e293b', linestyle='--', alpha=0.3)
-            
-            cbar = fig.colorbar(surf, ax=ax, shrink=0.55, aspect=14, pad=0.08)
-            cbar.set_label('Depth (m)', color='white', fontsize=10, labelpad=10)
-            cbar.ax.yaxis.set_tick_params(colors='#94a3b8', labelsize=8)
-            cbar.ax.yaxis.label.set_color('white')
-            
-            ax.view_init(elev=30, azim=-55)
-            
-            plt.savefig(out_png_path, dpi=150, facecolor=fig.get_facecolor(), bbox_inches='tight')
+            plt.savefig(out_png_path, dpi=160, facecolor=fig.get_facecolor(), bbox_inches='tight')
             plt.close(fig)
             if feedback:
                 feedback.pushInfo(f"Static 3D Seabed Plot generated successfully. {ve_label}")
@@ -426,24 +379,59 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
     x_coords_json = "[]"
     y_coords_json = "[]"
     plotly_aspect_json = "{}"
-    plotly_x_title = "X (Grid)"
-    plotly_y_title = "Y (Grid)"
+    plotly_x_title = "Easting (m)"
+    plotly_y_title = "Northing (m)"
+    plotly_camera_json = '{"eye": {"x": 1.25, "y": -1.25, "z": 1.1}}'
     if final_raster_path and os.path.exists(final_raster_path):
         try:
-            grid_size = 100
+            from rasterio.windows import Window
+            grid_size = 120
             with rasterio.open(final_raster_path) as src:
-                data = src.read(
-                    1,
-                    out_shape=(grid_size, grid_size),
-                    resampling=Resampling.bilinear
-                )
+                full_data = src.read(1)
                 nodata = src.nodata if src.nodata is not None else -9999.0
-                bounds = src.bounds
-                x_extent = bounds.right - bounds.left
-                y_extent = bounds.top - bounds.bottom
+                
+                # Tight bounding box of valid bathymetry
+                valid_mask = np.isfinite(full_data) & (full_data != nodata) & (full_data > -9000) & (full_data < 9000)
+                
+                if np.any(valid_mask):
+                    rows = np.where(np.any(valid_mask, axis=1))[0]
+                    cols = np.where(np.any(valid_mask, axis=0))[0]
+                    
+                    r_min, r_max = rows[0], rows[-1]
+                    c_min, c_max = cols[0], cols[-1]
+                    
+                    pad_r = max(2, int((r_max - r_min) * 0.04))
+                    pad_c = max(2, int((c_max - c_min) * 0.04))
+                    
+                    r_min = max(0, r_min - pad_r)
+                    r_max = min(src.height - 1, r_max + pad_r)
+                    c_min = max(0, c_min - pad_c)
+                    c_max = min(src.width - 1, c_max + pad_c)
+                    
+                    win = Window(c_min, r_min, (c_max - c_min + 1), (r_max - r_min + 1))
+                    data = src.read(
+                        1,
+                        window=win,
+                        out_shape=(grid_size, grid_size),
+                        resampling=Resampling.bilinear
+                    )
+                    
+                    pixel_size_x = abs(src.res[0])
+                    pixel_size_y = abs(src.res[1])
+                    x_extent = (c_max - c_min + 1) * pixel_size_x
+                    y_extent = (r_max - r_min + 1) * pixel_size_y
+                else:
+                    data = src.read(
+                        1,
+                        out_shape=(grid_size, grid_size),
+                        resampling=Resampling.bilinear
+                    )
+                    bounds = src.bounds
+                    x_extent = bounds.right - bounds.left
+                    y_extent = bounds.top - bounds.bottom
                 
                 data_float = data.astype(float)
-                data_float[data_float == nodata] = np.nan
+                data_float[(data_float == nodata) | (data_float < -9000)] = np.nan
                 grid_list = [[(val if np.isfinite(val) else None) for val in row] for row in data_float]
                 z_data_json = json.dumps(grid_list)
                 
@@ -453,20 +441,34 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                 x_coords_json = json.dumps([round(v, 1) for v in x_arr])
                 y_coords_json = json.dumps([round(v, 1) for v in y_arr])
                 
-                # Auto Vertical Exaggeration & Plotly aspect ratio
-                target_z_fraction = 0.35
+                target_z_fraction = 0.32
                 valid_z = data_float[np.isfinite(data_float)]
                 if len(valid_z) > 0:
-                    z_range = float(np.nanmax(valid_z) - np.nanmin(valid_z))
-                    z_range = max(z_range, 0.1)
-                    horizontal_extent = max(x_extent, y_extent)
-                    ve = (target_z_fraction * horizontal_extent) / z_range
-                    ve = max(2.0, ve)
-                else:
-                    z_range = 1.0
-                    ve = 3.0
+                    is_neg = np.nanmean(valid_z) < 0
+                    p25 = np.percentile(valid_z, 25)
+                    p75 = np.percentile(valid_z, 75)
                     
-                # Normalize aspect: longest horizontal side = 1, Z = target fraction
+                    if is_neg:
+                        shallow_mask = (data_float >= p75) & np.isfinite(data_float)
+                        deep_mask = (data_float <= p25) & np.isfinite(data_float)
+                    else:
+                        shallow_mask = (data_float <= p25) & np.isfinite(data_float)
+                        deep_mask = (data_float >= p75) & np.isfinite(data_float)
+                        
+                    if np.any(shallow_mask) and np.any(deep_mask):
+                        sy, sx = np.where(shallow_mask)
+                        dy, dx = np.where(deep_mask)
+                        c_sx, c_sy = np.mean(sx), np.mean(sy)
+                        c_dx, c_dy = np.mean(dx), np.mean(dy)
+                        vec_x = c_sx - c_dx
+                        vec_y = -(c_sy - c_dy)
+                        slope_angle = np.degrees(np.arctan2(vec_y, vec_x))
+                        cam_ang_rad = np.radians(slope_angle - 180 + 35)
+                        eye_dist = 1.55
+                        eye_x = eye_dist * np.cos(cam_ang_rad)
+                        eye_y = eye_dist * np.sin(cam_ang_rad)
+                        plotly_camera_json = json.dumps({"eye": {"x": round(eye_x, 2), "y": round(eye_y, 2), "z": 1.15}})
+                
                 max_h = max(x_extent, y_extent)
                 aspect = {"x": round(x_extent / max_h, 4), "y": round(y_extent / max_h, 4), "z": round(target_z_fraction, 4)}
                 plotly_aspect_json = json.dumps(aspect)
@@ -1042,16 +1044,31 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
         <!-- 3D Seabed Viewer & Plot Section -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-8">
             <!-- Left: Interactive 3D Viewer -->
-            <div class="bg-slate-800/30 border border-slate-700/30 rounded-2xl p-6">
-                <h2 class="text-lg font-bold text-slate-100 mb-2">🔮 Interactive 3D Seabed Viewer</h2>
-                <p class="text-xs text-slate-400 mb-4">Click and drag to rotate, scroll to zoom. Double click to reset view.</p>
-                <div id="seabed-3d-viewer" style="width: 100%; height: 450px;" class="rounded-xl overflow-hidden bg-slate-950 border border-slate-800"></div>
+            <div class="bg-slate-800/30 border border-slate-700/30 rounded-2xl p-6 flex flex-col justify-between">
+                <div>
+                    <div class="flex items-center justify-between mb-2 flex-wrap gap-2">
+                        <h2 class="text-lg font-bold text-slate-100 flex items-center gap-2">
+                            <span>🔮 Interactive 3D Seabed Explorer</span>
+                        </h2>
+                        <!-- Preset Camera Controls -->
+                        <div class="flex items-center gap-1.5 text-xs">
+                            <button onclick="setCameraView('front')" class="px-2.5 py-1 rounded bg-slate-700/70 hover:bg-sky-600 text-slate-200 hover:text-white transition-colors border border-slate-600/50">🌊 Front 3/4</button>
+                            <button onclick="setCameraView('top')" class="px-2.5 py-1 rounded bg-slate-700/70 hover:bg-sky-600 text-slate-200 hover:text-white transition-colors border border-slate-600/50">📐 Top-Down</button>
+                            <button onclick="setCameraView('side')" class="px-2.5 py-1 rounded bg-slate-700/70 hover:bg-sky-600 text-slate-200 hover:text-white transition-colors border border-slate-600/50">🏞️ Side Profile</button>
+                            <button onclick="setCameraView('reset')" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 transition-colors border border-slate-700">🔄 Reset</button>
+                        </div>
+                    </div>
+                    <p class="text-xs text-slate-400 mb-3">Interactive dynamic 3D surface with bathymetric depth contours. Click and drag to rotate, scroll to zoom, right-click to pan.</p>
+                </div>
+                <div id="seabed-3d-viewer" style="width: 100%; height: 430px;" class="rounded-xl overflow-hidden bg-slate-950 border border-slate-800"></div>
             </div>
             <!-- Right: Static 3D Seabed Plot (PNG) -->
-            <div class="bg-slate-800/30 border border-slate-700/30 rounded-2xl p-6">
-                <h2 class="text-lg font-bold text-slate-100 mb-2">📷 Static 3D Seabed Elevation Model</h2>
-                <p class="text-xs text-slate-400 mb-4">High-resolution 3D surface plot generated using Spectral reversed colormap.</p>
-                <div class="bg-slate-900 rounded-xl overflow-hidden border border-slate-800 h-[450px] flex items-center justify-center">
+            <div class="bg-slate-800/30 border border-slate-700/30 rounded-2xl p-6 flex flex-col justify-between">
+                <div>
+                    <h2 class="text-lg font-bold text-slate-100 mb-2">📷 High-Definition 3D Elevation Model</h2>
+                    <p class="text-xs text-slate-400 mb-3">Cropped to the surveyed bathymetric domain with automatic front-facing slope perspective.</p>
+                </div>
+                <div class="bg-slate-900 rounded-xl overflow-hidden border border-slate-800 h-[430px] flex items-center justify-center">
                     <a href="5_Plot_3D_Seabed.png" target="_blank" class="w-full h-full flex items-center justify-center p-2">
                         <img src="5_Plot_3D_Seabed.png" alt="Static 3D Seabed Plot" class="max-w-full max-h-full object-contain hover:opacity-95 transition-opacity" onerror="this.src='https://placehold.co/500x400/020617/94a3b8?text=3D+Seabed+Plot+Not+Found'"/>
                     </a>
@@ -1068,6 +1085,7 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
     </div>
     <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
     <script>
+        var defaultCamera = {plotly_camera_json};
         try {{
             var zData = {z_data_json};
             var xCoords = {x_coords_json};
@@ -1081,15 +1099,17 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                     type: 'surface',
                     colorscale: 'Spectral',
                     reversescale: true,
-                    colorbar: {{ title: 'Depth (m)', titlefont: {{ color: '#94a3b8' }}, tickfont: {{ color: '#94a3b8' }} }},
+                    lighting: {{ ambient: 0.55, diffuse: 0.85, roughness: 0.4, specular: 0.20 }},
+                    colorbar: {{ title: 'Depth (m)', titlefont: {{ color: '#94a3b8', size: 11 }}, tickfont: {{ color: '#94a3b8', size: 10 }} }},
                     contours: {{
-                        z: {{ show: true, usecolormap: true, highlightcolor: "#ffffff", project: {{ z: true }} }}
+                        z: {{ show: true, usecolormap: true, highlightcolor: "#ffffff", project: {{ z: true }}, width: 1.5 }}
                     }}
                 }}];
                 var sceneConfig = {{
-                    xaxis: {{ title: '{plotly_x_title}', color: '#94a3b8', gridcolor: '#1e293b' }},
-                    yaxis: {{ title: '{plotly_y_title}', color: '#94a3b8', gridcolor: '#1e293b' }},
-                    zaxis: {{ title: 'Depth (m)', color: '#94a3b8', gridcolor: '#1e293b' }}
+                    xaxis: {{ title: '{plotly_x_title}', color: '#94a3b8', gridcolor: '#1e293b', showbackground: false }},
+                    yaxis: {{ title: '{plotly_y_title}', color: '#94a3b8', gridcolor: '#1e293b', showbackground: false }},
+                    zaxis: {{ title: 'Depth (m)', color: '#94a3b8', gridcolor: '#1e293b', showbackground: false }},
+                    camera: defaultCamera
                 }};
                 if (aspectRatio && aspectRatio.x) {{
                     sceneConfig.aspectmode = 'manual';
@@ -1101,13 +1121,29 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                     plot_bgcolor: '#020617',
                     scene: sceneConfig
                 }};
-                Plotly.newPlot('seabed-3d-viewer', data, layout);
+                Plotly.newPlot('seabed-3d-viewer', data, layout, {{ responsive: true }});
             }} else {{
                 document.getElementById('seabed-3d-viewer').innerHTML = '<div class="flex items-center justify-center h-full text-slate-500 text-sm">3D Seabed Data Not Available</div>';
             }}
         }} catch (e) {{
             console.error(e);
             document.getElementById('seabed-3d-viewer').innerHTML = '<div class="flex items-center justify-center h-full text-rose-500 text-sm">Failed to render 3D Viewer</div>';
+        }}
+
+        function setCameraView(viewType) {{
+            var eye = {{ x: 1.25, y: -1.25, z: 1.15 }};
+            if (viewType === 'front' && defaultCamera && defaultCamera.eye) {{
+                eye = defaultCamera.eye;
+            }} else if (viewType === 'top') {{
+                eye = {{ x: 0.01, y: 0.01, z: 2.2 }};
+            }} else if (viewType === 'side') {{
+                eye = {{ x: 2.1, y: 0.1, z: 0.35 }};
+            }} else if (viewType === 'reset') {{
+                eye = defaultCamera && defaultCamera.eye ? defaultCamera.eye : {{ x: 1.25, y: -1.25, z: 1.15 }};
+            }}
+            Plotly.relayout('seabed-3d-viewer', {{
+                'scene.camera.eye': eye
+            }});
         }}
     </script>
 </body>
@@ -2309,7 +2345,7 @@ def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt
     </head>
     <body>
         <div class="header">
-            <h1>BATHYMETRIX-AI V6.3: TECHNICAL VALIDATION REPORT</h1>
+            <h1>BATHYMETRIX-AI V7.0: TECHNICAL VALIDATION REPORT</h1>
             <p>SDB MasterFlow | High-Precision Satellite-Derived Bathymetry Calibration & Validation</p>
         </div>
 
@@ -2381,7 +2417,7 @@ def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt
         {f"<h2>🔄 Phase 04: Depth-Dependent Residual Calibration Leaderboard</h2><table border='1' cellspacing='0' cellpadding='6' bordercolor='#cbd5e1' style='width: 100%; border-collapse: collapse; margin-top: 8pt; margin-bottom: 12pt;'><thead><tr bgcolor='#f1f5f9'><th style='white-space: nowrap;'>Algorithm</th><th style='white-space: nowrap;'>R² Accuracy</th><th style='white-space: nowrap;'>RMSE (Vertical Error)</th><th style='white-space: nowrap;'>wMAPE (%)</th></tr></thead><tbody>{p4_rows_html}</tbody></table>" if has_p4 and not is_spatiospectral else ""}
 
         <div class="footer">
-            Report generated automatically by Bathymetrix-AI V6.4. All rights reserved. &copy; Mohamed Aly Nasef (2026).
+            Report generated automatically by Bathymetrix-AI V7.0. All rights reserved. &copy; Mohamed Aly Nasef (2026).
         </div>
         <div style="page-break-before: always;"></div>
 
@@ -2408,11 +2444,11 @@ def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt
             </tbody>
         </table>
 
-        {f'<div class="footer">Report generated automatically by Bathymetrix-AI V6.4. All rights reserved. &copy; Mohamed Aly Nasef (2026).</div>' if plots_section_html else ""}
+        {f'<div class="footer">Report generated automatically by Bathymetrix-AI V7.0. All rights reserved. &copy; Mohamed Aly Nasef (2026).</div>' if plots_section_html else ""}
         {plots_section_html}
 
         <div class="footer">
-            Report generated automatically by Bathymetrix-AI V6.4. All rights reserved. &copy; Mohamed Aly Nasef (2026).
+            Report generated automatically by Bathymetrix-AI V7.0. All rights reserved. &copy; Mohamed Aly Nasef (2026).
         </div>
     </body>
     </html>

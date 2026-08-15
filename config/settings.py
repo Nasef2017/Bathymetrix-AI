@@ -22,6 +22,10 @@ MODEL_LIST_NAMES = [
     "Decision Tree",
     "MLP",
     "SVR",
+    "Huber Regressor",
+    "XGBoost",
+    "LightGBM",
+    "CatBoost",
 ]
 
 # Optimizers

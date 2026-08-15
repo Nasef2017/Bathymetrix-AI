@@ -75,7 +75,7 @@ def extract_values(vec_layer, depth_field, p3_path, p4_path, feedback):
 
         try:
             geom.transform(tr)
-            pt = geom.asPoint()
+            pt = geom.asMultiPoint()[0] if geom.isMultipart() else geom.asPoint()
         except Exception:  # nosec B112
             continue
 

@@ -77,13 +77,13 @@ class TemporalReportGenerator:
                     rlayer.setRenderer(renderer)
                     QgsProject.instance().addMapLayer(rlayer, True)
 
-        # Add Shoreline Change Polygons (Only Overall Trend)
-        if change_polygons and first_yr and last_yr:
-            overall_marker = f"{first_yr}_{last_yr}"
+        # Add Shoreline Change Polygons for ALL periods (Sequential and Overall)
+        if change_polygons:
             for poly_shp in change_polygons:
-                if os.path.exists(poly_shp) and overall_marker in os.path.basename(poly_shp):
+                if os.path.exists(poly_shp):
                     yr_str = os.path.basename(poly_shp).replace("Shoreline_Change_Polygons_", "").replace(".shp", "")
-                    vlayer = QgsVectorLayer(poly_shp, f"Shoreline Change Polygons ({yr_str})", "ogr")
+                    yr_display = yr_str.replace("_", "-")
+                    vlayer = QgsVectorLayer(poly_shp, f"Shoreline Change Polygons ({yr_display})", "ogr")
                     if vlayer.isValid():
                         cat_list = []
                         sym_erosion = QgsSymbol.defaultSymbol(vlayer.geometryType())

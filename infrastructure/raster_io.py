@@ -35,12 +35,16 @@ def clean_depth_map(
         feedback.pushInfo(
             ">>> Cleaning Depth Map: Clamping edges and deep anomalies..."
         )
-    deep_limit = (max_depth * 1.5) if max_depth < 0 else -100.0
     import rasterio
     import numpy as np
 
+    abs_max = abs(float(max_depth)) if max_depth is not None and max_depth != 0 else 50.0
+    deep_limit_neg = -abs_max * 1.5
+    deep_limit_pos = abs_max * 1.5
+
     with rasterio.open(depth_raster) as src_depth, rasterio.open(feature_stack_raster) as src_feat:
         depth_data = src_depth.read(1)
+        nodata_depth = src_depth.nodata if src_depth.nodata is not None else -9999.0
         
         # Ensure feat_data matches shape (just in case)
         if src_feat.shape != src_depth.shape:
@@ -58,7 +62,15 @@ def clean_depth_map(
         else:
             feat_data = src_feat.read(1)
         
-        valid_mask = (depth_data >= deep_limit) & (feat_data > -9000)
+        # Exclude nodata pixels
+        is_nodata = (depth_data == nodata_depth) | (depth_data < -9000) | np.isnan(depth_data)
+        valid_depth = ~is_nodata
+        valid_feat = (feat_data > -9000) & (~np.isnan(feat_data))
+        
+        # Depth filter that respects both negative & positive depths
+        valid_range = (depth_data >= deep_limit_neg) & (depth_data <= deep_limit_pos)
+        
+        valid_mask = valid_depth & valid_feat & valid_range
         clean_data = np.where(valid_mask, depth_data, -9999.0)
         
         profile = src_depth.profile.copy()
