@@ -1418,7 +1418,8 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
 
 
     path_clean = final_train
-    if algorithm.parameterAsBool(parameters, algorithm.ENABLE_RANSAC, context):
+    enable_ransac = algorithm.parameterAsBool(parameters, algorithm.ENABLE_RANSAC, context)
+    if enable_ransac:
         append_log("  [Phase 02] Filtering", log_path, feedback)
         append_log("      → Removing outliers...", log_path, feedback)
         p2 = processing.run(
@@ -1439,8 +1440,10 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
             is_child_algorithm=True,
         )
         path_clean = p2["OUTPUT_CLEAN_VEC"]
-
-    append_log("  ✓ Phase 02 completed\n", log_path, feedback)
+        append_log("  ✓ Phase 02 completed\n", log_path, feedback)
+    else:
+        append_log("  [Phase 02] Filtering", log_path, feedback)
+        append_log("      → Skipped by User.\n", log_path, feedback)
 
     append_log("════════════════════════════════════════════════════════════", log_path, feedback)
     append_log("Global Phase 03 | Initial Modeling".center(60), log_path, feedback)
@@ -1501,11 +1504,10 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
 
     path_refined = None
     
-    # [USER REQUIREMENT] Phase 04 is STRICTLY for Control Points. 
-    # If no control points are provided, it is bypassed completely.
+    enable_adaptive = algorithm.parameterAsBool(parameters, algorithm.ENABLE_ADAPTIVE, context)
     ad_layer = algorithm.parameterAsVectorLayer(parameters, algorithm.INPUT_ADAPTIVE_TRAIN, context)
     
-    if ad_layer:
+    if enable_adaptive and ad_layer:
         append_log("  [Phase 04] Adaptive Refinement", log_path, feedback)
         append_log("      → Control Points found. Executing...", log_path, feedback)
 
@@ -1592,7 +1594,10 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
             append_log("  ✓ Phase 04 completed\n", log_path, feedback)
     else:
         append_log("  [Phase 04] Adaptive Refinement", log_path, feedback)
-        append_log("      → No Control Points found. SKIPPED.\n", log_path, feedback)
+        if not enable_adaptive:
+            append_log("      → Skipped by User.\n", log_path, feedback)
+        else:
+            append_log("      → No Control Points found. SKIPPED.\n", log_path, feedback)
 
     feat_stack = p1["OUTPUT_FEATURES"]
 
@@ -1878,6 +1883,13 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
             feedback=feedback,
             is_child_algorithm=True,
         )
+        append_log("  ✓ Phase 05 completed\n", log_path, feedback)
+    else:
+        append_log("  [Phase 05] Validation", log_path, feedback)
+        if not enable_val:
+            append_log("      → Skipped by User.\n", log_path, feedback)
+        else:
+            append_log("      → No Validation Points found. SKIPPED.\n", log_path, feedback)
 
     if p3.get("OUTPUT_DEPTH_MAP") and os.path.exists(p3["OUTPUT_DEPTH_MAP"]):
         details_init = QgsProcessingContext.LayerDetails(
@@ -2039,56 +2051,57 @@ def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt
 
     # Phase 02 Plots
     p2_plots_html = ""
-    if not p2_dir:
-        p2_dir = os.path.join(out_dir, "Phase_02_Filtering")
-        
-    p2_plot1_path = os.path.abspath(os.path.join(p2_dir, "2_Plot_1_Trend.png")).replace("\\", "/")
-    p2_plot2_path = os.path.abspath(os.path.join(p2_dir, "2_Plot_2_Variance.png")).replace("\\", "/")
-    p2_plot3_path = os.path.abspath(os.path.join(p2_dir, "2_Plot_3_Envelope.png")).replace("\\", "/")
+    if enable_ransac:
+        if not p2_dir:
+            p2_dir = os.path.join(out_dir, "Phase_02_Filtering")
+            
+        p2_plot1_path = os.path.abspath(os.path.join(p2_dir, "2_Plot_1_Trend.png")).replace("\\", "/")
+        p2_plot2_path = os.path.abspath(os.path.join(p2_dir, "2_Plot_2_Variance.png")).replace("\\", "/")
+        p2_plot3_path = os.path.abspath(os.path.join(p2_dir, "2_Plot_3_Envelope.png")).replace("\\", "/")
 
-    # Check which plots exist and match the filter mode
-    p2_plots_to_show = []
-    if os.path.exists(p2_plot1_path):
-        p2_plots_to_show.append((p2_plot1_path, "Figure 1: Regression Trend & Outlier Rejection"))
-        
-    if filter_mode_name and "LS Variance" in filter_mode_name:
-        if os.path.exists(p2_plot2_path):
-            p2_plots_to_show.append((p2_plot2_path, "Figure 2: Depth vs Variance Analysis"))
-    else:
-        if os.path.exists(p2_plot3_path):
-            p2_plots_to_show.append((p2_plot3_path, "Figure 2: Residuals & Uncertainty Envelope"))
-
-    if p2_plots_to_show:
-        p2_plots_html = """
-        <h2>📈 Phase 02: Training Dataset Filtering & Uncertainty Plots</h2>
-        <p style="color: #64748b; font-size: 9pt; margin-bottom: 12pt;">
-            The following figures display the pre-filtering regression, trend fitting, and outlier rejection results.
-        </p>
-        """
-        if len(p2_plots_to_show) == 1:
-            img_path, caption = p2_plots_to_show[0]
-            p2_plots_html += f"""
-            <div style="display: block; width: 100%; margin: 0 auto 12pt auto; text-align: center;">
-                <img src="{img_path}" width="480" style="border: 1px solid #cbd5e1; border-radius: 4px; display: block; margin: 0 auto;" />
-                <div style="font-size: 8pt; color: #64748b; margin-top: 3pt; font-weight: bold; text-align: center;">{caption}</div>
-            </div>
-            """
+        # Check which plots exist and match the filter mode
+        p2_plots_to_show = []
+        if os.path.exists(p2_plot1_path):
+            p2_plots_to_show.append((p2_plot1_path, "Figure 1: Regression Trend & Outlier Rejection"))
+            
+        if filter_mode_name and "LS Variance" in filter_mode_name:
+            if os.path.exists(p2_plot2_path):
+                p2_plots_to_show.append((p2_plot2_path, "Figure 2: Depth vs Variance Analysis"))
         else:
-            p2_plots_html += """
-            <table align="center" border="0" cellspacing="0" cellpadding="0" style="width: 600px; border: none; margin-top: 10pt; margin-bottom: 10pt;">
-                <tr bgcolor="transparent">
+            if os.path.exists(p2_plot3_path):
+                p2_plots_to_show.append((p2_plot3_path, "Figure 2: Residuals & Uncertainty Envelope"))
+
+        if p2_plots_to_show:
+            p2_plots_html = """
+            <h2>📈 Phase 02: Training Dataset Filtering & Uncertainty Plots</h2>
+            <p style="color: #64748b; font-size: 9pt; margin-bottom: 12pt;">
+                The following figures display the pre-filtering regression, trend fitting, and outlier rejection results.
+            </p>
             """
-            for img_path, caption in p2_plots_to_show:
+            if len(p2_plots_to_show) == 1:
+                img_path, caption = p2_plots_to_show[0]
                 p2_plots_html += f"""
-                    <td style="width: 300px; text-align: center; border: none; padding: 4pt; background-color: transparent;">
-                        <img src="{img_path}" width="280" style="border: 1px solid #cbd5e1; border-radius: 4px;" />
-                        <div style="font-size: 8pt; color: #64748b; margin-top: 3pt; font-weight: bold; text-align: center;">{caption}</div>
-                    </td>
+                <div style="display: block; width: 100%; margin: 0 auto 12pt auto; text-align: center;">
+                    <img src="{img_path}" width="480" style="border: 1px solid #cbd5e1; border-radius: 4px; display: block; margin: 0 auto;" />
+                    <div style="font-size: 8pt; color: #64748b; margin-top: 3pt; font-weight: bold; text-align: center;">{caption}</div>
+                </div>
                 """
-            p2_plots_html += """
-                </tr>
-            </table>
-            """
+            else:
+                p2_plots_html += """
+                <table align="center" border="0" cellspacing="0" cellpadding="0" style="width: 600px; border: none; margin-top: 10pt; margin-bottom: 10pt;">
+                    <tr bgcolor="transparent">
+                """
+                for img_path, caption in p2_plots_to_show:
+                    p2_plots_html += f"""
+                        <td style="width: 300px; text-align: center; border: none; padding: 4pt; background-color: transparent;">
+                            <img src="{img_path}" width="280" style="border: 1px solid #cbd5e1; border-radius: 4px;" />
+                            <div style="font-size: 8pt; color: #64748b; margin-top: 3pt; font-weight: bold; text-align: center;">{caption}</div>
+                        </td>
+                    """
+                p2_plots_html += """
+                    </tr>
+                </table>
+                """
 
     # Image paths
     scatter_path = os.path.abspath(os.path.join(out_dir, "5_Plot_Scatter_Comparison.png")).replace("\\", "/")

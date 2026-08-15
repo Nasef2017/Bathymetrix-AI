@@ -772,7 +772,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterBoolean(
                 self.ENABLE_ADAPTIVE,
-                "🎯 [4] Enable Adaptive Refinement",
+                "🎯 [4] Enable Phase 04 Adaptive Refinement",
                 defaultValue=False,
             )
         )
@@ -875,7 +875,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         # -------------------------------------------------------------------
         self.addParameter(
             QgsProcessingParameterBoolean(
-                self.ENABLE_VALIDATION, "📉 [5] Enable Validation", defaultValue=False
+                self.ENABLE_VALIDATION, "📉 [5] Enable Phase 05 Validation & Reporting", defaultValue=False
             )
         )
         self.addParameter(

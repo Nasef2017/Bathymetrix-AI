@@ -633,13 +633,10 @@ class SDBSpatiotemporalFlow(SDBMasterOrchestrator):
         p_cat.setFlags(p_cat.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_cat)
 
-        # -------------------------------------------------------------------
-        # [4] Phase 04: Adaptive Refinement
-        # -------------------------------------------------------------------
         self.addParameter(
             QgsProcessingParameterBoolean(
                 self.ENABLE_ADAPTIVE,
-                "🎯 [4] Enable Adaptive Refinement",
+                "🎯 [4] Enable Phase 04 Adaptive Refinement",
                 defaultValue=False,
             )
         )
@@ -735,6 +732,13 @@ class SDBSpatiotemporalFlow(SDBMasterOrchestrator):
         # -------------------------------------------------------------------
         # [5] Phase 05: Validation & Reporting
         # -------------------------------------------------------------------
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.ENABLE_VALIDATION,
+                "📉 [5] Enable Phase 05 Validation & Reporting",
+                defaultValue=False,
+            )
+        )
         self.addParameter(
             QgsProcessingParameterString(
                 self.FIELD_TEST_DEPTH,

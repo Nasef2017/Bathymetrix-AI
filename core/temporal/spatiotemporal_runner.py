@@ -168,36 +168,49 @@ class SpatiotemporalSDBRunner:
             run_params["OUTPUT_FOLDER"] = p1_dir
             
             # 4. Phase 1
-            append_log("  [Phase 01] Pre-processing", log_path, feedback)
-            if first_year:
-                append_log("      → Base Year Mode", log_path, feedback)
-                p1 = processing.run("sdb_tools:sdb_phase1_preprocessing", run_params, is_child_algorithm=True, context=context, feedback=feedback)
-                master_osw_polygon = p1.get("OUTPUT_OSW_POLY")
-                first_year = False
+            enable_preproc = algorithm.parameterAsBool(masterflow_params, "ENABLE_PREPROCESSING", context) if (algorithm and hasattr(algorithm, "parameterAsBool")) else masterflow_params.get("ENABLE_PREPROCESSING", True)
+            if enable_preproc:
+                append_log("  [Phase 01] Pre-processing", log_path, feedback)
+                if first_year:
+                    append_log("      → Base Year Mode", log_path, feedback)
+                    p1 = processing.run("sdb_tools:sdb_phase1_preprocessing", run_params, is_child_algorithm=True, context=context, feedback=feedback)
+                    master_osw_polygon = p1.get("OUTPUT_OSW_POLY")
+                    first_year = False
+                else:
+                    append_log("      → Enforcing Master OSW Polygon", log_path, feedback)
+                    if master_osw_polygon:
+                        run_params["APPLY_DEEPWATER"] = True
+                        run_params["DEEPWATER_METHOD"] = 2  # Shallow Water Bound (OSW Polygon)
+                        run_params["DEEPWATER_ROI"] = master_osw_polygon
+                    p1 = processing.run("sdb_tools:sdb_phase1_preprocessing", run_params, is_child_algorithm=True, context=context, feedback=feedback)
+                
+                p1_feat = p1["OUTPUT_FEATURES"]
+                append_log("  ✓ Phase 01 completed\n", log_path, feedback)
             else:
-                append_log("      → Enforcing Master OSW Polygon", log_path, feedback)
-                if master_osw_polygon:
-                    run_params["APPLY_DEEPWATER"] = True
-                    run_params["DEEPWATER_METHOD"] = 2  # Shallow Water Bound (OSW Polygon)
-                    run_params["DEEPWATER_ROI"] = master_osw_polygon
-                p1 = processing.run("sdb_tools:sdb_phase1_preprocessing", run_params, is_child_algorithm=True, context=context, feedback=feedback)
-            
-            p1_feat = p1["OUTPUT_FEATURES"]
-            append_log("  ✓ Phase 01 completed\n", log_path, feedback)
+                append_log("  [Phase 01] Pre-processing", log_path, feedback)
+                append_log("      → Skipped by User.\n", log_path, feedback)
+                p1_feat = year_info["image_path"]
+                p1 = {"OUTPUT_FEATURES": p1_feat, "OUTPUT_MASK": None, "OUTPUT_OSW_POLY": None}
             
             # 5. Phase 2
-            append_log("  [Phase 02] Filtering", log_path, feedback)
-            p2_params = run_params.copy()
-            p2_params["INPUT_STACK"] = p1_feat
-            p2_params["INPUT_MASK"] = p1["OUTPUT_MASK"]
-            p2_params["INPUT_POINTS"] = icesat_path
-            p2_params["BLUE_BAND"] = run_params.get("FILTER_NUMERATOR_BAND", run_params.get("BLUE_BAND"))
-            p2_params["GREEN_BAND"] = run_params.get("FILTER_DENOMINATOR_BAND", run_params.get("GREEN_BAND"))
-            p2_params["RESIDUAL_THRESHOLD"] = run_params.get("RANSAC_THRESHOLD", 3.0)
-            p2_params["OUTPUT_FOLDER"] = p2_dir
-            p2 = processing.run("sdb_tools:sdb_02_filtering", p2_params, is_child_algorithm=True, context=context, feedback=feedback)
-            p2_vec = p2["OUTPUT_CLEAN_VEC"]
-            append_log("  ✓ Phase 02 completed\n", log_path, feedback)
+            enable_p2 = algorithm.parameterAsBool(masterflow_params, "ENABLE_RANSAC", context) if (algorithm and hasattr(algorithm, "parameterAsBool")) else masterflow_params.get("ENABLE_RANSAC", True)
+            if enable_p2:
+                append_log("  [Phase 02] Filtering", log_path, feedback)
+                p2_params = run_params.copy()
+                p2_params["INPUT_STACK"] = p1_feat
+                p2_params["INPUT_MASK"] = p1.get("OUTPUT_MASK")
+                p2_params["INPUT_POINTS"] = icesat_path
+                p2_params["BLUE_BAND"] = run_params.get("FILTER_NUMERATOR_BAND", run_params.get("BLUE_BAND"))
+                p2_params["GREEN_BAND"] = run_params.get("FILTER_DENOMINATOR_BAND", run_params.get("GREEN_BAND"))
+                p2_params["RESIDUAL_THRESHOLD"] = run_params.get("RANSAC_THRESHOLD", 3.0)
+                p2_params["OUTPUT_FOLDER"] = p2_dir
+                p2 = processing.run("sdb_tools:sdb_02_filtering", p2_params, is_child_algorithm=True, context=context, feedback=feedback)
+                p2_vec = p2["OUTPUT_CLEAN_VEC"]
+                append_log("  ✓ Phase 02 completed\n", log_path, feedback)
+            else:
+                append_log("  [Phase 02] Filtering", log_path, feedback)
+                append_log("      → Skipped by User.\n", log_path, feedback)
+                p2_vec = icesat_path
             
             # 6. Extract Samples for Global Matrix
             append_log("  [Sample Extraction]", log_path, feedback)
@@ -433,41 +446,47 @@ class SpatiotemporalSDBRunner:
                 ui_test_depth = run_params.get("FIELD_DEPTH", "")
             
             # 1. Control points (Phase 04 Logic)
-            ui_enable_adaptive = algorithm.parameterAsBool(masterflow_params, "ENABLE_ADAPTIVE_P4", context)
+            ui_enable_adaptive = algorithm.parameterAsBool(masterflow_params, "ENABLE_ADAPTIVE", context) if (algorithm and hasattr(algorithm, "parameterAsBool")) else masterflow_params.get("ENABLE_ADAPTIVE", False)
             has_control_points = False
-            if year_info.get("control_path"):
+            if ui_enable_adaptive and year_info.get("control_path"):
                 run_params["INPUT_TRAIN"] = year_info["control_path"]
                 run_params["FIELD_TRAIN"] = ui_adaptive_depth
-                run_params["ENABLE_ADAPTIVE"] = ui_enable_adaptive
+                run_params["ENABLE_ADAPTIVE"] = True
                 has_control_points = True
                 append_log("  [Phase 04] Adaptive Refinement", log_path, feedback)
                 append_log("      → Control Points found. Executing...", log_path, feedback)
             else:
+                run_params["ENABLE_ADAPTIVE"] = False
                 append_log("  [Phase 04] Adaptive Refinement", log_path, feedback)
-                append_log("      → No Control Points found. SKIPPED.", log_path, feedback)
+                if not ui_enable_adaptive:
+                    append_log("      → Skipped by User.", log_path, feedback)
+                else:
+                    append_log("      → No Control Points found. SKIPPED.", log_path, feedback)
                 
             # 2. Validation points (Unseen Data for Phase 05)
+            ui_enable_val = algorithm.parameterAsBool(masterflow_params, "ENABLE_VALIDATION", context) if (algorithm and hasattr(algorithm, "parameterAsBool")) else masterflow_params.get("ENABLE_VALIDATION", False)
             year_unseen_path = None
-            if year_info.get("unseen_file_path") and os.path.exists(year_info["unseen_file_path"]):
-                year_unseen_path = year_info["unseen_file_path"]
-            elif year_info.get("unseen_layer") and hasattr(year_info["unseen_layer"], "isValid") and year_info["unseen_layer"].isValid():
-                unseen_year_field = year_info.get("unseen_year_field", "")
-                unseen_layer = year_info["unseen_layer"]
-                if unseen_year_field and unseen_year_field.strip():
-                    append_log(f"   [Temporal] Extracting year {year} from global Unseen layer...", log_path, feedback)
-                    try:
-                        ext_unseen = processing.run("native:extractbyexpression", {
-                            'INPUT': unseen_layer,
-                            'EXPRESSION': f'"{unseen_year_field}" = {year} OR "{unseen_year_field}" = \'{year}\'',
-                            'OUTPUT': 'TEMPORARY_OUTPUT'
-                        }, context=context, feedback=feedback, is_child_algorithm=True)
-                        year_unseen_path = ext_unseen['OUTPUT']
-                    except Exception as e:
-                        append_log(f"  ⚠ WARNING: Failed to extract global Unseen for {year}: {e}", log_path, feedback)
-                else:
-                    year_unseen_path = unseen_layer.source() if hasattr(unseen_layer, "source") else unseen_layer
+            if ui_enable_val:
+                if year_info.get("unseen_file_path") and os.path.exists(year_info["unseen_file_path"]):
+                    year_unseen_path = year_info["unseen_file_path"]
+                elif year_info.get("unseen_layer") and hasattr(year_info["unseen_layer"], "isValid") and year_info["unseen_layer"].isValid():
+                    unseen_year_field = year_info.get("unseen_year_field", "")
+                    unseen_layer = year_info["unseen_layer"]
+                    if unseen_year_field and unseen_year_field.strip():
+                        append_log(f"   [Temporal] Extracting year {year} from global Unseen layer...", log_path, feedback)
+                        try:
+                            ext_unseen = processing.run("native:extractbyexpression", {
+                                'INPUT': unseen_layer,
+                                'EXPRESSION': f'"{unseen_year_field}" = {year} OR "{unseen_year_field}" = \'{year}\'',
+                                'OUTPUT': 'TEMPORARY_OUTPUT'
+                            }, context=context, feedback=feedback, is_child_algorithm=True)
+                            year_unseen_path = ext_unseen['OUTPUT']
+                        except Exception as e:
+                            append_log(f"  ⚠ WARNING: Failed to extract global Unseen for {year}: {e}", log_path, feedback)
+                    else:
+                        year_unseen_path = unseen_layer.source() if hasattr(unseen_layer, "source") else unseen_layer
             
-            if year_unseen_path:
+            if ui_enable_val and year_unseen_path:
                 run_params["ENABLE_VALIDATION"] = True
                 run_params["INPUT_TEST"] = year_unseen_path
                 run_params["FIELD_TEST_DEPTH"] = ui_test_depth
@@ -476,7 +495,10 @@ class SpatiotemporalSDBRunner:
             else:
                 run_params["ENABLE_VALIDATION"] = False
                 append_log(f"  [Phase 05] Scientific Validation", log_path, feedback)
-                append_log(f"      → No Validation Points found. SKIPPED.", log_path, feedback)
+                if not ui_enable_val:
+                    append_log(f"      → Skipped by User.", log_path, feedback)
+                else:
+                    append_log(f"      → No Validation Points found. SKIPPED.", log_path, feedback)
             
             # Phase 4 Execution
             if has_control_points:
@@ -523,7 +545,10 @@ class SpatiotemporalSDBRunner:
                 except Exception as e:
                     append_log(f"  ✗ ERROR: Phase 5 Failed for {year}: {e}", log_path, feedback)
             else:
-                append_log("  [Phase 05] No Validation Points found. Skipping Scientific Validation metrics.", log_path, feedback)
+                if not ui_enable_val:
+                    append_log("  [Phase 05] Scientific Validation Skipped by User.", log_path, feedback)
+                else:
+                    append_log("  [Phase 05] No Validation Points found. Skipping Scientific Validation metrics.", log_path, feedback)
 
             # Generate Dashboard and 3D plot directly into the Phase 05 folder (Always)
             from Bathymetrix_AI.core.pipeline import generate_html_dashboard, generate_3d_seabed_png

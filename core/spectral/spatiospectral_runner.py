@@ -99,25 +99,38 @@ class SpatioSpectralSDBRunner:
             run_params["OUTPUT_FOLDER"] = p1_dir
             
             # Phase 1
-            append_log("  [Phase 01] Pre-processing", log_path, feedback)
-            p1 = processing.run("sdb_tools:sdb_phase1_preprocessing", run_params, is_child_algorithm=True, context=context, feedback=feedback)
-            p1_feat = p1["OUTPUT_FEATURES"]
-            p1_mask = p1["OUTPUT_MASK"]
-            p1_masks.append(p1_mask)
-            append_log("  ✓ Phase 01 completed\n", log_path, feedback)
-            
+            enable_preproc = algorithm.parameterAsBool(masterflow_params, "ENABLE_PREPROCESSING", context) if (algorithm and hasattr(algorithm, "parameterAsBool")) else masterflow_params.get("ENABLE_PREPROCESSING", True)
+            if enable_preproc:
+                append_log("  [Phase 01] Pre-processing", log_path, feedback)
+                p1 = processing.run("sdb_tools:sdb_phase1_preprocessing", run_params, is_child_algorithm=True, context=context, feedback=feedback)
+                p1_feat = p1["OUTPUT_FEATURES"]
+                p1_mask = p1["OUTPUT_MASK"]
+                p1_masks.append(p1_mask)
+                append_log("  ✓ Phase 01 completed\n", log_path, feedback)
+            else:
+                append_log("  [Phase 01] Pre-processing", log_path, feedback)
+                append_log("      → Skipped by User.\n", log_path, feedback)
+                p1_feat = tif_path
+                p1_mask = None
+
             # Phase 2
-            append_log("  [Phase 02] Filtering", log_path, feedback)
-            p2_params = run_params.copy()
-            p2_params["INPUT_STACK"] = p1_feat
-            p2_params["INPUT_POINTS"] = training_layer
-            p2_params["BLUE_BAND"] = run_params.get("FILTER_NUMERATOR_BAND", run_params.get("BLUE_BAND"))
-            p2_params["GREEN_BAND"] = run_params.get("FILTER_DENOMINATOR_BAND", run_params.get("GREEN_BAND"))
-            p2_params["RESIDUAL_THRESHOLD"] = run_params.get("RANSAC_THRESHOLD", 3.0)
-            p2_params["OUTPUT_FOLDER"] = p2_dir
-            p2 = processing.run("sdb_tools:sdb_02_filtering", p2_params, is_child_algorithm=True, context=context, feedback=feedback)
-            p2_vec = p2["OUTPUT_CLEAN_VEC"]
-            append_log("  ✓ Phase 02 completed\n", log_path, feedback)
+            enable_p2 = algorithm.parameterAsBool(masterflow_params, "ENABLE_RANSAC", context) if (algorithm and hasattr(algorithm, "parameterAsBool")) else masterflow_params.get("ENABLE_RANSAC", True)
+            if enable_p2:
+                append_log("  [Phase 02] Filtering", log_path, feedback)
+                p2_params = run_params.copy()
+                p2_params["INPUT_STACK"] = p1_feat
+                p2_params["INPUT_POINTS"] = training_layer
+                p2_params["BLUE_BAND"] = run_params.get("FILTER_NUMERATOR_BAND", run_params.get("BLUE_BAND"))
+                p2_params["GREEN_BAND"] = run_params.get("FILTER_DENOMINATOR_BAND", run_params.get("GREEN_BAND"))
+                p2_params["RESIDUAL_THRESHOLD"] = run_params.get("RANSAC_THRESHOLD", 3.0)
+                p2_params["OUTPUT_FOLDER"] = p2_dir
+                p2 = processing.run("sdb_tools:sdb_02_filtering", p2_params, is_child_algorithm=True, context=context, feedback=feedback)
+                p2_vec = p2["OUTPUT_CLEAN_VEC"]
+                append_log("  ✓ Phase 02 completed\n", log_path, feedback)
+            else:
+                append_log("  [Phase 02] Filtering", log_path, feedback)
+                append_log("      → Skipped by User.\n", log_path, feedback)
+                p2_vec = training_layer
             
             # Phase 3
             append_log("  [Phase 03] Global Modeling", log_path, feedback)
@@ -223,69 +236,78 @@ class SpatioSpectralSDBRunner:
         os.makedirs(p5_dir, exist_ok=True)
         
         # Phase 4
-        append_log("[Phase 04] Adaptive Refinement", log_path, feedback)
-        append_log("  → Post-Aggregation processing", log_path, feedback)
-        append_log("  → Running once on final depth map", log_path, feedback)
+        enable_adaptive = algorithm.parameterAsBool(masterflow_params, "ENABLE_ADAPTIVE", context) if (algorithm and hasattr(algorithm, "parameterAsBool")) else masterflow_params.get("ENABLE_ADAPTIVE", False)
         
-        p4_params = masterflow_params.copy()
-        p4_params["INPUT_GLOBAL_RASTER"] = aggregated_depth_path
-        
-        # We must provide *something* to INPUT_ORIGINAL_FEAT because it's required by the UI of SDB_04_Spatial_Retraining,
-        # but we explicitly tell P4 to NOT use it via STACK_COMPONENTS (which we set to Depth + Residual Error Grid only).
-        p4_params["INPUT_ORIGINAL_FEAT"] = aggregated_depth_path
-        
-        # 1 = Phase 03 Depth Map, 2 = Residual Error Grid. (0 = Feature Stack, which we exclude)
-        ui_stack = masterflow_params.get("STACK_COMPONENTS_P4", [0, 1])
-        p4_params["STACK_COMPONENTS"] = [x + 1 for x in ui_stack]
-        
-        p4_params["INPUT_MASK"] = aggregated_mask_path
-        
-        # Use Adaptive Training points if provided, else fallback to main training points
-        adaptive_train = masterflow_params.get("INPUT_ADAPTIVE_TRAIN")
-        if adaptive_train:
-            p4_params["INPUT_TRAIN"] = adaptive_train
-            p4_params["FIELD_TRAIN"] = masterflow_params.get("FIELD_ADAPTIVE_DEPTH", masterflow_params.get("FIELD_DEPTH"))
-        else:
-            p4_params["INPUT_TRAIN"] = training_layer
-            p4_params["FIELD_TRAIN"] = masterflow_params.get("FIELD_DEPTH")
+        if enable_adaptive:
+            append_log("[Phase 04] Adaptive Refinement", log_path, feedback)
+            append_log("  → Post-Aggregation processing", log_path, feedback)
+            append_log("  → Running once on final depth map", log_path, feedback)
             
-        p4_params["OUTPUT_FOLDER"] = p4_dir
-        if "SPATIAL_CV_P4" in masterflow_params:
-            p4_params["SPATIAL_CV"] = masterflow_params["SPATIAL_CV_P4"]
-        
-        p4 = processing.run("sdb_tools:sdb_phase4_adaptive", p4_params, is_child_algorithm=True, context=context, feedback=feedback)
-        
-        append_log("✓ Phase 04 completed\n", log_path, feedback)
-        
-        raw_p4_depth = p4["OUTPUT_FINAL"]
-        
-        # ---------------------------------------------------------
-        # CLEANUP Phase 4 Output
-        # ---------------------------------------------------------
-        if raw_p4_depth and os.path.exists(raw_p4_depth):
-            max_depth = masterflow_params.get("MAX_DEPTH_THRESHOLD", -30.0)
-            p4_clamped = os.path.join(p4_dir, "4_Phase04_Depth_Cleaned.tif")
+            p4_params = masterflow_params.copy()
+            p4_params["INPUT_GLOBAL_RASTER"] = aggregated_depth_path
             
-            # Clean depth map (masking to the aggregated intersection mask)
-            clean_depth_map(raw_p4_depth, aggregated_depth_path, max_depth, p4_clamped, context, feedback)
+            # We must provide *something* to INPUT_ORIGINAL_FEAT because it's required by the UI of SDB_04_Spatial_Retraining,
+            # but we explicitly tell P4 to NOT use it via STACK_COMPONENTS (which we set to Depth + Residual Error Grid only).
+            p4_params["INPUT_ORIGINAL_FEAT"] = aggregated_depth_path
             
-            remove_pos = masterflow_params.get("REMOVE_POSITIVES", True)
-            if remove_pos:
-                p4_no_pos = os.path.join(p4_dir, "4_Phase04_Depth_NoPositives.tif")
-                remove_positive_pixels(p4_clamped, p4_no_pos, feedback)
-                p4_final_depth = p4_no_pos
+            # 1 = Phase 03 Depth Map, 2 = Residual Error Grid. (0 = Feature Stack, which we exclude)
+            ui_stack = masterflow_params.get("STACK_COMPONENTS_P4", [0, 1])
+            p4_params["STACK_COMPONENTS"] = [x + 1 for x in ui_stack]
+            
+            p4_params["INPUT_MASK"] = aggregated_mask_path
+            
+            # Use Adaptive Training points if provided, else fallback to main training points
+            adaptive_train = masterflow_params.get("INPUT_ADAPTIVE_TRAIN")
+            if adaptive_train:
+                p4_params["INPUT_TRAIN"] = adaptive_train
+                p4_params["FIELD_TRAIN"] = masterflow_params.get("FIELD_ADAPTIVE_DEPTH", masterflow_params.get("FIELD_DEPTH"))
             else:
-                p4_final_depth = p4_clamped
+                p4_params["INPUT_TRAIN"] = training_layer
+                p4_params["FIELD_TRAIN"] = masterflow_params.get("FIELD_DEPTH")
+                
+            p4_params["OUTPUT_FOLDER"] = p4_dir
+            if "SPATIAL_CV_P4" in masterflow_params:
+                p4_params["SPATIAL_CV"] = masterflow_params["SPATIAL_CV_P4"]
+            
+            p4 = processing.run("sdb_tools:sdb_phase4_adaptive", p4_params, is_child_algorithm=True, context=context, feedback=feedback)
+            
+            append_log("✓ Phase 04 completed\n", log_path, feedback)
+            
+            raw_p4_depth = p4["OUTPUT_FINAL"]
+            
+            # ---------------------------------------------------------
+            # CLEANUP Phase 4 Output
+            # ---------------------------------------------------------
+            if raw_p4_depth and os.path.exists(raw_p4_depth):
+                max_depth = masterflow_params.get("MAX_DEPTH_THRESHOLD", -30.0)
+                p4_clamped = os.path.join(p4_dir, "4_Phase04_Depth_Cleaned.tif")
+                
+                # Clean depth map (masking to the aggregated intersection mask)
+                clean_depth_map(raw_p4_depth, aggregated_depth_path, max_depth, p4_clamped, context, feedback)
+                
+                remove_pos = masterflow_params.get("REMOVE_POSITIVES", True)
+                if remove_pos:
+                    p4_no_pos = os.path.join(p4_dir, "4_Phase04_Depth_NoPositives.tif")
+                    remove_positive_pixels(p4_clamped, p4_no_pos, feedback)
+                    p4_final_depth = p4_no_pos
+                else:
+                    p4_final_depth = p4_clamped
+            else:
+                p4_final_depth = raw_p4_depth
         else:
-            p4_final_depth = raw_p4_depth
+            append_log("[Phase 04] Adaptive Refinement", log_path, feedback)
+            append_log("  → Skipped by User.\n", log_path, feedback)
+            p4_final_depth = aggregated_depth_path
+            p4_dir = None
         
         # Phase 5
         append_log("[Phase 05] Finalization", log_path, feedback)
-        append_log("  → Generating final outputs...", log_path, feedback)
+        enable_val = algorithm.parameterAsBool(masterflow_params, "ENABLE_VALIDATION", context) if (algorithm and hasattr(algorithm, "parameterAsBool")) else masterflow_params.get("ENABLE_VALIDATION", False)
         
-        # Only run if INPUT_TEST is provided
+        # Only run if ENABLE_VALIDATION is True and INPUT_TEST is provided
         input_test_layer = masterflow_params.get("INPUT_TEST")
-        if input_test_layer:
+        if enable_val and input_test_layer:
+            append_log("  → Generating final outputs...", log_path, feedback)
             p5_params = {
                 "INPUT_MAP_P3": aggregated_depth_path,
                 "INPUT_MAP_P4": p4_final_depth if p4_final_depth else aggregated_depth_path,
@@ -299,7 +321,10 @@ class SpatioSpectralSDBRunner:
             p5 = processing.run("sdb_tools:sdb_05_reporting", p5_params, is_child_algorithm=True, context=context, feedback=feedback)
             append_log("✓ Scientific Validation metrics generated", log_path, feedback)
         else:
-            append_log("  ⚠ WARNING: No independent validation points provided. Skipping Scientific Validation metrics.", log_path, feedback)
+            if not enable_val:
+                append_log("  → Validation Skipped by User.", log_path, feedback)
+            else:
+                append_log("  ⚠ WARNING: No independent validation points provided. Skipping Scientific Validation metrics.", log_path, feedback)
 
         # Generate static 3D seabed PNG (Always)
         final_depth_for_3d = p4_final_depth if p4_final_depth else aggregated_depth_path
