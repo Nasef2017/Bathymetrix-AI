@@ -113,8 +113,8 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
         self.addParameter(QgsProcessingParameterNumber(self.CONF_THRESHOLD, self.tr('Confidence Threshold'), type=QgsProcessingParameterNumber.Double, defaultValue=0.9, optional=True))
 
         # Time & Track
-        self.addParameter(QgsProcessingParameterString(self.TIME_START, self.tr('Start Time (YYYY-MM-DD)'), defaultValue='2019-10-01', optional=True))
-        self.addParameter(QgsProcessingParameterString(self.TIME_END, self.tr('End Time (YYYY-MM-DD)'), defaultValue='2019-11-01', optional=True))
+        self.addParameter(QgsProcessingParameterString(self.TIME_START, self.tr('Start Time (YYYY-MM-DD)'), defaultValue='2019-10-01', optional=False))
+        self.addParameter(QgsProcessingParameterString(self.TIME_END, self.tr('End Time (YYYY-MM-DD)'), defaultValue='2019-11-01', optional=False))
         self.addParameter(QgsProcessingParameterNumber(self.RGT, self.tr('RGT'), type=QgsProcessingParameterNumber.Integer, optional=True))
         self.addParameter(QgsProcessingParameterNumber(self.CYCLE, self.tr('Cycle'), type=QgsProcessingParameterNumber.Integer, optional=True))
         self.addParameter(QgsProcessingParameterString(self.BEAM, self.tr('Beam'), optional=True))
@@ -159,17 +159,24 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
             try:
                 log_filepath = None
                 output_param = parameters.get(self.OUTPUT)
-                if output_param and output_param != 'TEMPORARY_OUTPUT':
-                    base, _ = os.path.splitext(output_param)
-                    log_filepath = base + "_log.txt"
-                else:
+                
+                # Check if user provided an explicit file path string
+                if isinstance(output_param, str) and output_param != 'TEMPORARY_OUTPUT' and output_param.strip():
+                    clean_str = output_param.split('|')[0]
+                    if os.path.dirname(clean_str):
+                        base, _ = os.path.splitext(clean_str)
+                        log_filepath = base + "_log.txt"
+                
+                # Fallback to dest_id from parameterAsSink
+                if not log_filepath:
                     nonlocal dest_id
-                    if dest_id:
+                    if isinstance(dest_id, str) and dest_id.strip():
                         clean_path = dest_id.split('|')[0]
                         if os.path.dirname(clean_path):
                             base, _ = os.path.splitext(clean_path)
                             log_filepath = base + "_log.txt"
                 
+                # Final fallback to safe temp dir
                 if not log_filepath:
                     log_filepath = os.path.join(safe_temp_dir, "icesat2_downloader_log.txt")
 
@@ -242,31 +249,38 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
         t0 = self.parameterAsString(parameters, self.TIME_START, context)
         t1 = self.parameterAsString(parameters, self.TIME_END, context)
 
-        import datetime
+        if not t0 or not str(t0).strip():
+            save_log()
+            raise QgsProcessingException("Start Time (YYYY-MM-DD) is required. Please specify a valid start date.")
+
+        if not t1 or not str(t1).strip():
+            save_log()
+            raise QgsProcessingException("End Time (YYYY-MM-DD) is required. Please specify a valid end date.")
+
         now = pd.Timestamp.now(tz='UTC')
-        parsed_t0 = None
-        parsed_t1 = None
 
-        if t0:
-            try:
-                parsed_t0 = pd.to_datetime(t0, utc=True)
-            except Exception as e:
-                feedback.pushInfo(f"Warning: Could not parse start time '{t0}'. Using mission start. Error: {e}")
+        try:
+            parsed_t0 = pd.to_datetime(str(t0).strip(), utc=True)
+        except Exception as e:
+            save_log()
+            raise QgsProcessingException(f"Invalid Start Time '{t0}'. Expected format: YYYY-MM-DD. Error: {e}")
 
-        if not parsed_t0:
-            parsed_t0 = pd.to_datetime("2018-10-14T00:00:00Z", utc=True)
+        try:
+            parsed_t1 = pd.to_datetime(str(t1).strip(), utc=True)
+        except Exception as e:
+            save_log()
+            raise QgsProcessingException(f"Invalid End Time '{t1}'. Expected format: YYYY-MM-DD. Error: {e}")
 
-        if t1:
-            try:
-                parsed_t1 = pd.to_datetime(t1, utc=True)
-                # If end date is in the future, cap it to the current time
-                if parsed_t1 > now:
-                    feedback.pushInfo(f"End date '{t1}' is in the future. Capping end date to current time: {now.strftime('%Y-%m-%d')}")
-                    parsed_t1 = now
-            except Exception as e:
-                feedback.pushInfo(f"Warning: Could not parse end time '{t1}'. Using current time. Error: {e}")
+        # If user entered a date without specific time (e.g. YYYY-MM-DD at 00:00:00), adjust parsed_t1 to end of day to make the range inclusive
+        if parsed_t1.hour == 0 and parsed_t1.minute == 0 and parsed_t1.second == 0 and parsed_t1.microsecond == 0:
+            parsed_t1 = parsed_t1.normalize() + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
 
-        if not parsed_t1:
+        if parsed_t0 > parsed_t1:
+            save_log()
+            raise QgsProcessingException(f"Start Time ({parsed_t0.strftime('%Y-%m-%d')}) cannot be after End Time ({parsed_t1.strftime('%Y-%m-%d')}).")
+
+        if parsed_t1 > now:
+            feedback.pushInfo(f"End date '{t1}' is in the future. Capping end date to current time: {now.strftime('%Y-%m-%d %H:%M:%S')}")
             parsed_t1 = now
 
         rgt = self.parameterAsInt(parameters, self.RGT, context)
@@ -446,8 +460,6 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
 
                 t0_utc = parsed_t0 if parsed_t0.tzinfo is not None else parsed_t0.tz_localize('UTC')
                 t1_utc = parsed_t1 if parsed_t1.tzinfo is not None else parsed_t1.tz_localize('UTC')
-                # Adjust to end of the day to make it inclusive
-                t1_utc = t1_utc.normalize() + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
 
                 gdf = gdf[(gdf.index >= t0_utc) & (gdf.index <= t1_utc)]
 
@@ -455,14 +467,12 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
                 if filtered_len < original_len:
                     feedback.pushInfo(f"Strict local temporal filter: kept {filtered_len} of {original_len} points matching your exact date range.")
 
-        # --- Empty DataFrame Fallback (Auto-download latest available year of data) ---
+        # --- Handle Empty Results (Inform user of available data range without auto-downloading unwanted dates) ---
         if gdf.empty:
             available_range_msg = ""
-            latest_start = None
-            latest_end = None
             if earthdata:
                 try:
-                    feedback.pushInfo(f"No data found. Querying NASA CMR to find available {short_name} data for this area...")
+                    feedback.pushInfo(f"No data found in requested range. Checking NASA CMR for all available {short_name} data dates in this AOI...")
                     granules = earthdata.cmr(short_name=short_name, polygon=aoi)
                     if granules:
                         dates = []
@@ -479,107 +489,18 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
                             min_date = min(dates)
                             max_date = max(dates)
                             available_range_msg = f" Note: Available {short_name} data in this Area of Interest (AOI) ranges from {min_date.strftime('%Y-%m-%d')} to {max_date.strftime('%Y-%m-%d')}."
-                            
-                            # Capping end to latest date, and start to beginning of that calendar year
-                            latest_end = max_date
-                            latest_start = pd.to_datetime(f"{latest_end.year}-01-01", utc=True)
-                            feedback.pushInfo(f"Automatically attempting to download the latest available data chunk (from {latest_start.strftime('%Y-%m-%d')} to {latest_end.strftime('%Y-%m-%d')})...")
                         else:
-                            available_range_msg = " No granules were found in the CMR database for this AOI."
+                            available_range_msg = " No granules were found in the NASA CMR database for this AOI."
                     else:
-                        available_range_msg = " No granules were found in the CMR database for this AOI."
+                        available_range_msg = " No granules were found in the NASA CMR database for this AOI."
                 except Exception as cmr_err:
-                    feedback.pushInfo(f"Could not query NASA CMR for metadata fallback: {cmr_err}")
+                    feedback.pushInfo(f"Could not query NASA CMR for available data dates: {cmr_err}")
 
-            # Run automatic query for fallback range (latest year of available data)
-            if latest_start and latest_end:
-                fallback_chunks = []
-                current_start = latest_start
-                while current_start <= latest_end:
-                    year = current_start.year
-                    current_end = pd.to_datetime(f"{year}-12-31T23:59:59Z", utc=True)
-                    if current_end > latest_end:
-                        current_end = latest_end
-                    fallback_chunks.append((current_start, current_end))
-                    current_start = pd.to_datetime(f"{year + 1}-01-01T00:00:00Z", utc=True)
-
-                fallback_gdfs = []
-                for idx, (fs, fe) in enumerate(fallback_chunks):
-                    if feedback.isCanceled():
-                        break
-                    fs_str = fs.strftime("%Y-%m-%dT%H:%M:%SZ")
-                    fe_str = fe.strftime("%Y-%m-%dT%H:%M:%SZ")
-                    chunk_parms = parms.copy()
-                    chunk_parms["t0"] = fs_str
-                    chunk_parms["t1"] = fe_str
-                    
-                    # Generate a unique temporary file path for this fallback chunk
-                    chunk_output_path = os.path.join(safe_temp_dir, f"fallback_{idx}_{fs.strftime('%Y%m%d')}.parquet")
-                    if os.path.exists(chunk_output_path):
-                        try:
-                            os.remove(chunk_output_path)
-                        except Exception:  # nosec B110
-                            pass
-                    chunk_parms["output"] = {
-                        "path": chunk_output_path,
-                        "format": "geoparquet",
-                        "open_on_complete": False
-                    }
-                    
-                    feedback.pushInfo(f"[{idx+1}/{len(fallback_chunks)}] Fallback Requesting {api_endpoint} from SlideRule ({fs.strftime('%Y-%m-%d')} to {fe.strftime('%Y-%m-%d')})...")
-                    try:
-                        gdf_chunk_path = sr.run(api_endpoint, chunk_parms)
-                        if gdf_chunk_path and os.path.exists(gdf_chunk_path):
-                            import pyarrow.parquet as pq
-                            import shapely
-                            table = pq.read_table(gdf_chunk_path)
-                            if table.num_rows > 0:
-                                df_chunk = table.to_pandas()
-                                if 'geometry' in df_chunk.columns:
-                                    df_chunk['geometry'] = shapely.from_wkb(df_chunk['geometry'])
-                                feedback.pushInfo(f" -> Successfully downloaded {len(df_chunk)} points.")
-                                fallback_gdfs.append(df_chunk)
-                            else:
-                                feedback.pushInfo(f" -> SlideRule returned 0 points.")
-                        else:
-                            feedback.pushInfo(f" -> SlideRule returned 0 points.")
-                    except Exception as fallback_err:
-                        feedback.pushInfo(f" -> Fallback query failed for this chunk: {fallback_err}")
-                    finally:
-                        if os.path.exists(chunk_output_path):
-                            try:
-                                os.remove(chunk_output_path)
-                            except Exception:  # nosec B110
-                                pass
-
-                if fallback_gdfs:
-                    gdf = pd.concat(fallback_gdfs)
-                    # Filter locally to fallback range
-                    if not gdf.empty:
-                        if not isinstance(gdf.index, pd.DatetimeIndex):
-                            try:
-                                gdf.index = pd.to_datetime(gdf.index, utc=True)
-                            except Exception:  # nosec B110
-                                pass
-                        if isinstance(gdf.index, pd.DatetimeIndex):
-                            if gdf.index.tz is None:
-                                gdf.index = gdf.index.tz_localize('UTC')
-                            else:
-                                gdf.index = gdf.index.tz_convert('UTC')
-
-                            # Highlight the latest date in the fallback downloaded data
-                            max_date = gdf.index.max()
-                            feedback.pushInfo(f"==========================================================================")
-                            feedback.pushInfo(f"⭐ LATEST DATA DATE RETRIEVED (FALLBACK): {max_date.strftime('%Y-%m-%d %H:%M:%S')} UTC")
-                            feedback.pushInfo(f"==========================================================================")
-
-                            t0_utc = latest_start
-                            t1_utc = latest_end.normalize() + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
-                            gdf = gdf[(gdf.index >= t0_utc) & (gdf.index <= t1_utc)]
-
-            if gdf.empty:
-                save_log()
-                raise QgsProcessingException(f"No Data Found.{available_range_msg} Please adjust your temporal or spatial filters.")
+            save_log()
+            raise QgsProcessingException(
+                f"No ICESat-2 ({short_name}) data found in the specified date range ({parsed_t0.strftime('%Y-%m-%d')} to {parsed_t1.strftime('%Y-%m-%d')})."
+                f"{available_range_msg} Please adjust your Start Time, End Time, or AOI polygon."
+            )
 
         # Add explicit 'year' and 'acq_date' columns for temporal indexing
         if 'year' not in gdf.columns:
