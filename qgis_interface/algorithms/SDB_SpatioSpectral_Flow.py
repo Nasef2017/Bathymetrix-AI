@@ -295,7 +295,7 @@ class SDBSpatioSpectralFlow(SDBMasterOrchestrator):
                 self.DEEPWATER_METHOD,
                 "🌊 [1.5] Deep Water Definition Method",
                 options=self.OSW_METHODS_NAMES,
-                defaultValue=1,
+                defaultValue=0,
             )
         )
         self.addParameter(

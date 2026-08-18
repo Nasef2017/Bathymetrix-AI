@@ -2,48 +2,94 @@
 name=Bathymetrix-AI
 qgisMinimumVersion=3.22
 qgisMaximumVersion=4.99
-version=7.0
+version=7.1
 author=Mohamed Aly Nasef
-email=Eng.m.nasef2017@gmail.com, Nasefm.aly@alexu.edu.eg
+email=Eng.m.nasef2017@gmail.com
 description=A professional QGIS research toolkit for Satellite-Derived Bathymetry (SDB), integrating multispectral imagery with ICESat-2 LiDAR via Auto-ML, SpatioSpectral aggregation, SpatioTemporal modeling, Adaptive Refinement, and Coastal Dynamics.
 
 about=<h3>Bathymetrix-AI: Advanced SDB Toolkit & Coastal Dynamics</h3>
     <p><b>Bathymetrix-AI</b> is a professional QGIS research toolkit for high-precision Satellite-Derived Bathymetry (SDB). The toolkit integrates multispectral satellite imagery with ICESat-2 (ATL24) LiDAR bathymetry through a modular and adaptive Machine Learning framework. It automates the end-to-end SDB processing pipeline while maintaining full control over data quality, model selection, spatial refinement, uncertainty estimation, and scientific validation.</p>
     
     <p><b>🔬 Scientific Methodology — Core 5-Phase System (SDB Single Masterflow):</b></p>
+    <p>The SDB Single Masterflow is the core SDB workflow of Bathymetrix-AI, providing a complete end-to-end processing pipeline for a single satellite scene: <b>Phase 01 → Phase 02 → Phase 03 → Phase 04 → Phase 05</b></p>
     <ul>
-        <li><b>Phase 01: Advanced Pre-processing:</b> Isolates the aquatic domain, removes surface sun-glint using the Hedley model (with robust NaN/Inf handling), segments water using NDWI/MNDWI/NWI with adaptive thresholding, filters deep-water OSW boundaries (dynamic Elbow Point Detection & manual polygon masking), exports OSW vector GeoPackages preserving CRS, and generates physics-based Log-Ratio features (e.g. Blue/Green) and spectral indices.</li>
-        <li><b>Phase 02: Robust Filtering:</b> Identifies and eliminates noisy observations, outliers, and environmental artifacts in training depth data using Linear RANSAC, Least-Squares (LS) Variance Fit, Huber Variance Fit, and dynamic percentile-based diagnostic plotting.</li>
-        <li><b>Phase 03: Global Auto-ML & Feature Analysis:</b> Analyzes multicollinearity and feature importance (Pearson/Spearman correlation, Auto-RANSAC, Auto-Random Forest), benchmarks over 15 ML regressors (Random Forest, Gradient Boosting, XGBoost, LightGBM, CatBoost, SVR, MLP, etc.), performs hyperparameter optimization (Bayesian, Grid, Random Search), utilizes Spatial Block Cross-Validation, supports Ensemble Blending (Standard Average, Median, Stacking, and Uncertainty-Weighted Pixel Fusion), and executes memory-efficient chunked raster prediction.</li>
-        <li><b>Phase 04: Adaptive Refinement:</b> Mitigates local depth bias using Zero-Mean Centered Spatial Residuals, robust KNN spatial residual modeling, spatial cross-validation, adaptive re-training, and pixel fusion, evaluated against IHO Order 1a/2 Total Vertical Uncertainty (TVU) standards.</li>
-        <li><b>Phase 05: Validation & Reporting:</b> Conducts independent accuracy assessment against unseen validation points (R², RMSE, wMAPE, IHO S-44 Order 1a/2 TVU compliance) and exports interactive HTML validation dashboards and diagnostic reports.</li>
+        <li><b>Phase 01: Advanced Pre-processing:</b> Prepares the satellite imagery for bathymetric modeling by isolating the aquatic domain, reducing radiometric interference, and generating depth-sensitive spectral features:
+            <ul>
+                <li><i>Sun-Glint Removal:</i> Removes surface reflections using the Hedley model, with robust handling of NaN and Inf values for processing stability.</li>
+                <li><i>Water Segmentation:</i> Uses NDWI, MNDWI, and NWI together with adaptive thresholding to isolate the aquatic domain.</li>
+                <li><i>Deep Water OSW Filtering:</i> Identifies and removes deep-water areas unsuitable for optically derived bathymetry using an advanced multi-method engine: (1) <b>Automated Knee-Point Extinction [Recommended]</b> detecting the physical optical extinction cutoff on NIR absorption, (2) <b>Turbidity-Invariant Log-Ratio Extinction</b> utilizing NDTI to protect coastal waters from sediment/mud plumes, (3) <b>Multi-Otsu / GMM 3D Spectral Clustering</b> for complex reefs and heterogeneous benthos, (4) <b>Connected-Component Topological Cleaning</b> removing open ocean speckles, and (5) <b>Manual Polygon ROI & Custom OSW Polygon</b>.</li>
+                <li><i>OSW Boundary Extraction:</i> Exports the Optically Shallow Water boundary as a GeoPackage vector while preserving the source imagery CRS.</li>
+                <li><i>Log-Ratio Features & Spectral Indices:</i> Generates physics-based depth-sensitive features such as Blue/Green Log-Ratio together with additional spectral indices.</li>
+            </ul>
+        </li>
+        <li><b>Phase 02: Robust Filtering:</b> Improves the quality of the training data by identifying and removing noisy observations, outliers, and environmental artifacts:
+            <ul>
+                <li><i>Noise Removal:</i> Supports Linear RANSAC, Least-Squares (LS) Variance Fit, and Huber Variance Fit.</li>
+                <li><i>Dynamic Diagnostic Plotting:</i> Uses robust percentile-based visualization to produce clearer variance and trend plots while reducing the effect of extreme noise.</li>
+            </ul>
+        </li>
+        <li><b>Phase 03: Global Auto-ML & Feature Analysis:</b> Automatically evaluates multiple machine-learning approaches instead of relying on a single predefined algorithm:
+            <ul>
+                <li><i>Feature Analysis:</i> Evaluates feature correlation, redundancy, and importance using Pearson/Spearman correlation, Auto-RANSAC, and Auto-Random Forest.</li>
+                <li><i>Algorithm Benchmarking:</i> Evaluates 15+ machine-learning regressors (Random Forest, Gradient Boosting, XGBoost, LightGBM, CatBoost, SVR, MLP, etc.).</li>
+                <li><i>Hyperparameter Optimization:</i> Supports Bayesian Optimization, Grid Search, and Random Search.</li>
+                <li><i>Spatial Cross-Validation:</i> Provides independent spatial block cross-validation for model evaluation.</li>
+                <li><i>Ensemble Blending:</i> Supports Standard Average, Median, Stacking, and Uncertainty-Weighted Pixel Fusion.</li>
+                <li><i>Memory-Efficient Prediction:</i> Uses chunk-based raster prediction to reduce memory usage when processing large images.</li>
+                <li><i>Customization:</i> Provides advanced control over model and optimization parameters for research and fine-tuning.</li>
+            </ul>
+        </li>
+        <li><b>Phase 04: Adaptive Refinement:</b> Corrects local errors that may remain after global machine-learning prediction:
+            <ul>
+                <li><i>Spatial Residual Correction:</i> Analyzes the differences between predicted and observed depths and models their spatial behavior.</li>
+                <li><i>Zero-Mean Centered Spatial Residuals:</i> Uses robust residual processing and spatial weighting to reduce local depth bias.</li>
+                <li><i>Spatial Residual Modeling:</i> Supports robust KNN and other supported spatial correction approaches.</li>
+                <li><i>Spatial Cross-Validation:</i> Provides independent spatial validation for residual modeling.</li>
+                <li><i>Adaptive Re-training & Pixel Fusion:</i> Combines model information with spatial error information to generate a refined bathymetric surface.</li>
+                <li><i>IHO Standards Assessment:</i> Evaluates results against IHO S-44 Order 1a/2 Total Vertical Uncertainty (TVU) standards.</li>
+            </ul>
+        </li>
+        <li><b>Phase 05: Validation & Reporting:</b> Provides independent scientific assessment of the final bathymetric result:
+            <ul>
+                <li><i>Independent Accuracy Assessment:</i> Evaluates the final model using unseen validation points.</li>
+                <li><i>Performance Metrics:</i> R² (Coefficient of Determination), RMSE (Root Mean Square Error), wMAPE (Weighted Mean Absolute Percentage Error).</li>
+                <li><i>IHO S-44 Assessment:</i> Evaluates compliance with applicable Order 1a/2 TVU criteria.</li>
+                <li><i>Interactive Validation Dashboard:</i> Generates HTML dashboards containing model leaderboards, validation metrics, diagnostic plots, and summary information.</li>
+            </ul>
+        </li>
     </ul>
 
     <p><b>🚀 Masterflows & Standalone Modules:</b></p>
     <ul>
-        <li><b>SDB Single Masterflow:</b> Complete automated end-to-end pipeline executing all 5 phases on a single satellite scene.</li>
-        <li><b>SDB SpatioSpectral Masterflow:</b> Independently evaluates multiple scenes over the same area and aggregates them using Best Scene Selection (High R² / Low RMSE), Weighted Median, Weighted Mean, or Median/Mean with IHO compliance and comprehensive HTML reporting.</li>
-        <li><b>SDB SpatioTemporal Masterflow:</b> Multi-year global spatiotemporal AI modeling that integrates 'Year' directly as an AI feature across multi-temporal imagery, followed by per-year adaptive refinement for consistent temporal depth series.</li>
-        <li><b>Coastal Dynamics Analysis (Module 06):</b> Multi-year coastal monitoring computing long-term bathymetric trends, Morphological Stability Index (MSI), Statistical Level of Detection (StatCD), erosion/accretion, shoreline movement, and volumetric sediment tracking with target ROI analytics.</li>
-        <li><b>ICESat-2 Downloader:</b> Specialized tool to query, filter, and download ICESat-2 (ATL24) LiDAR bathymetry directly from NSIDC.</li>
-        <li><b>Tidal Datum Converter:</b> Dedicated tool to convert and vertically align bathymetric observations across tidal reference datums (e.g., MSL to Chart Datum).</li>
+        <li><b>1. SDB Single Masterflow:</b> The standard end-to-end SDB workflow for a single satellite scene (One Scene → Pre-processing → Data Filtering → AI Modeling → Adaptive Refinement → Scientific Validation → One Final SDB Map).</li>
+        <li><b>2. SDB SpatioSpectral Masterflow:</b> Designed for multiple satellite scenes covering the same area. Evaluates independent SDB results per scene and applies multi-scene consensus strategies (Best Scene Selection, Weighted Median, Weighted Mean, or Median/Mean) to produce one final consolidated SDB map.</li>
+        <li><b>3. SDB SpatioTemporal Masterflow:</b> Multi-year SDB modeling integrating Year/Time directly into a Global Spatiotemporal AI model, followed by year-specific adaptive refinement to produce a consistent temporal series of SDB maps.</li>
+        <li><b>4. Coastal Dynamics Analysis (Module 06):</b> Uses yearly SDB maps to analyze long-term bathymetric trends, Net Bathymetric Change, Morphological Stability Index (MSI), Statistical Level of Detection (StatCD), Erosion and Accretion, Shoreline Movement, Volumetric Sediment Tracking, and Target ROI Analytics.</li>
+        <li><b>5. ICESat-2 Downloader:</b> Specialized tool for querying, filtering, and downloading ICESat-2 ATL24 bathymetry data directly from NSIDC.</li>
+        <li><b>6. Tidal Datum Converter:</b> Dedicated tool for converting and vertically aligning bathymetric observations between different tidal reference datums (e.g., MSL to Chart Datum).</li>
     </ul>
 
     <p><b>📊 Performance Metrics:</b><br>
-    - <b>R² (Coefficient of Determination):</b> Goodness-of-fit measurement.<br>
-    - <b>RMSE (Root Mean Square Error):</b> Average vertical error in meters.<br>
-    - <b>wMAPE (Weighted Mean Absolute Percentage Error):</b> Relative error across depth intervals.<br>
+    - <b>R² (Coefficient of Determination):</b> Measures goodness of fit between predicted and observed depths.<br>
+    - <b>RMSE (Root Mean Square Error):</b> Measures average vertical error in meters.<br>
+    - <b>wMAPE (Weighted Mean Absolute Percentage Error):</b> Measures relative error across depth intervals.<br>
     - <b>IHO S-44 Standards:</b> Evaluates compliance with Order 1a and Order 2 TVU criteria.</p>
 
-    <p><b>📚 Key References:</b><br>
-    - <b>Stumpf et al. (2003):</b> Determination of shallow water bathymetry with high-resolution satellite imagery.<br>
+    <p><b>🎯 Masterflow Selection Guide:</b><br>
+    - <i>SDB Single Masterflow:</i> One Scene → One SDB.<br>
+    - <i>SDB SpatioSpectral Masterflow:</i> Multiple Scenes → Evaluate / Select / Aggregate → One SDB.<br>
+    - <i>SDB SpatioTemporal Masterflow:</i> Multiple Years → Global Temporal AI → SDB for Each Year.<br>
+    - <i>Coastal Dynamics Analysis:</i> Yearly SDB → Change & Morphological Analysis.</p>
+
+    <p><b>📚 Scientific References:</b><br>
+    - <b>Stumpf et al. (2003):</b> Determination of shallow water depth with high-resolution satellite imagery.<br>
     - <b>Hedley et al. (2005):</b> Simple and robust removal of sun glint for high-resolution imagery.<br>
-    - <b>Fischler & Bolles (1981):</b> Random sample consensus (RANSAC) for model fitting.<br>
+    - <b>Fischler & Bolles (1981):</b> Random Sample Consensus (RANSAC) for model fitting.<br>
     - <b>Zhang et al. (2021):</b> Adaptive variance fitting for satellite bathymetry noise reduction.<br>
     - <b>Alevizos (2020):</b> Spatial residual refinement and error compensation in shallow coastal waters.<br>
     - <b>Wheaton et al. (2010):</b> Accounting for uncertainty in DEMs from repeat topographic surveys.</p>
 
-    <p><i>Developed by <b>Mohamed Aly Nasef</b> for scientific research and hydrographic applications.<br>
+    <p><i>Developed by <b>Mohamed Aly Nasef</b> for scientific research, coastal mapping, bathymetric analysis, and hydrographic applications.<br>
     Code architecture, algorithms, and technical documentation significantly enhanced and optimized using <b>Google Gemini AI</b>.</i></p>
 
 homepage=https://github.com/Nasef2017/Bathymetrix-AI
@@ -52,4 +98,4 @@ tracker=https://github.com/Nasef2017/Bathymetrix-AI/issues
 icon=icon.png
 tags=sdb,bathymetry,machine learning,icesat-2,ransac,spatial correction,remote sensing,hydrography,satellite imagery,python,coastal dynamics,volumetric change,quantile regression,spatiotemporal,spatiospectral,iho-s44
 category=Raster
-changelog=v7.0: Introduced SDB SpatioSpectral Masterflow (fusing multiple imageries with weighted median Post-SpatioSpectral Aggregation), separated Spatiotemporal global modeling from Coastal Dynamics (MSI and Volumetric Change calculation), and updated UI.
+changelog=v7.1: Introduced Advanced Multi-Method Optically Shallow Water (OSW) Filtering Engine featuring: (1) Automated Knee-Point Extinction [Recommended] based on maximum curvature on water absorption curves, (2) Turbidity-Invariant Log-Ratio Extinction protecting coastal waters from sediment plumes, (3) Multi-Otsu / GMM Spectral Clustering in 3D color space for complex coral reefs and heterogeneous benthos, (4) Connected-Component Topological Island & Speckle Cleaning to eliminate open ocean noise, and (5) Unified OSW parameter synchronization across all Masterflows and Preprocessing tools.

@@ -63,6 +63,11 @@ class SDBModule03(QgsProcessingAlgorithm):
     ENSEMBLE_SIZE = "ENSEMBLE_SIZE"
     SPATIAL_CV = "SPATIAL_CV"
 
+    REMOVE_POSITIVES = "REMOVE_POSITIVES"
+    ENABLE_SLOPE_FILTER = "ENABLE_SLOPE_FILTER"
+    SLOPE_THRESHOLD = "SLOPE_THRESHOLD"
+    MAX_DEPTH_THRESHOLD = "MAX_DEPTH_THRESHOLD"
+
     FEATURE_CORR_THRESHOLDS = ["0.0", "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1.0"]
 
     MODEL_LIST = [
@@ -311,6 +316,44 @@ class SDBModule03(QgsProcessingAlgorithm):
         p_cat = QgsProcessingParameterString(self.PARAM_CATBOOST, "CatBoost Params", defaultValue="'iterations':[100, 200], 'depth':[4, 6], 'learning_rate':[0.05, 0.1]", optional=True)
         p_cat.setFlags(p_cat.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_cat)
+
+        p_rem_pos = QgsProcessingParameterBoolean(
+            self.REMOVE_POSITIVES,
+            "🧽 [Cleanup] Remove Positive Depths (>= 0)",
+            defaultValue=True,
+            optional=True,
+        )
+        p_rem_pos.setFlags(p_rem_pos.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_rem_pos)
+
+        p_slope_flt = QgsProcessingParameterBoolean(
+            self.ENABLE_SLOPE_FILTER,
+            "🧽 [Cleanup] Apply Slope Filter (Remove sharp jumps)",
+            defaultValue=True,
+            optional=True,
+        )
+        p_slope_flt.setFlags(p_slope_flt.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_slope_flt)
+
+        p_slope_thr = QgsProcessingParameterNumber(
+            self.SLOPE_THRESHOLD,
+            "🧽 [Cleanup] Slope Filter Threshold (Degrees)",
+            type=QgsProcessingParameterNumber.Double,
+            defaultValue=35.0,
+            optional=True,
+        )
+        p_slope_thr.setFlags(p_slope_thr.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_slope_thr)
+
+        p_max_d = QgsProcessingParameterNumber(
+            self.MAX_DEPTH_THRESHOLD,
+            "🧽 [Cleanup] Max Depth Threshold (e.g. -30.0)",
+            type=QgsProcessingParameterNumber.Double,
+            defaultValue=-30.0,
+            optional=True,
+        )
+        p_max_d.setFlags(p_max_d.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_max_d)
 
         self.addOutput(
             QgsProcessingOutputRasterLayer(self.OUTPUT_DEPTH_MAP, "Output Depth Map")

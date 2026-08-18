@@ -163,7 +163,14 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         "Strict Center",
     ]
     MASK_METHODS_NAMES = ["Otsu (Automatic NDWI)", "Manual NDWI Threshold", "3 Indices Equation (NDWI, MNDWI, NWI)", "Smart Hybrid (Dynamic Auto)"]
-    OSW_METHODS_NAMES = ["Manual Polygon ROI", "Automatic (Lowest NIR Percentile)", "Shallow Water Bound (OSW Polygon)"]
+    OSW_METHODS_NAMES = [
+        "Automated Knee-Point Extinction [Recommended]",
+        "Turbidity-Invariant Log-Ratio Extinction",
+        "Multi-Otsu / GMM Spectral Clustering",
+        "Automatic (NIR Percentile Fallback)",
+        "Manual Polygon ROI",
+        "Shallow Water Bound (OSW Polygon)",
+    ]
     FEATURE_CORR_THRESHOLDS = ["0.0", "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1.0"]
     FEATURE_CORR_THRESHOLDS_P4 = ["Use Phase 03 (-1.0)", "0.0", "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1.0"]
     FEATURE_OPTIONS_NAMES = [
@@ -442,7 +449,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
                 self.DEEPWATER_METHOD,
                 "🌊 [1.5] Deep Water Definition Method",
                 options=self.OSW_METHODS_NAMES,
-                defaultValue=1,
+                defaultValue=0,
             )
         )
         self.addParameter(

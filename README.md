@@ -31,6 +31,20 @@ The toolkit also provides advanced Masterflows and standalone modules for more c
 
 ---
 
+### 🆕 What's New in Version 7.1 (Changelog)
+
+* 🌟 **Advanced Multi-Method OSW Engine:** Replaced rigid single-percentile cutoff with an adaptive multi-method Optically Shallow Water (OSW) filtering engine featuring:
+  * **`0. Automated Knee-Point Extinction [Recommended]`**: Automatic, physics-based inflection detection calculating the true optical extinction threshold on water absorption curves without manual guesswork.
+  * **`1. Turbidity-Invariant Log-Ratio Extinction`**: Integrates the NDTI (Normalized Difference Turbidity Index) with Stumpf log-ratio stabilization to protect coastal waters from estuarine mud plumes and suspended sediment.
+  * **`2. Multi-Otsu / GMM Spectral Clustering`**: 3D unsupervised color-space clustering separating deep ocean, transitional depths, and shallow lagoons in complex coral reef and heterogeneous benthic environments.
+  * **`3. Automatic (NIR Percentile Fallback)`**: Legacy manual tuning option (e.g., 5% to 15%).
+  * **`4. Manual Polygon ROI` & `5. Custom OSW Polygon`**: Full manual control via deep-water calibration samples or direct vector boundaries.
+* 🏝️ **Connected-Component Topological Cleaning:** Integrated morphological island and connected-component sieving to eliminate small isolated wave/glint artifacts in the open ocean while preserving nearshore reefs and islands.
+* 🔄 **Full Pipeline Synchronization:** Seamlessly unified the updated OSW engine across **Module 01 (Preprocessing)**, **SDB Single Masterflow**, **SDB SpatioSpectral Masterflow**, and **SDB SpatioTemporal Masterflow**.
+* 📖 **Best Practice Workflow Guidance:** Added comprehensive documentation guiding users to test and benchmark preprocessing and OSW methods on their specific satellite scene before running full Masterflows.
+
+---
+
 ### 🔬 Scientific Methodology — Core 5-Phase Workflow
 
 The **SDB Single Masterflow** provides the core processing architecture of Bathymetrix-AI.
@@ -46,7 +60,7 @@ Each phase has a specific role, from preparing the satellite data and cleaning t
 The first phase prepares the satellite imagery for bathymetric modeling by isolating the aquatic domain, reducing radiometric interference, and generating depth-sensitive spectral features.
 - **Sun-Glint Removal:** Reduces surface reflection effects to improve the visibility of the seabed signal using the Hedley approach (Hedley et al., 2005). The implementation also handles infinite and NaN values to improve processing stability.
 - **Water Segmentation:** Identifies the aquatic domain using NDWI, MNDWI, and NWI together with adaptive thresholding.
-- **Deep Water OSW Filtering:** Removes deep-water areas that are unsuitable for optically derived bathymetry. The process supports automatic statistical thresholding, manual polygon masking, and dynamic Elbow Point Detection for identifying scattered deep-water noise.
+- **Deep Water OSW Filtering:** Removes deep-water areas that are unsuitable for optically derived bathymetry using the new multi-method engine (Automated Knee-Point Extinction, Turbidity-Invariant Log-Ratio Extinction, Multi-Otsu/GMM 3D Spectral Clustering, and Connected-Component Topological cleaning).
 - **OSW Boundary Extraction:** Automatically generates the Optically Shallow Water boundary as a GeoPackage vector while preserving the CRS of the source imagery.
 - **Log-Ratio Features & Indices:** Transforms spectral information into bathymetry-sensitive features based on light attenuation principles. This includes physics-based Log-Ratio features such as Blue/Green, together with additional spectral indices.
 
@@ -238,8 +252,6 @@ pip install numpy pandas rasterio matplotlib seaborn scikit-learn>=1.5.0 scipy j
 
 **Author:** Mohamed Aly Nasef  
 **Email:** Eng.m.nasef2017@gmail.com, Nasefm.aly@alexu.edu.eg  
-
-Nasef M.Aly. (2026). Nasef2017/Bathymetrix-AI: Bathymetrix_AI V7 (Version v7.0) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.21931621
 
 
 🤖 **AI Acknowledgment**  

@@ -17,7 +17,7 @@ from qgis.core import QgsProcessing
 from qgis import processing
 
 from Bathymetrix_AI.core.spectral.aggregation import spatiospectral_aggregate, spatiospectral_mask_intersection
-from Bathymetrix_AI.infrastructure.raster_io import clean_depth_map, remove_positive_pixels
+from Bathymetrix_AI.infrastructure.raster_io import clean_depth_map, remove_positive_pixels, slope_filter_depth
 from Bathymetrix_AI.infrastructure.canvas import add_raster_to_canvas
 from Bathymetrix_AI.core.pipeline import generate_html_dashboard
 
@@ -59,7 +59,9 @@ class PostSpatioSpectralAggregator(QgsProcessingAlgorithm):
         self.addParameter(QgsProcessingParameterVectorLayer("INPUT_TRAIN", "Training Points (Required if P4 or P5 checked)", optional=True))
         self.addParameter(QgsProcessingParameterField("FIELD_DEPTH", "Depth Field (Training)", defaultValue="depth", parentLayerParameterName="INPUT_TRAIN", type=QgsProcessingParameterField.Numeric, optional=True))
         self.addParameter(QgsProcessingParameterNumber("MAX_DEPTH_THRESHOLD", "Max Depth Threshold (e.g. -30) for P4", type=QgsProcessingParameterNumber.Double, defaultValue=-30.0, optional=True))
-        self.addParameter(QgsProcessingParameterBoolean("REMOVE_POSITIVES", "Remove positive depths (Land) for P4", defaultValue=True, optional=True))
+        self.addParameter(QgsProcessingParameterBoolean("REMOVE_POSITIVES", "🧽 [Cleanup] Remove positive depths (Land) for P4", defaultValue=True, optional=True))
+        self.addParameter(QgsProcessingParameterBoolean("ENABLE_SLOPE_FILTER", "🧽 [Cleanup] Apply Slope Filter for P4 (Remove sharp jumps)", defaultValue=True, optional=True))
+        self.addParameter(QgsProcessingParameterNumber("SLOPE_THRESHOLD", "🧽 [Cleanup] Slope Filter Threshold (Degrees) for P4", type=QgsProcessingParameterNumber.Double, defaultValue=35.0, optional=True))
         
         self.addParameter(QgsProcessingParameterVectorLayer("INPUT_VALIDATION", "Validation Points (Optional for P5)", optional=True))
         self.addParameter(QgsProcessingParameterField("FIELD_VAL_DEPTH", "Depth Field (Validation)", defaultValue="depth", parentLayerParameterName="INPUT_VALIDATION", type=QgsProcessingParameterField.Numeric, optional=True))
@@ -270,13 +272,25 @@ class PostSpatioSpectralAggregator(QgsProcessingAlgorithm):
                 max_depth = self.parameterAsDouble(parameters, "MAX_DEPTH_THRESHOLD", context)
                 p4_clamped = os.path.join(p4_dir, "4_Phase04_Depth_Cleaned.tif")
                 clean_depth_map(raw_p4_depth, aggregated_depth_path, max_depth, p4_clamped, context, feedback)
+                current_p4 = p4_clamped
+                
+                if self.parameterAsBool(parameters, "ENABLE_SLOPE_FILTER", context):
+                    slope_threshold = self.parameterAsDouble(parameters, "SLOPE_THRESHOLD", context)
+                    p4_slope = os.path.join(p4_dir, "4_Phase04_Depth_SlopeFiltered.tif")
+                    current_p4 = slope_filter_depth(
+                        current_p4,
+                        slope_threshold=slope_threshold,
+                        out_path=p4_slope,
+                        context=context,
+                        feedback=feedback,
+                    )
                 
                 if self.parameterAsBool(parameters, "REMOVE_POSITIVES", context):
                     p4_no_pos = os.path.join(p4_dir, "4_Phase04_Depth_NoPositives.tif")
-                    remove_positive_pixels(p4_clamped, p4_no_pos, feedback)
+                    remove_positive_pixels(current_p4, p4_no_pos, feedback)
                     p4_final_depth = p4_no_pos
                 else:
-                    p4_final_depth = p4_clamped
+                    p4_final_depth = current_p4
             else:
                 p4_final_depth = raw_p4_depth
                 

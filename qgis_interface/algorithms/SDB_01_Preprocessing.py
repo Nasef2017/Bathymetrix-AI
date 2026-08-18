@@ -69,7 +69,14 @@ class SDBPhase1Preprocessing(QgsProcessingAlgorithm):
     NUM_THREADS = "NUM_THREADS"
 
     MASK_METHODS = ["Otsu (Automatic NDWI)", "Manual NDWI Threshold", "3 Indices Equation (NDWI, MNDWI, NWI)", "Smart Hybrid (Dynamic Auto)"]
-    OSW_METHODS = ["Manual Polygon ROI", "Automatic (Lowest NIR Percentile)", "Shallow Water Bound (OSW Polygon)"]
+    OSW_METHODS = [
+        "Automated Knee-Point Extinction [Recommended]",
+        "Turbidity-Invariant Log-Ratio Extinction",
+        "Multi-Otsu / GMM Spectral Clustering",
+        "Automatic (NIR Percentile Fallback)",
+        "Manual Polygon ROI",
+        "Shallow Water Bound (OSW Polygon)",
+    ]
 
     FEATURE_OPTIONS = [
         "[All Raw] All Bands from Input Image",
@@ -252,7 +259,7 @@ class SDBPhase1Preprocessing(QgsProcessingAlgorithm):
                 self.DEEPWATER_METHOD,
                 "Deep Water Definition Method",
                 options=self.OSW_METHODS,
-                defaultValue=1,
+                defaultValue=0,
             )
         )
         self.addParameter(

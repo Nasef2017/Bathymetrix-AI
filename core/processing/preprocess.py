@@ -93,6 +93,15 @@ except ImportError:
 
 MASK_METHODS = ["Otsu (Automatic NDWI)", "Manual NDWI Threshold", "3 Indices Equation (NDWI, MNDWI, NWI)", "Smart Hybrid (Dynamic Auto)"]
 
+OSW_METHODS = [
+    "Automated Knee-Point Extinction [Recommended]",
+    "Turbidity-Invariant Log-Ratio Extinction",
+    "Multi-Otsu / GMM Spectral Clustering",
+    "Automatic (NIR Percentile Fallback)",
+    "Manual Polygon ROI",
+    "Shallow Water Bound (OSW Polygon)",
+]
+
 FEATURE_OPTIONS = [
     "[All Raw] All Bands from Input Image",
     "[Log] Log(Coastal)",
@@ -624,23 +633,108 @@ def generate_features(
             dst.descriptions = tuple(final_descriptions)
 
 
+def find_knee_point(values):
+    """
+    Vectorized implementation of Maximum Curvature / Kneedle algorithm.
+    Finds the inflection point (knee/elbow) on the sorted distribution of 1D values.
+    """
+    import numpy as np
+    valid = values[np.isfinite(values) & (values > 0)]
+    if len(valid) < 10:
+        return float(np.percentile(valid, 10)) if len(valid) > 0 else 0.0
+    
+    clean_vals = np.sort(valid)
+    n_pts = len(clean_vals)
+    if n_pts > 10000:
+        indices = np.linspace(0, n_pts - 1, 5000).astype(int)
+        clean_vals = clean_vals[indices]
+        n_pts = len(clean_vals)
+        
+    x_norm = np.linspace(0, 1, n_pts)
+    y_min, y_max = float(clean_vals[0]), float(clean_vals[-1])
+    if y_max - y_min <= 1e-7:
+        return y_min
+    y_norm = (clean_vals - y_min) / (y_max - y_min)
+    
+    # Distance from curve to secant line between (0, 0) and (1, 1)
+    dist = np.abs(x_norm - y_norm)
+    knee_idx = np.argmax(dist)
+    return float(clean_vals[knee_idx])
+
+
+def topological_clean_mask(mask, min_size=50):
+    """
+    Cleans isolated tiny speckles in open ocean using Connected Component Analysis.
+    Preserves contiguous coastal shallow waters, islands, and coral reef systems.
+    """
+    import numpy as np
+    try:
+        from scipy import ndimage
+        labeled, num_features = ndimage.label(mask)
+        if num_features > 1:
+            sizes = ndimage.sum_labels(mask, labeled, range(1, num_features + 1))
+            keep_mask = sizes >= min_size
+            if not np.any(keep_mask) and len(sizes) > 0:
+                keep_mask[np.argmax(sizes)] = True
+            
+            cleaned = keep_mask[labeled - 1]
+            cleaned[labeled == 0] = False
+            return cleaned.astype(bool)
+    except Exception:
+        pass
+    return mask
+
+
 def apply_deepwater_mask(
     base_img_path, out_dir,
     b_idx, g_idx, n_idx,
     apply_dw, dw_method, dw_roi, nir_perc,
     median_size, fill_holes, extract_polygon,
-    context, feedback
+    context, feedback,
+    r_idx=None, land_water_mask_path=None
 ):
+    import os
+    import json
     import processing
     from qgis.core import QgsProcessingException, QgsProcessingUtils
     import numpy as np
     import rasterio
+    from rasterio import features
 
-    if apply_dw:
+    # Load base imagery arrays
+    with rasterio.open(base_img_path) as src:
+        b_arr = src.read(b_idx).astype(np.float32)
+        g_arr = src.read(g_idx).astype(np.float32)
+        n_arr = src.read(n_idx).astype(np.float32)
+        r_arr = src.read(r_idx).astype(np.float32) if (r_idx is not None and r_idx > 0 and r_idx <= src.count) else None
+        prof = src.profile
+
+    if not apply_dw:
+        not_deep_water = np.ones_like(b_arr, dtype=bool)
+    else:
         fallback_to_auto = False
-        if dw_method == 0:  # Manual
+        method_name = "0. Automated Knee-Point Extinction"
+        
+        # Optional water mask constraint
+        water_mask = None
+        if land_water_mask_path and os.path.exists(land_water_mask_path):
+            try:
+                with rasterio.open(land_water_mask_path) as msrc:
+                    water_mask = (msrc.read(1) == 1)
+            except Exception:
+                water_mask = None
+
+        valid_water = (b_arr > 0) & (g_arr > 0) & np.isfinite(b_arr) & np.isfinite(g_arr) & np.isfinite(n_arr)
+        if water_mask is not None and np.any(water_mask):
+            valid_water = valid_water & water_mask
+
+        # -------------------------------------------------------------
+        # METHOD 4: Manual Polygon ROI
+        # -------------------------------------------------------------
+        if dw_method == 4:
+            method_name = "4. Manual Polygon ROI"
             if not dw_roi:
-                feedback.pushWarning("⚠️ Deep Water Filter is ON (Manual mode), but no ROI provided. Falling back to Automatic NIR.")
+                feedback.pushWarning("⚠️ Deep Water Filter is in Manual ROI mode, but no ROI provided. Falling back to Automated Knee-Point.")
                 fallback_to_auto = True
             else:
                 from qgis.core import QgsRasterLayer
@@ -657,7 +751,6 @@ def apply_deepwater_mask(
                     dw_roi_final = dw_roi
                     
                 feedback.pushInfo("      Calculating Deep Water Stats (Manual ROI)...")
-                
                 stats_alg = processing.run("native:zonalstatisticsfb", {
                     'INPUT': dw_roi_final,
                     'INPUT_RASTER': base_img_path,
@@ -671,42 +764,36 @@ def apply_deepwater_mask(
                 b_mean = feat['b_mean']
                 b_std = feat['b_stdev']
                 
-                if b_mean is None or b_std is None or np.isnan(b_mean) or np.isnan(b_std):
-                    feedback.pushWarning("⚠️ Calculated Blue stats are NULL. Manual ROI might not overlap valid raster data. Falling back to Auto NIR.")
+                stats_alg_g = processing.run("native:zonalstatisticsfb", {
+                    'INPUT': dw_roi_final,
+                    'INPUT_RASTER': base_img_path,
+                    'RASTER_BAND': g_idx,
+                    'COLUMN_PREFIX': 'g_',
+                    'STATISTICS': [2, 4],
+                    'OUTPUT': 'TEMPORARY_OUTPUT'
+                }, context=context, feedback=feedback, is_child_algorithm=True)
+                layer_g = QgsProcessingUtils.mapLayerFromString(stats_alg_g['OUTPUT'], context)
+                feat_g = list(layer_g.getFeatures())[0]
+                g_mean = feat_g['g_mean']
+                g_std = feat_g['g_stdev']
+                
+                if (b_mean is None or b_std is None or np.isnan(b_mean) or np.isnan(b_std) or
+                    g_mean is None or g_std is None or np.isnan(g_mean) or np.isnan(g_std)):
+                    feedback.pushWarning("⚠️ Calculated ROI stats are NULL/NaN. Falling back to Automated Knee-Point.")
                     fallback_to_auto = True
                 else:
-                    b_thresh = b_mean + (2 * b_std)
-                    
-                    stats_alg_g = processing.run("native:zonalstatisticsfb", {
-                        'INPUT': dw_roi_final,
-                        'INPUT_RASTER': base_img_path,
-                        'RASTER_BAND': g_idx,
-                        'COLUMN_PREFIX': 'g_',
-                        'STATISTICS': [2, 4],
-                        'OUTPUT': 'TEMPORARY_OUTPUT'
-                    }, context=context, feedback=feedback, is_child_algorithm=True)
-                    layer_g = QgsProcessingUtils.mapLayerFromString(stats_alg_g['OUTPUT'], context)
-                    feat_g = list(layer_g.getFeatures())[0]
-                    g_mean = feat_g['g_mean']
-                    g_std = feat_g['g_stdev']
-                    
-                    if g_mean is None or g_std is None or np.isnan(g_mean) or np.isnan(g_std):
-                        feedback.pushWarning("⚠️ Calculated Green stats are NULL. Falling back to Auto NIR.")
-                        fallback_to_auto = True
-                    else:
-                        g_thresh = g_mean + (2 * g_std)
-                        feedback.pushInfo(f"      Blue Thresh: {b_thresh:.4f}, Green Thresh: {g_thresh:.4f}")
+                    b_thresh = float(b_mean + (2 * b_std))
+                    g_thresh = float(g_mean + (2 * g_std))
+                    not_deep_water = (b_arr > b_thresh) | (g_arr > g_thresh)
+                    feedback.pushInfo(f"      [Manual ROI] Blue Thresh: {b_thresh:.4f}, Green Thresh: {g_thresh:.4f}")
 
-                        stats_csv = os.path.join(out_dir, "04_DeepWater_Threshold_Stats.csv")
-                        with open(stats_csv, "w") as f:
-                            f.write("Band,Mean,SD,Threshold\n")
-                            f.write(f"Blue,{b_mean},{b_std},{b_thresh}\n")
-                            f.write(f"Green,{g_mean},{g_std},{g_thresh}\n")
-                        feedback.pushInfo(f"      Saved stats to: {stats_csv}")
-
-        if dw_method == 2:  # Shallow Water Bound (OSW Polygon)
+        # -------------------------------------------------------------
+        # METHOD 5: Shallow Water Bound (Custom OSW Polygon)
+        # -------------------------------------------------------------
+        if dw_method == 5:
+            method_name = "5. Shallow Water Bound (OSW Polygon)"
             if not dw_roi:
-                feedback.pushWarning("⚠️ OSW Polygon method selected, but no ROI provided. Falling back to Automatic NIR.")
+                feedback.pushWarning("⚠️ OSW Polygon method selected, but no ROI provided. Falling back to Automated Knee-Point.")
                 fallback_to_auto = True
             else:
                 from qgis.core import QgsRasterLayer
@@ -722,89 +809,179 @@ def apply_deepwater_mask(
                 else:
                     dw_roi_final = dw_roi
                 
-                feedback.pushInfo("      Rasterizing OSW Polygon to mask...")
-                import json
-                from rasterio import features
+                feedback.pushInfo("      Rasterizing Custom OSW Polygon to mask...")
                 geom_list = []
                 for feat in dw_roi_final.getFeatures():
                     geom = feat.geometry()
                     if geom and not geom.isNull():
                         geom_list.append(json.loads(geom.asJson()))
                 
-                with rasterio.open(base_img_path) as src:
-                    out_shape = (src.height, src.width)
-                    out_transform = src.transform
-                
+                out_shape = (prof['height'], prof['width'])
+                out_transform = prof['transform']
                 if geom_list:
                     not_deep_water = features.rasterize(geom_list, out_shape=out_shape, transform=out_transform, fill=0, default_value=1, dtype=np.uint8).astype(bool)
                 else:
-                    feedback.pushWarning("⚠️ OSW Polygon is empty. Falling back to Automatic NIR.")
+                    feedback.pushWarning("⚠️ OSW Polygon is empty. Falling back to Automated Knee-Point.")
                     fallback_to_auto = True
 
-        if dw_method == 1 or fallback_to_auto:  # Automatic
-            feedback.pushInfo(f"      Calculating Deep Water Stats (Auto NIR {nir_perc}%)...")
-            with rasterio.open(base_img_path) as src:
-                nir_arr = src.read(n_idx).astype(np.float32)
-                b_arr = src.read(b_idx).astype(np.float32)
-                g_arr = src.read(g_idx).astype(np.float32)
+        # -------------------------------------------------------------
+        # METHOD 1: Turbidity-Invariant Log-Ratio Extinction
+        # -------------------------------------------------------------
+        if dw_method == 1 and not fallback_to_auto:
+            method_name = "1. Turbidity-Invariant Log-Ratio Extinction"
+            feedback.pushInfo("      🌊 Computing Turbidity-Invariant Log-Ratio Extinction OSW...")
+            nir_valid = n_arr[valid_water]
+            if len(nir_valid) == 0:
+                raise QgsProcessingException("No valid water pixels found for OSW analysis.")
+            
+            nir_knee = find_knee_point(nir_valid)
+            dw_cand = (n_arr <= nir_knee) & valid_water
+            
+            if r_arr is not None:
+                ndti = (r_arr - g_arr) / (r_arr + g_arr + 1e-6)
+                ndti_deep = ndti[dw_cand & np.isfinite(ndti)]
+                ndti_p75 = np.percentile(ndti_deep, 75) if len(ndti_deep) > 0 else 0.0
+                dw_mask = dw_cand & (ndti <= ndti_p75)
+            else:
+                dw_mask = dw_cand
                 
-                valid = (b_arr > 0) & (g_arr > 0) & np.isfinite(b_arr) & np.isfinite(g_arr) & np.isfinite(nir_arr)
-                nir_valid = nir_arr[valid]
-                if len(nir_valid) == 0:
-                    raise QgsProcessingException("No valid pixels found to calculate NIR percentile.")
-                nir_thresh = np.percentile(nir_valid, nir_perc)
+            b_deep = b_arr[dw_mask]
+            g_deep = g_arr[dw_mask]
+            if len(b_deep) < 10:
+                b_deep = b_arr[dw_cand]
+                g_deep = g_arr[dw_cand]
                 
-                dw_mask = (nir_arr <= nir_thresh) & valid
-                b_deep = b_arr[dw_mask]
-                g_deep = g_arr[dw_mask]
-                
-                if len(b_deep) == 0:
-                    raise QgsProcessingException("No deep water pixels identified. Adjust NIR percentile.")
-                    
-                b_thresh = np.mean(b_deep) + (2 * np.std(b_deep))
-                g_thresh = np.mean(g_deep) + (2 * np.std(g_deep))
-                feedback.pushInfo(f"      NIR Thresh: {nir_thresh:.4f} | Blue Thresh: {b_thresh:.4f}, Green Thresh: {g_thresh:.4f}")
-
-                stats_csv = os.path.join(out_dir, "04_DeepWater_Threshold_Stats.csv")
-                with open(stats_csv, "w") as f:
-                    f.write("Band,Mean,SD,Threshold\n")
-                    f.write(f"Blue,{np.mean(b_deep)},{np.std(b_deep)},{b_thresh}\n")
-                    f.write(f"Green,{np.mean(g_deep)},{np.std(g_deep)},{g_thresh}\n")
-                feedback.pushInfo(f"      Saved stats to: {stats_csv}")
-
-    with rasterio.open(base_img_path) as src:
-        b_arr = src.read(b_idx).astype(np.float32)
-        g_arr = src.read(g_idx).astype(np.float32)
-        prof = src.profile
-        
-    if apply_dw:
-        if dw_method == 0 or dw_method == 1 or fallback_to_auto:
+            b_mean, b_std = float(np.mean(b_deep)), float(np.std(b_deep))
+            g_mean, g_std = float(np.mean(g_deep)), float(np.std(g_deep))
+            b_thresh = b_mean + (2.0 * b_std)
+            g_thresh = g_mean + (2.0 * g_std)
+            
             not_deep_water = (b_arr > b_thresh) | (g_arr > g_thresh)
-        # if dw_method == 2, not_deep_water is already computed
-    else:
-        not_deep_water = np.ones_like(b_arr, dtype=bool)
-        
+            feedback.pushInfo(f"      [Turbidity-Invariant] NIR Knee: {nir_knee:.4f} | Blue Thresh: {b_thresh:.4f}, Green Thresh: {g_thresh:.4f}")
+
+        # -------------------------------------------------------------
+        # METHOD 2: Multi-Otsu / GMM Spectral Clustering
+        # -------------------------------------------------------------
+        if dw_method == 2 and not fallback_to_auto:
+            method_name = "2. Multi-Otsu / GMM Spectral Clustering"
+            feedback.pushInfo("      🤖 Computing Multi-Otsu / GMM Spectral Clustering OSW...")
+            try:
+                from sklearn.cluster import KMeans
+                
+                coords = np.where(valid_water)
+                b_samp = b_arr[coords]
+                g_samp = g_arr[coords]
+                n_samp = n_arr[coords]
+                
+                X = np.column_stack((b_samp, g_samp, n_samp))
+                
+                km = KMeans(n_clusters=3, n_init=3, random_state=42)
+                sub_idx = np.random.choice(len(X), size=min(15000, len(X)), replace=False) if len(X) > 15000 else np.arange(len(X))
+                km.fit(X[sub_idx])
+                
+                labels = km.predict(X)
+                centers_brightness = [km.cluster_centers_[i][0] + km.cluster_centers_[i][1] for i in range(3)]
+                deep_cluster_id = int(np.argmin(centers_brightness))
+                
+                not_deep_water = np.zeros_like(b_arr, dtype=bool)
+                is_shallow = (labels != deep_cluster_id)
+                not_deep_water[coords[0][is_shallow], coords[1][is_shallow]] = True
+                
+                b_deep = b_samp[labels == deep_cluster_id]
+                g_deep = g_samp[labels == deep_cluster_id]
+                b_mean, b_std = float(np.mean(b_deep)), float(np.std(b_deep))
+                g_mean, g_std = float(np.mean(g_deep)), float(np.std(g_deep))
+                b_thresh, g_thresh = b_mean + 2*b_std, g_mean + 2*g_std
+                feedback.pushInfo(f"      [GMM/K-Means] Deep cluster id: {deep_cluster_id} (Brightness: {min(centers_brightness):.4f})")
+            except Exception as err:
+                feedback.pushWarning(f"⚠️ Clustering failed ({str(err)}). Falling back to Automated Knee-Point.")
+                fallback_to_auto = True
+
+        # -------------------------------------------------------------
+        # METHOD 3: Automatic (NIR Percentile Fallback)
+        # -------------------------------------------------------------
+        if dw_method == 3:
+            method_name = "3. Automatic (NIR Percentile)"
+            feedback.pushInfo(f"      Calculating Deep Water Stats (Auto NIR {nir_perc}%)...")
+            nir_valid = n_arr[valid_water]
+            if len(nir_valid) == 0:
+                raise QgsProcessingException("No valid pixels found to calculate NIR percentile.")
+            nir_thresh = float(np.percentile(nir_valid, nir_perc))
+            
+            dw_mask = (n_arr <= nir_thresh) & valid_water
+            b_deep = b_arr[dw_mask]
+            g_deep = g_arr[dw_mask]
+            if len(b_deep) == 0:
+                raise QgsProcessingException("No deep water pixels identified. Adjust NIR percentile.")
+                
+            b_mean, b_std = float(np.mean(b_deep)), float(np.std(b_deep))
+            g_mean, g_std = float(np.mean(g_deep)), float(np.std(g_deep))
+            b_thresh = b_mean + (2 * b_std)
+            g_thresh = g_mean + (2 * g_std)
+            not_deep_water = (b_arr > b_thresh) | (g_arr > g_thresh)
+            feedback.pushInfo(f"      [NIR Percentile] NIR Thresh: {nir_thresh:.4f} | Blue Thresh: {b_thresh:.4f}, Green Thresh: {g_thresh:.4f}")
+
+        # -------------------------------------------------------------
+        # METHOD 0: Automated Knee-Point Extinction [DEFAULT / RECOMMENDED]
+        # -------------------------------------------------------------
+        if dw_method == 0 or fallback_to_auto:
+            method_name = "0. Automated Knee-Point Extinction"
+            feedback.pushInfo("      📈 Calculating Deep Water Cutoff (Automated Knee-Point Extinction)...")
+            nir_valid = n_arr[valid_water]
+            if len(nir_valid) == 0:
+                raise QgsProcessingException("No valid water pixels found to calculate Knee-Point.")
+                
+            nir_thresh = find_knee_point(nir_valid)
+            dw_mask = (n_arr <= nir_thresh) & valid_water
+            b_deep = b_arr[dw_mask]
+            g_deep = g_arr[dw_mask]
+            
+            if len(b_deep) < 10:
+                b_deep = b_arr[valid_water]
+                g_deep = g_arr[valid_water]
+                
+            b_mean, b_std = float(np.mean(b_deep)), float(np.std(b_deep))
+            g_mean, g_std = float(np.mean(g_deep)), float(np.std(g_deep))
+            b_thresh = b_mean + (2.0 * b_std)
+            g_thresh = g_mean + (2.0 * g_std)
+            not_deep_water = (b_arr > b_thresh) | (g_arr > g_thresh)
+            feedback.pushInfo(f"      [Knee Point] NIR Cutoff: {nir_thresh:.4f} | Blue Thresh: {b_thresh:.4f}, Green Thresh: {g_thresh:.4f}")
+
+        # Save diagnostic CSV
+        stats_csv = os.path.join(out_dir, "04_DeepWater_Threshold_Stats.csv")
+        with open(stats_csv, "w") as f:
+            f.write("Parameter,Value\n")
+            f.write(f"OSW_Method,{method_name}\n")
+            if 'b_mean' in locals():
+                f.write(f"Blue_Mean,{b_mean:.5f}\n")
+                f.write(f"Blue_SD,{b_std:.5f}\n")
+                f.write(f"Blue_Threshold,{b_thresh:.5f}\n")
+                f.write(f"Green_Mean,{g_mean:.5f}\n")
+                f.write(f"Green_SD,{g_std:.5f}\n")
+                f.write(f"Green_Threshold,{g_thresh:.5f}\n")
+            f.write(f"Shallow_Water_Pixels,{int(np.sum(not_deep_water))}\n")
+            f.write(f"Deep_Water_Pixels,{int(np.sum(~not_deep_water & valid_water))}\n")
+        feedback.pushInfo(f"      Saved OSW stats to: {stats_csv}")
+
     osw_mask = not_deep_water
-    
     prof.update(count=1, dtype='uint8', nodata=0)
     dw_mask_path = os.path.join(out_dir, "05_ShallowWater_Pixel_Mask.tif")
-    
     with rasterio.open(dw_mask_path, "w", **prof) as dst:
         dst.write(not_deep_water.astype('uint8'), 1)
         
     try:
         from scipy import ndimage
-        if median_size > 0 and dw_method != 2:
+        if median_size > 0 and dw_method != 5:
             osw_mask = ndimage.median_filter(osw_mask.astype(np.uint8), size=median_size) > 0
-        if fill_holes and dw_method != 2:
+        if fill_holes and dw_method != 5:
             osw_mask = ndimage.binary_fill_holes(osw_mask)
+        if dw_method != 5:
+            osw_mask = topological_clean_mask(osw_mask, min_size=50)
     except ImportError:
         pass
         
-    if dw_method != 2:
-        # =========================================================================
-        # METHOD A: Elbow Point Detection (Dynamic / No Hardcoded Threshold)
-        # =========================================================================
+    if dw_method != 5:
+        # Dynamic Elbow / Sieve Component Filtering
         try:
             from rasterio.features import sieve
             from scipy import ndimage
@@ -814,14 +991,12 @@ def apply_deepwater_mask(
                 component_sizes = ndimage.sum_labels(osw_mask, labeled_array, range(1, num_features + 1))
                 component_sizes = np.sort(component_sizes)[::-1]
 
-                # Log-transformed scale for Elbow (Max Distance from Secant Line)
                 log_sizes = np.log10(component_sizes + 1e-5)
                 n_pts = len(log_sizes)
                 x_norm = np.linspace(0, 1, n_pts)
                 y_range = log_sizes[0] - log_sizes[-1]
                 if y_range > 0:
                     y_norm = (log_sizes - log_sizes[-1]) / y_range
-
                     p1 = np.array([x_norm[0], y_norm[0]])
                     p2 = np.array([x_norm[-1], y_norm[-1]])
                     vec_line = p2 - p1
@@ -838,12 +1013,6 @@ def apply_deepwater_mask(
                             osw_mask = sieve(osw_mask.astype(np.uint8), size=cutoff_size, connectivity=8).astype(bool)
         except Exception as err:
             feedback.pushWarning(f"⚠️ Elbow filter fallback warning: {str(err)}")
-            # =========================================================================
-            # METHOD B (ORIGINAL BASELINE - PRE-MODIFICATION):
-            # Median Filter + Binary Fill Holes (without any Sieve / Area Filtering)
-            # If you want to revert to original baseline, comment out Method A above.
-            # (The baseline uses scipy.ndimage.median_filter & binary_fill_holes above).
-            # =========================================================================
             pass
         
     osw_mask_path = os.path.join(out_dir, "06_Final_OSW_Mask.tif")
@@ -1056,7 +1225,9 @@ def run_phase01_preprocessing(algorithm, parameters, context, feedback):
             fill_holes=fill_holes,
             extract_polygon=True, # Always extract polygon for Phase 03/4 clipping
             context=context,
-            feedback=feedback
+            feedback=feedback,
+            r_idx=r_idx,
+            land_water_mask_path=final_mask_path
         )
         
         osw_mask_path = os.path.join(out_dir, "06_Final_OSW_Mask.tif")

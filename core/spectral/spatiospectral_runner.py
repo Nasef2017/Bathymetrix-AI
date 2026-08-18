@@ -5,7 +5,7 @@ from qgis import processing
 
 from Bathymetrix_AI.infrastructure.logging import append_log
 from Bathymetrix_AI.core.spectral.aggregation import spatiospectral_aggregate, spatiospectral_mask_intersection
-from Bathymetrix_AI.infrastructure.raster_io import clean_depth_map, remove_positive_pixels
+from Bathymetrix_AI.infrastructure.raster_io import clean_depth_map, remove_positive_pixels, slope_filter_depth
 
 class SpatioSpectralSDBRunner:
     def __init__(self, master_output_folder):
@@ -163,14 +163,28 @@ class SpatioSpectralSDBRunner:
                 
                 # We use clean_depth_map which also masks using the feature stack extent
                 clean_depth_map(best_depth_path, p1_feat, max_depth, p3_clamped, context, feedback)
+                current_p3 = p3_clamped
                 
-                remove_pos = masterflow_params.get("REMOVE_POSITIVES", True)
+                apply_slope = algorithm.parameterAsBool(masterflow_params, "ENABLE_SLOPE_FILTER", context) if (algorithm and hasattr(algorithm, "parameterAsBool")) else masterflow_params.get("ENABLE_SLOPE_FILTER", True)
+                slope_threshold_val = algorithm.parameterAsDouble(masterflow_params, "SLOPE_THRESHOLD", context) if (algorithm and hasattr(algorithm, "parameterAsDouble")) else masterflow_params.get("SLOPE_THRESHOLD", 35.0)
+                
+                if apply_slope:
+                    p3_slope = os.path.join(p3_dir, "3_Initial_Global_Depth_SlopeFiltered.tif")
+                    current_p3 = slope_filter_depth(
+                        current_p3,
+                        slope_threshold=slope_threshold_val,
+                        out_path=p3_slope,
+                        context=context,
+                        feedback=feedback,
+                    )
+                
+                remove_pos = algorithm.parameterAsBool(masterflow_params, "REMOVE_POSITIVES", context) if (algorithm and hasattr(algorithm, "parameterAsBool")) else masterflow_params.get("REMOVE_POSITIVES", True)
                 if remove_pos:
                     p3_no_pos = os.path.join(p3_dir, "3_Initial_Global_Depth_NoPositives.tif")
-                    remove_positive_pixels(p3_clamped, p3_no_pos, feedback)
+                    remove_positive_pixels(current_p3, p3_no_pos, feedback)
                     final_p3_path = p3_no_pos
                 else:
-                    final_p3_path = p3_clamped
+                    final_p3_path = current_p3
                     
                 p3_depth_maps.append(final_p3_path)
                 p3_weights.append(weight)
@@ -284,14 +298,28 @@ class SpatioSpectralSDBRunner:
                 
                 # Clean depth map (masking to the aggregated intersection mask)
                 clean_depth_map(raw_p4_depth, aggregated_depth_path, max_depth, p4_clamped, context, feedback)
+                current_p4 = p4_clamped
                 
-                remove_pos = masterflow_params.get("REMOVE_POSITIVES", True)
+                apply_slope = algorithm.parameterAsBool(masterflow_params, "ENABLE_SLOPE_FILTER", context) if (algorithm and hasattr(algorithm, "parameterAsBool")) else masterflow_params.get("ENABLE_SLOPE_FILTER", True)
+                slope_threshold_val = algorithm.parameterAsDouble(masterflow_params, "SLOPE_THRESHOLD", context) if (algorithm and hasattr(algorithm, "parameterAsDouble")) else masterflow_params.get("SLOPE_THRESHOLD", 35.0)
+                
+                if apply_slope:
+                    p4_slope = os.path.join(p4_dir, "4_Phase04_Depth_SlopeFiltered.tif")
+                    current_p4 = slope_filter_depth(
+                        current_p4,
+                        slope_threshold=slope_threshold_val,
+                        out_path=p4_slope,
+                        context=context,
+                        feedback=feedback,
+                    )
+                
+                remove_pos = algorithm.parameterAsBool(masterflow_params, "REMOVE_POSITIVES", context) if (algorithm and hasattr(algorithm, "parameterAsBool")) else masterflow_params.get("REMOVE_POSITIVES", True)
                 if remove_pos:
                     p4_no_pos = os.path.join(p4_dir, "4_Phase04_Depth_NoPositives.tif")
-                    remove_positive_pixels(p4_clamped, p4_no_pos, feedback)
+                    remove_positive_pixels(current_p4, p4_no_pos, feedback)
                     p4_final_depth = p4_no_pos
                 else:
-                    p4_final_depth = p4_clamped
+                    p4_final_depth = current_p4
             else:
                 p4_final_depth = raw_p4_depth
         else:

@@ -180,7 +180,7 @@ class SpatiotemporalSDBRunner:
                     append_log("      → Enforcing Master OSW Polygon", log_path, feedback)
                     if master_osw_polygon:
                         run_params["APPLY_DEEPWATER"] = True
-                        run_params["DEEPWATER_METHOD"] = 2  # Shallow Water Bound (OSW Polygon)
+                        run_params["DEEPWATER_METHOD"] = 5  # Shallow Water Bound (OSW Polygon)
                         run_params["DEEPWATER_ROI"] = master_osw_polygon
                     p1 = processing.run("sdb_tools:sdb_phase1_preprocessing", run_params, is_child_algorithm=True, context=context, feedback=feedback)
                 

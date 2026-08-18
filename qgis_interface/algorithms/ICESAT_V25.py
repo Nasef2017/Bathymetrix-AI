@@ -538,6 +538,7 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
         if not sink:
             raise QgsProcessingException("Failed to create output sink for ICESat-2 layer.")
         count = 0
+        total = len(gdf) if len(gdf) > 0 else 1
         features = []
 
         for index, row in gdf.iterrows():
