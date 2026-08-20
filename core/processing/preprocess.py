@@ -91,24 +91,26 @@ try:
 except ImportError:
     scipy_is_available = False
 
-MASK_METHODS = ["Otsu (Automatic NDWI)", "Manual NDWI Threshold", "3 Indices Equation (NDWI, MNDWI, NWI)", "Smart Hybrid (Dynamic Auto)"]
+
+MASK_METHODS = [
+    "Otsu (Automatic NDWI)",
+    "Manual NDWI Threshold",
+    "3 Indices Equation (NDWI, MNDWI, NWI)",
+    "Smart Hybrid (Dynamic Auto)",
+]
 
 OSW_METHODS = [
-    "Automated Knee-Point Extinction [Recommended]",
+    "Automated Knee-Point Extinction",
     "Turbidity-Invariant Log-Ratio Extinction",
-    "Multi-Otsu / GMM Spectral Clustering",
+    "Multi-Otsu / GMM Spectral Clustering [Recommended]",
     "Automatic (NIR Percentile Fallback)",
     "Manual Polygon ROI",
     "Shallow Water Bound (OSW Polygon)",
 ]
 
 FEATURE_OPTIONS = [
-    "[All Raw] All Bands from Input Image",
-    "[Log] Log(Coastal)",
-    "[Log] Log(Blue)",
-    "[Log] Log(Green)",
-    "[Log] Log(Red)",
-    "[Log] Log(NIR)",
+    "[All Raw Bands] All Bands from Input Image (Raw Reflectance / DN)",
+    "[All Log Bands] All Bands from Input Image (Log-Transformed)",
     "[Ratio] Log(Blue) / Log(Green)",
     "[Ratio] Log(Blue) / Log(Red)",
     "[Ratio] Log(Coastal) / Log(Green)",
@@ -171,6 +173,15 @@ def run_watermasking_plugin(in_f, out_f, b_idx, g_idx, r_idx, n_idx, s_idx, k_si
         if nodata == 0:
             # For nodata=0, sometimes just b,g,r being 0 is enough to confidently say it's off-image
             invalid_mask = (b == 0) & (g == 0) & (r == 0)
+        invalid_mask |= (
+            np.isnan(b)
+            | np.isnan(g)
+            | np.isnan(r)
+            | np.isnan(n)
+            | np.isnan(s)
+            | (b <= -9999)
+            | (g <= -9999)
+        )
         valid_mask = ~invalid_mask
 
         # Clip values to 1e-6 to prevent division by zero AND prevent sign-flip bugs from negative reflectances
@@ -506,11 +517,11 @@ def generate_features(
             mask_valid = mask_valid & water_mask_array
 
         SCALE = 1000.0
-        lc = np.log(np.clip(c_val * SCALE, 1e-6, None))
-        lb = np.log(np.clip(b_val * SCALE, 1e-6, None))
-        lg = np.log(np.clip(g_val * SCALE, 1e-6, None))
-        lr = np.log(np.clip(r_val * SCALE, 1e-6, None))
-        ln = np.log(np.clip(n_val * SCALE, 1e-6, None))
+        lc = np.log(np.clip(c_val * SCALE, 1e-4, None))
+        lb = np.log(np.clip(b_val * SCALE, 1e-4, None))
+        lg = np.log(np.clip(g_val * SCALE, 1e-4, None))
+        lr = np.log(np.clip(r_val * SCALE, 1e-4, None))
+        ln = np.log(np.clip(n_val * SCALE, 1e-4, None))
 
         with np.errstate(divide="ignore", invalid="ignore"):
             rbg = lb / lg
@@ -520,12 +531,16 @@ def generate_features(
             rrn = lr / ln
             ndwi = (g_val - n_val) / (g_val + n_val)
 
+        # Custom Band Math calculation (Index 8 in FEATURE_OPTIONS)
         custom_band = np.zeros_like(b_val)
-        if do_calc and formula and 12 in selected_indices:
+        if do_calc and formula and 8 in selected_indices:
             try:
                 band_dict = {}
                 for i in range(1, nbands + 1):
-                    band_dict[f"B{i}"] = s.read(i).astype("float32")
+                    raw_b_i = s.read(i).astype("float32")
+                    band_dict[f"B{i}"] = raw_b_i
+                    band_dict[f"Raw_B{i}"] = raw_b_i
+                    band_dict[f"Log_B{i}"] = np.log(np.clip(raw_b_i * SCALE, 1e-4, None))
                 band_dict["np"] = np
                 band_dict["log"] = np.log
                 fb.pushInfo(f"      Calculating Custom Formula: {formula}")
@@ -540,61 +555,82 @@ def generate_features(
                 fb.pushWarning(f"Calc Error: {e}")
 
         calculated_feats_map = {
-            1: lc,
-            2: lb,
-            3: lg,
-            4: lr,
-            5: ln,
-            6: rbg,
-            7: rbr,
-            8: rcg,
-            9: rgn,
-            10: rrn,
-            11: ndwi,
-            12: custom_band,
+            2: rbg,
+            3: rbr,
+            4: rcg,
+            5: rgn,
+            6: rrn,
+            7: ndwi,
+            8: custom_band,
         }
 
         final_stack = []
         final_descriptions = []
 
+        # Map index to name based on user inputs
+        band_names = {}
+        if c > 0: band_names[c] = "Coastal"
+        if b > 0: band_names[b] = "Blue"
+        if g > 0: band_names[g] = "Green"
+        if r > 0: band_names[r] = "Red"
+        if n > 0: band_names[n] = "NIR"
+
+        # 0: [All Raw Bands] All Bands from Input Image (Raw Reflectance / DN)
         if 0 in selected_indices:
-            fb.pushInfo(f"      Adding {nbands} raw bands to stack...")
-            
-            # Map index to name based on user inputs
-            band_names = {}
-            if c > 0: band_names[c] = "Coastal"
-            if b > 0: band_names[b] = "Blue"
-            if g > 0: band_names[g] = "Green"
-            if r > 0: band_names[r] = "Red"
-            if n > 0: band_names[n] = "NIR"
-            
+            fb.pushInfo(f"      Adding {nbands} Raw bands to stack...")
             for i in range(1, nbands + 1):
                 raw_band_data = s.read(i).astype("float32")
-                
-                # Fix NaN/Inf or original nodata in valid pixels so ML phase doesn't drop them
                 invalid_data = np.isnan(raw_band_data) | np.isinf(raw_band_data) | (raw_band_data <= -9999.0)
                 raw_band_data[invalid_data & mask_valid] = 0.0
-                
                 raw_band_data[~mask_valid] = -9999.0
                 final_stack.append(raw_band_data)
-                
-                # Assign a sensible name
+
                 if i in band_names:
                     band_name_str = f"Raw_{band_names[i]}"
                 else:
-                    existing_desc = s.descriptions[i-1]
+                    existing_desc = s.descriptions[i-1] if (s.descriptions and s.descriptions[i-1]) else None
                     if existing_desc:
-                        band_name_str = existing_desc
+                        band_name_str = f"Raw_{existing_desc}" if not existing_desc.startswith("Raw_") else existing_desc
                     else:
-                        band_name_str = f"B{i}"
+                        band_name_str = f"Raw_B{i}"
                 final_descriptions.append(band_name_str)
-                
+
                 p_ind = s.profile
                 p_ind.update(count=1, dtype="float32", nodata=-9999.0)
                 with rasterio.open(
                     os.path.join(review_dir, f"{band_name_str}.tif"), "w", **p_ind
                 ) as dst:
                     dst.write(raw_band_data, 1)
+
+        # 1: [All Log Bands] All Bands from Input Image (Log-Transformed)
+        if 1 in selected_indices:
+            fb.pushInfo(f"      Adding {nbands} Log-Transformed bands to stack...")
+            for i in range(1, nbands + 1):
+                raw_band_data = s.read(i).astype("float32")
+                log_band_data = np.log(np.clip(raw_band_data * SCALE, 1e-4, None))
+
+                # Fix NaN/Inf or original nodata in valid pixels so ML phase doesn't drop them
+                invalid_data = np.isnan(log_band_data) | np.isinf(log_band_data) | (raw_band_data <= -9999.0)
+                log_band_data[invalid_data & mask_valid] = 0.0
+                log_band_data[~mask_valid] = -9999.0
+                final_stack.append(log_band_data)
+
+                if i in band_names:
+                    band_name_str = f"Log_{band_names[i]}"
+                else:
+                    existing_desc = s.descriptions[i-1] if (s.descriptions and s.descriptions[i-1]) else None
+                    if existing_desc:
+                        band_name_str = f"Log_{existing_desc}" if not existing_desc.startswith("Log_") else existing_desc
+                    else:
+                        band_name_str = f"Log_B{i}"
+                final_descriptions.append(band_name_str)
+
+                p_ind = s.profile
+                p_ind.update(count=1, dtype="float32", nodata=-9999.0)
+                with rasterio.open(
+                    os.path.join(review_dir, f"{band_name_str}.tif"), "w", **p_ind
+                ) as dst:
+                    dst.write(log_band_data, 1)
 
         for idx in selected_indices:
             if idx in calculated_feats_map:
@@ -605,13 +641,15 @@ def generate_features(
                 final_stack.append(data)
                 name = (
                     FEATURE_OPTIONS[idx]
-                    .replace("[Log] ", "")
                     .replace("[Ratio] ", "Ratio_")
+                    .replace("[Index] ", "")
                     .replace("[Custom] ", "")
                     .replace(" ", "")
                     .replace("/", "_")
                     .replace("(", "")
                     .replace(")", "")
+                    .replace("-", "_")
+                    .replace("+", "_")
                 )
                 final_descriptions.append(name)
                 p_ind = s.profile
@@ -1120,13 +1158,14 @@ def run_phase01_preprocessing(algorithm, parameters, context, feedback):
         k_size = algorithm.parameterAsInt(
             parameters, algorithm.MASK_KERNEL_SIZE, context
         )
-        if MASK_METHODS[masking_choice] == "Otsu (Automatic NDWI)":
+        method_name = MASK_METHODS[masking_choice]
+        if method_name == "Otsu (Automatic NDWI)":
             adj = algorithm.parameterAsDouble(
                 parameters, algorithm.OTSU_ADJUSTMENT, context
             )
             feedback.pushInfo("      → [1/3] Generating Water Mask (Otsu NDWI)...")
             run_otsu_robust(curr_img, p_mask, g_idx, n_idx, adj, k_size, feedback)
-        elif MASK_METHODS[masking_choice] == "Manual NDWI Threshold":
+        elif method_name == "Manual NDWI Threshold":
             manual_val = algorithm.parameterAsDouble(
                 parameters, algorithm.MANUAL_THRESHOLD, context
             )
@@ -1134,12 +1173,15 @@ def run_phase01_preprocessing(algorithm, parameters, context, feedback):
             run_manual_mask(
                 curr_img, p_mask, g_idx, n_idx, manual_val, k_size, feedback
             )
-        elif MASK_METHODS[masking_choice] == "Smart Hybrid (Dynamic Auto)":
+        elif method_name == "Smart Hybrid (Dynamic Auto)":
             feedback.pushInfo("      → [1/3] Generating Water Mask (Smart Hybrid Auto)...")
             run_smart_hybrid_masking(curr_img, p_mask, b_idx, g_idx, r_idx, n_idx, s_idx, k_size, feedback)
-        else:
+        elif method_name == "3 Indices Equation (NDWI, MNDWI, NWI)":
             feedback.pushInfo("      → [1/3] Generating Water Mask (3 Indices)...")
             run_watermasking_plugin(curr_img, p_mask, b_idx, g_idx, r_idx, n_idx, s_idx, k_size, feedback)
+        else:
+            feedback.pushInfo(f"      → [1/3] Generating Water Mask ({method_name})...")
+            run_smart_hybrid_masking(curr_img, p_mask, b_idx, g_idx, r_idx, n_idx, s_idx, k_size, feedback)
         final_mask_path = p_mask
 
     else:

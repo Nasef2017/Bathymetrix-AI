@@ -3,7 +3,12 @@
 NODATA_VALUE = -9999.0
 
 # Masking Methods
-MASK_METHODS_NAMES = ["Otsu (Automatic NDWI)", "Manual NDWI Threshold", "3 Indices Equation (NDWI, MNDWI, NWI)", "Smart Hybrid (Dynamic Auto)"]
+MASK_METHODS_NAMES = [
+    "Otsu (Automatic NDWI)",
+    "Manual NDWI Threshold",
+    "3 Indices Equation (NDWI, MNDWI, NWI)",
+    "Smart Hybrid (Dynamic Auto)",
+]
 
 # Filtering Modes
 FILTER_MODES_NAMES = ["Linear RANSAC", "LS Variance Fit", "Huber Variance Fit"]
@@ -42,12 +47,8 @@ COLLISION_LIST_NAMES = [
 
 # Feature Options
 FEATURE_OPTIONS_NAMES = [
-    "[All Raw] All Bands from Input Image",
-    "[Log] Log(Coastal)",
-    "[Log] Log(Blue)",
-    "[Log] Log(Green)",
-    "[Log] Log(Red)",
-    "[Log] Log(NIR)",
+    "[All Raw Bands] All Bands from Input Image (Raw Reflectance / DN)",
+    "[All Log Bands] All Bands from Input Image (Log-Transformed)",
     "[Ratio] Log(Blue) / Log(Green)",
     "[Ratio] Log(Blue) / Log(Red)",
     "[Ratio] Log(Coastal) / Log(Green)",

@@ -258,7 +258,7 @@ class SDBSpatiotemporalFlow(SDBMasterOrchestrator):
             )
         )
 
-        default_feats = list(range(len(self.FEATURE_OPTIONS_NAMES)))
+        default_feats = list(range(1, len(self.FEATURE_OPTIONS_NAMES)))
         self.addParameter(
             QgsProcessingParameterEnum(
                 self.FEATURE_SELECTION,
@@ -299,7 +299,7 @@ class SDBSpatiotemporalFlow(SDBMasterOrchestrator):
                 self.DEEPWATER_METHOD,
                 "🌊 [1.5] Deep Water Definition Method",
                 options=self.OSW_METHODS_NAMES,
-                defaultValue=0,
+                defaultValue=2,
             )
         )
         self.addParameter(

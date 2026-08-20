@@ -2,7 +2,7 @@
 name=Bathymetrix-AI
 qgisMinimumVersion=3.22
 qgisMaximumVersion=4.99
-version=7.1
+version=7.2
 author=Mohamed Aly Nasef
 email=Eng.m.nasef2017@gmail.com
 description=A professional QGIS research toolkit for Satellite-Derived Bathymetry (SDB), integrating multispectral imagery with ICESat-2 LiDAR via Auto-ML, SpatioSpectral aggregation, SpatioTemporal modeling, Adaptive Refinement, and Coastal Dynamics.
@@ -98,4 +98,4 @@ tracker=https://github.com/Nasef2017/Bathymetrix-AI/issues
 icon=icon.png
 tags=sdb,bathymetry,machine learning,icesat-2,ransac,spatial correction,remote sensing,hydrography,satellite imagery,python,coastal dynamics,volumetric change,quantile regression,spatiotemporal,spatiospectral,iho-s44
 category=Raster
-changelog=v7.1: Introduced Advanced Multi-Method Optically Shallow Water (OSW) Filtering Engine featuring: (1) Automated Knee-Point Extinction [Recommended] based on maximum curvature on water absorption curves, (2) Turbidity-Invariant Log-Ratio Extinction protecting coastal waters from sediment plumes, (3) Multi-Otsu / GMM Spectral Clustering in 3D color space for complex coral reefs and heterogeneous benthos, (4) Connected-Component Topological Island & Speckle Cleaning to eliminate open ocean noise, and (5) Unified OSW parameter synchronization across all Masterflows and Preprocessing tools.
+changelog=v7.2: (1) Physics-Driven Feature Engineering: Introduced separate [All Raw Bands] vs [All Log Bands] spectral options; log-transformation linearizes optical exponential attenuation according to Beer-Lambert law, dramatically reducing depth systematic bias error (near-zero bias) and preventing volumetric distortion in sediment calculations. Raw bands excluded from default selection to protect against non-linear bias while remaining optional for ultra-shallow water micro-topography. (2) Multi-Otsu / GMM 3D Spectral Clustering set as the Recommended default OSW method. (3) Coastal Dynamics Target ROI Processing Modes: Added dropdown parameter supporting 'Clip Full Analysis to ROI (Crop Rasters & Vectors)' vs 'Calculate Sub-Region Quantities Only (Preserve Full Rasters)' for localized dredging/QC studies. (4) Thread-Safe QGIS Symbology: Fixed background worker thread GUI crashes and preserved vibrant thematic color styling via QgsProcessingLayerPostProcessorInterface.

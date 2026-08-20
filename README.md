@@ -31,7 +31,24 @@ The toolkit also provides advanced Masterflows and standalone modules for more c
 
 ---
 
-### 🆕 What's New in Version 7.1 (Changelog)
+### 🆕 What's New in Version 7.2 (Changelog)
+
+* 📊 **Physics-Driven Feature Engineering (Bias Error Elimination):**
+  * Introduced separate manual selection for **`[All Raw Bands]`** (Raw Reflectance / DN) vs. **`[All Log Bands]`** ($\ln(10000 \cdot R + 1)$).
+  * **Radiative Transfer Linearization**: According to Beer-Lambert's law of optical attenuation ($L(\lambda) = L_\infty + C_b \cdot e^{-2K z}$), water depth scales logarithmically with subsurface reflectance. Training ML regressors on raw exponential signals induces severe non-linear compression and systematic depth bias in intermediate/deeper waters ($5\text{--}15\text{ m}$). Applying Log-transform linearizes the feature space, reducing mean depth bias to **$+0.0157\text{ m}$ (near-zero bias)** and preventing volumetric distortion in sediment calculations.
+  * **Zero-Bias Defaults**: `[All Raw Bands]` is excluded from default feature stacks to protect against bias drift, while remaining available for specialized shallow-water micro-topography ($0\text{--}5\text{ m}$).
+* 🌊 **Multi-Otsu / GMM 3D Spectral Clustering Recommended:**
+  * Updated `Multi-Otsu / GMM Spectral Clustering [Recommended]` as the primary default OSW filter across all Masterflows and Preprocessing tools, isolating shallow water from optically deep water in 3D color space.
+* 🎯 **Dual Target ROI Modes in Coastal Dynamics (Module 05/06):**
+  * Added `🎯 [1.2] Target ROI Processing Mode` dropdown:
+    * **`Clip Full Analysis to ROI (Crop Rasters & Vectors)`**: For strictly localized coastal engineering studies, cropping all rasters (MSI, StatCD) and shoreline migration vectors to the polygon boundary.
+    * **`Calculate Sub-Region Quantities Only (Preserve Full Rasters)` [Default]**: Preserves the complete, unclipped spatial extent across the entire satellite scene for all output maps, while extracting exact accretion ($+m^3$), erosion ($-m^3$), and net sediment balance ($m^3$) exclusively inside the Target ROI polygon for QC/budgeting.
+* 🎨 **Thread-Safe Layer Loading & QGIS Post-Processing Symbology:**
+  * Replaced unsafe background thread GUI calls with `context.addLayerToLoadOnCompletion` and `StylePostProcessor(QgsProcessingLayerPostProcessorInterface)` to prevent access violation crashes while guaranteeing that thematic symbology (Red/Green Shorelines, MSI Spectral Ramps, Volumetric Diverging Ramps) loads automatically and vibrantly into QGIS.
+
+---
+
+### 📦 Previous Release Notes (Version 7.1)
 
 * 🌟 **Advanced Multi-Method OSW Engine:** Replaced rigid single-percentile cutoff with an adaptive multi-method Optically Shallow Water (OSW) filtering engine featuring:
   * **`0. Automated Knee-Point Extinction [Recommended]`**: Automatic, physics-based inflection detection calculating the true optical extinction threshold on water absorption curves without manual guesswork.
@@ -252,9 +269,6 @@ pip install numpy pandas rasterio matplotlib seaborn scikit-learn>=1.5.0 scipy j
 
 **Author:** Mohamed Aly Nasef  
 **Email:** Eng.m.nasef2017@gmail.com, Nasefm.aly@alexu.edu.eg  
-
-
-Nasef M.Aly. (2026). Nasef2017/Bathymetrix-AI: Bathymetrix_AI V7.1 (Version v7.1) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.21994932
 
 
 🤖 **AI Acknowledgment**  

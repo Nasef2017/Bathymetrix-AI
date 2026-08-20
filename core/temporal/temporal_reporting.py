@@ -4,6 +4,8 @@ import numpy as np
 from typing import Dict, List, Any
 from qgis.core import (
     QgsProject,
+    QgsProcessingContext,
+    QgsProcessingLayerPostProcessorInterface,
     QgsLayerTreeGroup,
     QgsRasterLayer,
     QgsVectorLayer,
@@ -22,11 +24,27 @@ from qgis.core import (
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtCore import QDateTime, QDate, QTime
 
+
+class StylePostProcessor(QgsProcessingLayerPostProcessorInterface):
+    """Thread-safe style applicator executed on the main GUI thread after algorithm completion."""
+    def __init__(self, qml_path: str):
+        super().__init__()
+        self.qml_path = qml_path
+
+    def postProcessLayer(self, layer, context, feedback):
+        if layer and layer.isValid() and os.path.exists(self.qml_path):
+            layer.loadNamedStyle(self.qml_path)
+            layer.triggerRepaint()
+
+
 class TemporalReportGenerator:
     """
     Populates an organized QGIS Layer Group with all temporal products
     and exports summary multi-year analytics CSV/JSON reports.
     """
+
+    def __init__(self):
+        self._post_processors = []
 
     def generate_layer_group_and_reports(
         self,
@@ -37,7 +55,8 @@ class TemporalReportGenerator:
         output_dir: str,
         feedback: QgsProcessingFeedback,
         uncertainty_mode: str = "classical",
-        qr_confidence: float = 0.95
+        qr_confidence: float = 0.95,
+        context: QgsProcessingContext = None
     ):
         """
         Populates QGIS Layer Group and exports summary analytics report.
@@ -65,17 +84,27 @@ class TemporalReportGenerator:
                     except Exception as e:
                         feedback.pushInfo(f"⚠️ Could not copy {old_path} to {new_name}: {e}")
 
+        project = context.project() if (context and context.project()) else QgsProject.instance()
+
         # Add Benthic Layers
         for yr, res in sorted(benthic_results.items()):
             if res and res.get("benthic_map_path") and os.path.exists(res["benthic_map_path"]):
-                rlayer = QgsRasterLayer(res["benthic_map_path"], f"Benthic Habitat {yr}")
+                layer_name = f"Benthic Habitat {yr}"
+                rlayer = QgsRasterLayer(res["benthic_map_path"], layer_name)
                 if rlayer.isValid():
                     classes = [
                         QgsPalettedRasterRenderer.Class(1, QColor(34, 139, 34), "Vegetation")
                     ]
                     renderer = QgsPalettedRasterRenderer(rlayer.dataProvider(), 1, classes)
                     rlayer.setRenderer(renderer)
-                    QgsProject.instance().addMapLayer(rlayer, True)
+                    style_path = os.path.splitext(res["benthic_map_path"])[0] + ".qml"
+                    rlayer.saveNamedStyle(style_path)
+                    if context:
+                        details = QgsProcessingContext.LayerDetails(layer_name, project, "")
+                        pp = StylePostProcessor(style_path)
+                        self._post_processors.append(pp)
+                        details.setPostProcessor(pp)
+                        context.addLayerToLoadOnCompletion(res["benthic_map_path"], details)
 
         # Add Shoreline Change Polygons for ALL periods (Sequential and Overall)
         if change_polygons:
@@ -83,7 +112,8 @@ class TemporalReportGenerator:
                 if os.path.exists(poly_shp):
                     yr_str = os.path.basename(poly_shp).replace("Shoreline_Change_Polygons_", "").replace(".shp", "")
                     yr_display = yr_str.replace("_", "-")
-                    vlayer = QgsVectorLayer(poly_shp, f"Shoreline Change Polygons ({yr_display})", "ogr")
+                    layer_name = f"Shoreline Change Polygons ({yr_display})"
+                    vlayer = QgsVectorLayer(poly_shp, layer_name, "ogr")
                     if vlayer.isValid():
                         cat_list = []
                         sym_erosion = QgsSymbol.defaultSymbol(vlayer.geometryType())
@@ -98,7 +128,15 @@ class TemporalReportGenerator:
                         vlayer.setRenderer(renderer)
                         vlayer.setOpacity(0.7)
 
-                        QgsProject.instance().addMapLayer(vlayer, True)
+                        style_path = os.path.splitext(poly_shp)[0] + ".qml"
+                        vlayer.saveNamedStyle(style_path)
+
+                        if context:
+                            details = QgsProcessingContext.LayerDetails(layer_name, project, "")
+                            pp = StylePostProcessor(style_path)
+                            self._post_processors.append(pp)
+                            details.setPostProcessor(pp)
+                            context.addLayerToLoadOnCompletion(poly_shp, details)
 
         # Add Volumetric Erosion Accretion and MSI (For all periods: Overall and Sequential)
         for res in analytics_results:
@@ -148,7 +186,12 @@ class TemporalReportGenerator:
                     style_path = os.path.splitext(res["statcd_raster_path"])[0] + ".qml"
                     rlayer.saveNamedStyle(style_path)
                     
-                    QgsProject.instance().addMapLayer(rlayer, True)
+                    if context:
+                        details = QgsProcessingContext.LayerDetails(layer_name, project, "")
+                        pp = StylePostProcessor(style_path)
+                        self._post_processors.append(pp)
+                        details.setPostProcessor(pp)
+                        context.addLayerToLoadOnCompletion(res["statcd_raster_path"], details)
 
             # MSI (Singleband pseudocolor, inverted Red)
             if res.get("msi_raster_path") and os.path.exists(res["msi_raster_path"]):
@@ -182,7 +225,12 @@ class TemporalReportGenerator:
                     style_path = os.path.splitext(res["msi_raster_path"])[0] + ".qml"
                     rlayer.saveNamedStyle(style_path)
                     
-                    QgsProject.instance().addMapLayer(rlayer, True)
+                    if context:
+                        details = QgsProcessingContext.LayerDetails(layer_name, project, "")
+                        pp = StylePostProcessor(style_path)
+                        self._post_processors.append(pp)
+                        details.setPostProcessor(pp)
+                        context.addLayerToLoadOnCompletion(res["msi_raster_path"], details)
 
         # 2. Export Summary CSV Reports
         import csv

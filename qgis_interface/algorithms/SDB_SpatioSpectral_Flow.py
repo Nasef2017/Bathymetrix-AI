@@ -76,7 +76,7 @@ class SDBSpatioSpectralFlow(SDBMasterOrchestrator):
             
             <h3 style="color: #D35400; margin-top: 20px; margin-bottom: 5px; border-bottom: 2px solid #D35400; padding-bottom: 3px;">⚙️ Pipeline Phases</h3>
             <ul style="font-size: 12px; margin-top: 5px; padding-left: 20px;">
-                <li><b>Phase 01:</b> Automated atmospheric/glint correction, water masking, and Log-Ratio feature engineering for each scene individually.</li>
+                <li><b>Phase 01:</b> Automated atmospheric/glint correction, water masking, and flexible Raw/Log-Ratio feature engineering for each scene individually.</li>
                 <li><b>Phase 02:</b> Training point filtering and RANSAC / LS / Huber outlier rejection for each scene.</li>
                 <li><b>Phase 03:</b> <i>Scene-Specific AI Modeling</i> — benchmarks 15+ ML algorithms, generates independent Initial Depth Maps, and calculates scene accuracy weights (R² / RMSE).</li>
                 <li><b>Aggregation:</b> <i>Pixel-wise SpatioSpectral Synthesis</i> — merges all scene depth maps into one superior consensus map using <b>Weighted Median</b> (Recommended), <b>Weighted Mean</b>, <b>Select Best Scene</b>, or standard <b>Median / Mean</b>.</li>
@@ -254,7 +254,7 @@ class SDBSpatioSpectralFlow(SDBMasterOrchestrator):
             )
         )
 
-        default_feats = list(range(len(self.FEATURE_OPTIONS_NAMES)))
+        default_feats = list(range(1, len(self.FEATURE_OPTIONS_NAMES)))
         self.addParameter(
             QgsProcessingParameterEnum(
                 self.FEATURE_SELECTION,
@@ -295,7 +295,7 @@ class SDBSpatioSpectralFlow(SDBMasterOrchestrator):
                 self.DEEPWATER_METHOD,
                 "🌊 [1.5] Deep Water Definition Method",
                 options=self.OSW_METHODS_NAMES,
-                defaultValue=0,
+                defaultValue=2,
             )
         )
         self.addParameter(

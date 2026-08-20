@@ -68,23 +68,24 @@ class SDBPhase1Preprocessing(QgsProcessingAlgorithm):
 
     NUM_THREADS = "NUM_THREADS"
 
-    MASK_METHODS = ["Otsu (Automatic NDWI)", "Manual NDWI Threshold", "3 Indices Equation (NDWI, MNDWI, NWI)", "Smart Hybrid (Dynamic Auto)"]
+    MASK_METHODS = [
+        "Otsu (Automatic NDWI)",
+        "Manual NDWI Threshold",
+        "3 Indices Equation (NDWI, MNDWI, NWI)",
+        "Smart Hybrid (Dynamic Auto)",
+    ]
     OSW_METHODS = [
-        "Automated Knee-Point Extinction [Recommended]",
+        "Automated Knee-Point Extinction",
         "Turbidity-Invariant Log-Ratio Extinction",
-        "Multi-Otsu / GMM Spectral Clustering",
+        "Multi-Otsu / GMM Spectral Clustering [Recommended]",
         "Automatic (NIR Percentile Fallback)",
         "Manual Polygon ROI",
         "Shallow Water Bound (OSW Polygon)",
     ]
 
     FEATURE_OPTIONS = [
-        "[All Raw] All Bands from Input Image",
-        "[Log] Log(Coastal)",
-        "[Log] Log(Blue)",
-        "[Log] Log(Green)",
-        "[Log] Log(Red)",
-        "[Log] Log(NIR)",
+        "[All Raw Bands] All Bands from Input Image (Raw Reflectance / DN)",
+        "[All Log Bands] All Bands from Input Image (Log-Transformed)",
         "[Ratio] Log(Blue) / Log(Green)",
         "[Ratio] Log(Blue) / Log(Red)",
         "[Ratio] Log(Coastal) / Log(Green)",
@@ -221,7 +222,7 @@ class SDBPhase1Preprocessing(QgsProcessingAlgorithm):
         )
 
         num_options = len(self.FEATURE_OPTIONS)
-        default_selection = list(range(num_options))
+        default_selection = list(range(1, num_options))
         self.addParameter(
             QgsProcessingParameterEnum(
                 self.FEATURE_SELECTION,
@@ -259,7 +260,7 @@ class SDBPhase1Preprocessing(QgsProcessingAlgorithm):
                 self.DEEPWATER_METHOD,
                 "Deep Water Definition Method",
                 options=self.OSW_METHODS,
-                defaultValue=0,
+                defaultValue=2,
             )
         )
         self.addParameter(
@@ -374,7 +375,7 @@ class SDBPhase1Preprocessing(QgsProcessingAlgorithm):
                 <li><b>Automated Water Masking:</b> Aquatic domain segmentation via NDWI, MNDWI, or 3-Indices formulas with optional shoreline edge shrinking to avoid land-water mixing.</li>
                 <li><b>Deep Water OSW Filtering:</b> Removes light-extinct deep waters via automatic NIR percentile thresholding, dynamic Elbow Point Detection, or manual polygon boundary masking.</li>
                 <li><b>OSW Vector Export:</b> Automatically saves and exports the Optically Shallow Water boundary as a GeoPackage vector layer matching source CRS.</li>
-                <li><b>Log-Ratio Spectral Features:</b> Computes physics-based log-transformed spectral ratios (e.g. ln(Blue)/ln(Green), ln(Coastal)/ln(Yellow)) based on differential light attenuation.</li>
+                <li><b>Feature Engineering (Raw & Log Bands):</b> Allows flexible feature selection of <code>[All Raw Bands]</code> (Raw Reflectance / DN) and/or <code>[All Log Bands]</code> (Log-Transformed ln(1000*DN)), as well as Stumpf Log-Ratios. <br>⚠️ <i>Note: If your input imagery is already log-transformed, select <code>[All Raw Bands]</code> and avoid selecting <code>[All Log Bands]</code> to prevent double log-transformation.</i></li>
             </ul>
             <br><b>Developer:</b> Mohamed Aly Nasef
         </div>

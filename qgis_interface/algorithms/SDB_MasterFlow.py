@@ -162,11 +162,16 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         "Hybrid",
         "Strict Center",
     ]
-    MASK_METHODS_NAMES = ["Otsu (Automatic NDWI)", "Manual NDWI Threshold", "3 Indices Equation (NDWI, MNDWI, NWI)", "Smart Hybrid (Dynamic Auto)"]
+    MASK_METHODS_NAMES = [
+        "Otsu (Automatic NDWI)",
+        "Manual NDWI Threshold",
+        "3 Indices Equation (NDWI, MNDWI, NWI)",
+        "Smart Hybrid (Dynamic Auto)",
+    ]
     OSW_METHODS_NAMES = [
-        "Automated Knee-Point Extinction [Recommended]",
+        "Automated Knee-Point Extinction",
         "Turbidity-Invariant Log-Ratio Extinction",
-        "Multi-Otsu / GMM Spectral Clustering",
+        "Multi-Otsu / GMM Spectral Clustering [Recommended]",
         "Automatic (NIR Percentile Fallback)",
         "Manual Polygon ROI",
         "Shallow Water Bound (OSW Polygon)",
@@ -174,12 +179,8 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
     FEATURE_CORR_THRESHOLDS = ["0.0", "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1.0"]
     FEATURE_CORR_THRESHOLDS_P4 = ["Use Phase 03 (-1.0)", "0.0", "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "1.0"]
     FEATURE_OPTIONS_NAMES = [
-        "[All Raw] All Bands from Input Image",
-        "[Log] Log(Coastal)",
-        "[Log] Log(Blue)",
-        "[Log] Log(Green)",
-        "[Log] Log(Red)",
-        "[Log] Log(NIR)",
+        "[All Raw Bands] All Bands from Input Image (Raw Reflectance / DN)",
+        "[All Log Bands] All Bands from Input Image (Log-Transformed)",
         "[Ratio] Log(Blue) / Log(Green)",
         "[Ratio] Log(Blue) / Log(Red)",
         "[Ratio] Log(Coastal) / Log(Green)",
@@ -219,7 +220,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
 
             <h3 style="color: #D35400; margin-bottom: 5px; border-bottom: 2px solid #D35400; padding-bottom: 3px;">⚙️ 5-Phase Scientific Methodology</h3>
             <ul style="font-size: 12px; margin-top: 5px; padding-left: 20px;">
-                <li><b>Phase 01 — Advanced Pre-processing:</b> Sun-glint removal <i>(Hedley et al., 2005)</i> with robust NaN/Inf handling, water masking (NDWI, MNDWI, NWI with edge shrink), Optically Shallow Water (OSW) deep-water filtering (automatic NIR percentile / dynamic Elbow Point detection / polygon mask & vector export), and physics-based Log-Ratio features.</li>
+                <li><b>Phase 01 — Advanced Pre-processing:</b> Sun-glint removal <i>(Hedley et al., 2005)</i> with robust NaN/Inf handling, water masking (NDWI, MNDWI, NWI with edge shrink), Optically Shallow Water (OSW) deep-water filtering (automatic NIR percentile / dynamic Elbow Point detection / polygon mask & vector export), and flexible Feature Extraction (<code>[All Raw Bands]</code> and/or <code>[All Log Bands]</code> and Stumpf Log-Ratios). <i>(⚠️ Note: If input imagery is already log-transformed, select [All Raw Bands] and avoid [All Log Bands] to prevent double log-transformation).</i></li>
                 <li><b>Phase 02 — Robust Altimetry Filtering:</b> Outlier rejection on ICESat-2 (ATL24) LiDAR / sonar training data using <b>Linear RANSAC</b>, <b>LS Variance Fit</b>, or <b>Huber Variance Fit</b> with dynamic percentile diagnostic plots.</li>
                 <li><b>Phase 03 — Global Auto-ML & Feature Analysis:</b> Multicollinearity analysis (Pearson / Spearman, Auto-RANSAC, Auto-Random Forest), benchmarks <b>15+ ML models</b> (RF, XGBoost, LightGBM, CatBoost, SVR, MLP, Extra Trees), hyperparameter tuning (Bayesian, Random, Grid), Spatial Block CV, and Ensemble Blending (Average, Median, Stacking, Uncertainty-Weighted Pixel Fusion).</li>
                 <li><b>Phase 04 — Spatial Residual Correction:</b> Zero-Mean Centered Spatial Residual modeling using <b>Leave-One-Out (LOO) Robust Huber Weighting</b> and Smoothed IDW (1 / (d + 1.0)) to eliminate local bias drift, secondary stacked retraining, and generates a <b>95% Confidence Spatial Uncertainty Raster Map</b>.</li>
@@ -408,7 +409,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
             )
         )
 
-        default_feats = list(range(len(self.FEATURE_OPTIONS_NAMES)))
+        default_feats = list(range(1, len(self.FEATURE_OPTIONS_NAMES)))
         self.addParameter(
             QgsProcessingParameterEnum(
                 self.FEATURE_SELECTION,
@@ -449,7 +450,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
                 self.DEEPWATER_METHOD,
                 "🌊 [1.5] Deep Water Definition Method",
                 options=self.OSW_METHODS_NAMES,
-                defaultValue=0,
+                defaultValue=2,
             )
         )
         self.addParameter(
