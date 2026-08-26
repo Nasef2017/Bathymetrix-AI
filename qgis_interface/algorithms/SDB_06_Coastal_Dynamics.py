@@ -350,9 +350,22 @@ class SDBCoastalDynamics(QgsProcessingAlgorithm):
             append_log(err, log_file_path, feedback)
             raise QgsProcessingException(err)
 
+        import rasterio
+        def _check_raster_health(rpath: str) -> bool:
+            if not rpath or not os.path.exists(rpath):
+                return False
+            try:
+                with rasterio.open(rpath) as rsrc:
+                    rarr = rsrc.read(1)
+                    rnd = rsrc.nodata if rsrc.nodata is not None else -9999.0
+                    rval = np.isfinite(rarr) & (rarr != rnd) & (np.abs(rarr) > 0.001) & (np.abs(rarr) < 15000)
+                    return bool(np.sum(rval) > 50)
+            except Exception:
+                return False
+
         yearly_sdb_results = {}
         for yf in year_folders:
-            year_str = yf.split("_")[1]
+            year_str = yf.split("_")[1] if "_" in yf else yf
             try:
                 year = int(year_str)
             except:
@@ -363,20 +376,34 @@ class SDBCoastalDynamics(QgsProcessingAlgorithm):
             sdb_depth_map = None
             sdb_linear_map = None
             uncertainty_map = None
+            candidate_depth_maps = []
             
             for root, _, files in os.walk(y_dir):
                 for f in files:
                     lower_f = f.lower()
+                    if not lower_f.endswith(".tif"):
+                        continue
+                    full_p = os.path.join(root, f)
                     if lower_f == f"sdb {year}.tif" or lower_f == f"sdb_{year}.tif":
-                        sdb_depth_map = os.path.join(root, f)
-                    if "linear_regression_depth" in lower_f:
-                        sdb_linear_map = os.path.join(root, f)
+                        candidate_depth_maps.insert(0, full_p)
+                    elif f"final_depth_cleaned_{year}" in lower_f or f"depth_cleaned_{year}" in lower_f or f"initial_global_depth_{year}" in lower_f:
+                        candidate_depth_maps.append(full_p)
+                    elif "linear_regression_depth" in lower_f:
+                        sdb_linear_map = full_p
+                    
                     if "linear_regression_uncertainty" in lower_f:
-                        uncertainty_map = os.path.join(root, f)
-                    elif "uncertainty" in lower_f and not uncertainty_map:
-                        uncertainty_map = os.path.join(root, f)
+                        uncertainty_map = full_p
+                    elif f"uncertainty_{year}" in lower_f or "uncertainty" in lower_f:
+                        if not uncertainty_map:
+                            uncertainty_map = full_p
             
-            if not sdb_depth_map and sdb_linear_map:
+            # Select the first healthy depth map with valid pixels
+            for c_path in candidate_depth_maps:
+                if _check_raster_health(c_path):
+                    sdb_depth_map = c_path
+                    break
+            
+            if not sdb_depth_map and sdb_linear_map and _check_raster_health(sdb_linear_map):
                 sdb_depth_map = sdb_linear_map
                 
             if sdb_depth_map:
@@ -390,7 +417,7 @@ class SDBCoastalDynamics(QgsProcessingAlgorithm):
                 }
                 append_log(f"      → Found SDB for Year {year}: {os.path.basename(sdb_depth_map)}", log_file_path, feedback)
             else:
-                append_log(f"  ⚠ WARNING: No SDB map found for Year {year} in folder {yf}", log_file_path, feedback)
+                append_log(f"  ⚠ WARNING: No valid SDB map found for Year {year} in folder {yf}", log_file_path, feedback)
             
         if not yearly_sdb_results:
             err = "✗ ERROR: Could not extract any valid SDB maps from the provided folder."

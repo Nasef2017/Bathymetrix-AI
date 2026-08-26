@@ -286,10 +286,19 @@ def extract_samples(ras_path, vec_layer, d_fld, w_fld, mode):
             v_crs = QgsCoordinateReferenceSystem("EPSG:4326")
             vec_layer.setCrs(v_crs)
     
-    from ...infrastructure.vector_io import resolve_depth_field
-    actual_d_fld = resolve_depth_field(vec_layer, d_fld)
+    fields = [f.name() for f in vec_layer.fields()]
+    actual_d_fld = None
+    if d_fld:
+        d_clean = str(d_fld).strip()
+        for f in fields:
+            if f == d_clean or f.lower() == d_clean.lower() or f.lower() == d_clean.lower()[:10]:
+                actual_d_fld = f
+                break
+    if not actual_d_fld:
+        from qgis.core import QgsProcessingException
+        raise QgsProcessingException(f"❌ ERROR: Specified depth field '{d_fld}' was not found in layer '{vec_layer.name()}'. Available fields in the layer are: {', '.join(fields)}. Please specify the exact depth field name.")
     
-    fields_lower = [f.name().lower() for f in vec_layer.fields()]
+    fields_lower = [f.lower() for f in fields]
     actual_w_fld = None
     if w_fld and w_fld.lower() in fields_lower:
         actual_w_fld = [f.name() for f in vec_layer.fields() if f.name().lower() == w_fld.lower()][0]

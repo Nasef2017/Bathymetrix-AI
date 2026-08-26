@@ -3,11 +3,7 @@ import numpy as np
 import rasterio
 import warnings
 from typing import Dict, List, Any
-try:
-    from qgis.core import QgsProcessingFeedback
-except ImportError:
-    QgsProcessingFeedback = object
-
+from qgis.core import QgsProcessingFeedback
 
 
 class TemporalAnalyticsEngine:

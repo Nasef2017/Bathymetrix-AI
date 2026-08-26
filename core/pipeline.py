@@ -1537,6 +1537,62 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                     f.write(html_p5)
             except Exception:
                 pass
+
+        # Generate print-ready SDB Technical Report.html
+        try:
+            generate_pdf_report(
+                out_dir=out_dir,
+                p3_models=p3_models,
+                p4_models=p4_models,
+                has_p4=has_p4,
+                enable_ransac=enable_ransac,
+                pt_count=pt_count,
+                depth_min=depth_min,
+                depth_max=depth_max,
+                has_weight_stats=has_weight_stats,
+                weight_min=weight_min,
+                weight_max=weight_max,
+                actual_pt_count=actual_pt_count,
+                collision_handling=collision_handling,
+                filter_mode_name=filter_mode_name,
+                strat_rows=strat_rows,
+                log_path=log_path,
+                feedback=feedback,
+                raster_name=raster_name,
+                train_name=train_name,
+                test_name=test_name,
+                is_spatiospectral=is_spatiospectral,
+                p2_dir=p2_dir,
+                spatiospectral_p3_report_html=spatiospectral_p3_report_html
+            )
+            if p5_dir and os.path.exists(p5_dir) and os.path.abspath(p5_dir) != os.path.abspath(out_dir):
+                generate_pdf_report(
+                    out_dir=p5_dir,
+                    p3_models=p3_models,
+                    p4_models=p4_models,
+                    has_p4=has_p4,
+                    enable_ransac=enable_ransac,
+                    pt_count=pt_count,
+                    depth_min=depth_min,
+                    depth_max=depth_max,
+                    has_weight_stats=has_weight_stats,
+                    weight_min=weight_min,
+                    weight_max=weight_max,
+                    actual_pt_count=actual_pt_count,
+                    collision_handling=collision_handling,
+                    filter_mode_name=filter_mode_name,
+                    strat_rows=strat_rows,
+                    log_path=log_path,
+                    feedback=feedback,
+                    raster_name=raster_name,
+                    train_name=train_name,
+                    test_name=test_name,
+                    is_spatiospectral=is_spatiospectral,
+                    p2_dir=p2_dir,
+                    spatiospectral_p3_report_html=spatiospectral_p3_report_html
+                )
+        except Exception:
+            pass
     except Exception:  # nosec B110
         pass
 
@@ -2729,7 +2785,7 @@ def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt
     </head>
     <body>
         <div class="header">
-            <h1>BATHYMETRIX-AI V7.0: TECHNICAL VALIDATION REPORT</h1>
+            <h1>BATHYMETRIX-AI V7.4: TECHNICAL VALIDATION REPORT</h1>
             <p>SDB MasterFlow | High-Precision Satellite-Derived Bathymetry Calibration & Validation</p>
         </div>
 
@@ -2804,7 +2860,7 @@ def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt
         {f"<h2>🔄 Phase 04: Depth-Dependent Residual Calibration Leaderboard</h2><table border='1' cellspacing='0' cellpadding='6' bordercolor='#cbd5e1' style='width: 100%; border-collapse: collapse; margin-top: 8pt; margin-bottom: 12pt;'><thead><tr bgcolor='#f1f5f9'><th style='white-space: nowrap;'>Algorithm</th><th style='white-space: nowrap;'>Winner Stability</th><th style='white-space: nowrap;'>SDB Score (0-100)</th><th style='white-space: nowrap;'>R² Accuracy</th><th style='white-space: nowrap;'>RMSE (Vertical Error)</th><th style='white-space: nowrap;'>wMAPE (%)</th><th style='white-space: nowrap;'>Bias (m)</th></tr></thead><tbody>{p4_rows_html}</tbody></table>" if has_p4 else ""}
 
         <div class="footer">
-            Report generated automatically by Bathymetrix-AI V7.0. All rights reserved. &copy; Mohamed Aly Nasef (2026).
+            Report generated automatically by Bathymetrix-AI V7.4. All rights reserved. &copy; Mohamed Aly Nasef (2026).
         </div>
         <div style="page-break-before: always;"></div>
 
@@ -2831,11 +2887,11 @@ def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt
             </tbody>
         </table>
 
-        {f'<div class="footer">Report generated automatically by Bathymetrix-AI V7.0. All rights reserved. &copy; Mohamed Aly Nasef (2026).</div>' if plots_section_html else ""}
+        {f'<div class="footer">Report generated automatically by Bathymetrix-AI V7.4. All rights reserved. &copy; Mohamed Aly Nasef (2026).</div>' if plots_section_html else ""}
         {plots_section_html}
 
         <div class="footer">
-            Report generated automatically by Bathymetrix-AI V7.0. All rights reserved. &copy; Mohamed Aly Nasef (2026).
+            Report generated automatically by Bathymetrix-AI V7.4. All rights reserved. &copy; Mohamed Aly Nasef (2026).
         </div>
     </body>
     </html>

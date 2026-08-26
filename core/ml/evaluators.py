@@ -117,21 +117,26 @@ def convert_to_bayes(params_dict):
 
 
 def extract_values(ras, vec, fld, mode, logger_file, fb):
-    from qgis.PyQt.QtCore import QVariant
+    from qgis.core import QgsProcessingException
     from Bathymetrix_AI.infrastructure.logging import append_log
     
     fields = vec.fields()
-    if not fld or fld not in fields.names():
-        numeric_types = [QVariant.Int, QVariant.Double, QVariant.LongLong]
-        found = False
-        for field in fields:
-            if field.type() in numeric_types:
-                fld = field.name()
-                append_log(f"   [Warning] Target field not specified/found. Auto-selected numeric field: {fld}", logger_file, fb)
-                found = True
+    field_names = [f.name() for f in fields]
+    
+    matched_field = None
+    if fld:
+        fld_clean = str(fld).strip()
+        for fn in field_names:
+            if fn == fld_clean or fn.lower() == fld_clean.lower() or fn.lower() == fld_clean.lower()[:10]:
+                matched_field = fn
                 break
-        if not found:
-            raise ValueError(f"No valid numeric depth field found in {vec.name()}!")
+                
+    if not matched_field:
+        err = f"❌ ERROR: Specified depth field '{fld}' was not found in layer '{vec.name()}'. Available fields in the layer are: {', '.join(field_names)}. Please specify the exact depth field name."
+        append_log(err, logger_file, fb)
+        raise QgsProcessingException(err)
+        
+    fld = matched_field
 
     with rasterio.open(ras) as ds:
         d = ds.read()

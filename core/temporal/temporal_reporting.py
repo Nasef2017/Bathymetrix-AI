@@ -2,51 +2,27 @@ import os
 import json
 import numpy as np
 from typing import Dict, List, Any
-try:
-    from qgis.core import (
-        QgsProject,
-        QgsProcessingContext,
-        QgsProcessingLayerPostProcessorInterface,
-        QgsLayerTreeGroup,
-        QgsRasterLayer,
-        QgsVectorLayer,
-        QgsProcessingFeedback,
-        QgsCategorizedSymbolRenderer,
-        QgsRendererCategory,
-        QgsSymbol,
-        QgsPalettedRasterRenderer,
-        QgsSingleBandPseudoColorRenderer,
-        QgsRasterShader,
-        QgsColorRampShader,
-        QgsRasterLayerTemporalProperties,
-        QgsDateTimeRange,
-        QgsRasterBandStats
-    )
-    from qgis.PyQt.QtGui import QColor
-    from qgis.PyQt.QtCore import QDateTime, QDate, QTime
-except ImportError:
-    QgsProject = None
-    QgsProcessingContext = None
-    QgsProcessingLayerPostProcessorInterface = object
-    QgsLayerTreeGroup = None
-    QgsRasterLayer = None
-    QgsVectorLayer = None
-    QgsProcessingFeedback = object
-    QgsCategorizedSymbolRenderer = None
-    QgsRendererCategory = None
-    QgsSymbol = None
-    QgsPalettedRasterRenderer = None
-    QgsSingleBandPseudoColorRenderer = None
-    QgsRasterShader = None
-    QgsColorRampShader = None
-    QgsRasterLayerTemporalProperties = None
-    QgsDateTimeRange = None
-    QgsRasterBandStats = None
-    QColor = None
-    QDateTime = None
-    QDate = None
-    QTime = None
-
+from qgis.core import (
+    QgsProject,
+    QgsProcessingContext,
+    QgsProcessingLayerPostProcessorInterface,
+    QgsLayerTreeGroup,
+    QgsRasterLayer,
+    QgsVectorLayer,
+    QgsProcessingFeedback,
+    QgsCategorizedSymbolRenderer,
+    QgsRendererCategory,
+    QgsSymbol,
+    QgsPalettedRasterRenderer,
+    QgsSingleBandPseudoColorRenderer,
+    QgsRasterShader,
+    QgsColorRampShader,
+    QgsRasterLayerTemporalProperties,
+    QgsDateTimeRange,
+    QgsRasterBandStats
+)
+from qgis.PyQt.QtGui import QColor
+from qgis.PyQt.QtCore import QDateTime, QDate, QTime
 
 
 class StylePostProcessor(QgsProcessingLayerPostProcessorInterface):

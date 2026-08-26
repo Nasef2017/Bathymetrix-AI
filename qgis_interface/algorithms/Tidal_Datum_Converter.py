@@ -13,6 +13,7 @@
 import os
 import tarfile
 import urllib.request
+from urllib.parse import urlparse
 import numpy as np
 import netCDF4
 
@@ -257,9 +258,13 @@ class TidalDatumConverter(QgsProcessingAlgorithm):
         download_success = False
         for url in [GOT410C_REMOTE_URL, GOT410C_FALLBACK_URL]:
             try:
+                parsed_url = urlparse(url)
+                if parsed_url.scheme.lower() not in ("http", "https"):
+                    raise ValueError(f"Disallowed URL scheme '{parsed_url.scheme}'. Only 'http' and 'https' are permitted.")
+                
                 feedback.pushInfo(f"Connecting to: {url}")
                 req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
-                with urllib.request.urlopen(req, timeout=90) as response, open(archive_path, "wb") as out_file:
+                with urllib.request.urlopen(req, timeout=90) as response, open(archive_path, "wb") as out_file:  # nosec B310
                     total_length = response.getheader("content-length")
                     total_bytes = int(total_length) if total_length else 44325003
                     downloaded = 0

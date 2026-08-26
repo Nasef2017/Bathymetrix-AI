@@ -1,12 +1,7 @@
 import os
 import re
 from typing import Dict, List, Optional, Tuple, Any
-try:
-    from qgis.core import QgsVectorLayer, QgsProcessingException
-except ImportError:
-    QgsVectorLayer = None
-    QgsProcessingException = Exception
-
+from qgis.core import QgsVectorLayer, QgsProcessingException
 
 
 class TemporalDataScanner:

@@ -2,11 +2,7 @@ import os
 import numpy as np
 import rasterio
 from typing import Dict, Any, Tuple
-try:
-    from qgis.core import QgsProcessingFeedback
-except ImportError:
-    QgsProcessingFeedback = object
-
+from qgis.core import QgsProcessingFeedback
 
 
 class BenthicVegetationClassifier:
