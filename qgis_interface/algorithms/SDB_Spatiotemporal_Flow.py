@@ -365,7 +365,7 @@ class SDBSpatiotemporalFlow(SDBMasterOrchestrator):
             QgsProcessingParameterField(
                 self.FIELD_DEPTH,
                 "📏 [2.1] Depth Field",
-                defaultValue="ortho_h",
+                defaultValue="Field_3",
                 parentLayerParameterName=self.INPUT_TRAIN,
             )
         )
@@ -444,7 +444,7 @@ class SDBSpatiotemporalFlow(SDBMasterOrchestrator):
                 "🤖 [3] Algorithms to Benchmark",
                 options=self.MODEL_LIST_NAMES,
                 allowMultiple=True,
-                defaultValue=[3, 12, 13, 14], # Extra Trees, XGBoost, LightGBM, CatBoost
+                defaultValue=[3, 12, 13, 14, 15, 17], # Extra Trees, XGBoost, LightGBM, CatBoost, Ensemble Average, Ensemble Stacking
             )
         )
         self.addParameter(
@@ -471,25 +471,9 @@ class SDBSpatiotemporalFlow(SDBMasterOrchestrator):
                 defaultValue=20,
             )
         )
-        self.addParameter(
-            QgsProcessingParameterBoolean(
-                self.ENABLE_ENSEMBLE,
-                "⚙️ [3] Enable Ensemble of Top Models",
-                defaultValue=False,
-            )
-        )
-        
-        self.addParameter(
-            QgsProcessingParameterEnum(
-                self.ENSEMBLE_METHOD,
-                "📊 [3] Ensemble Blending Method",
-                options=["Average", "Median", "Stacking", "Uncertainty-Weighted Fusion"],
-                defaultValue=0,
-            )
-        )
         p_ens_size = QgsProcessingParameterNumber(
             self.ENSEMBLE_SIZE,
-            "📊 [Phase 03] Ensemble Size (Top N Models to blend)",
+            "📊 Ensemble Size (Top N Models to blend)",
             type=QgsProcessingParameterNumber.Integer,
             defaultValue=3,
             minValue=2,
@@ -534,10 +518,7 @@ class SDBSpatiotemporalFlow(SDBMasterOrchestrator):
             "🤖 [Phase 03] Enable Depth Variance Correction",
             defaultValue=False,
         )
-        if self.__class__.__name__ == "SDBMasterOrchestrator":
-            p_var_corr.setFlags(p_var_corr.flags() | QgsProcessingParameterDefinition.FlagAdvanced | QgsProcessingParameterDefinition.FlagHidden)
-        else:
-            p_var_corr.setFlags(p_var_corr.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        p_var_corr.setFlags(p_var_corr.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_var_corr)
 
         p_cv = QgsProcessingParameterNumber(
@@ -633,6 +614,35 @@ class SDBSpatiotemporalFlow(SDBMasterOrchestrator):
         p_cat.setFlags(p_cat.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_cat)
 
+        # --- SDB Composite Score & Model Selection Strategy ---
+        p_strat = QgsProcessingParameterEnum(
+            self.SCORE_SELECTION_STRATEGY,
+            "🎯 [Auto-ML Ranking] Model Selection Strategy / Criterion",
+            options=self.SCORE_STRATEGY_OPTIONS,
+            defaultValue=0,
+        )
+        p_strat.setFlags(p_strat.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_strat)
+
+        p_metrics = QgsProcessingParameterEnum(
+            self.SCORE_METRICS,
+            "⚖️ [Score Equation] Included Evaluation Metrics (Auto-Balanced)",
+            options=self.SCORE_METRIC_OPTIONS,
+            allowMultiple=True,
+            defaultValue=[0, 1, 2, 3],
+        )
+        p_metrics.setFlags(p_metrics.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_metrics)
+
+        p_custom_cfg = QgsProcessingParameterString(
+            self.SCORE_CUSTOM_CONFIG,
+            "🎛️ [Custom Score Matrix] Optional Weights (e.g. 'R2: 50, MAE: 50') & Simulation Settings",
+            defaultValue="R2: 35, RMSE: 30, wMAPE: 20, Bias: 15, Rounds: 20, Variation: +/-35%",
+            optional=True,
+        )
+        p_custom_cfg.setFlags(p_custom_cfg.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_custom_cfg)
+
         self.addParameter(
             QgsProcessingParameterBoolean(
                 self.ENABLE_ADAPTIVE,
@@ -684,33 +694,6 @@ class SDBSpatiotemporalFlow(SDBMasterOrchestrator):
         p_knn.setFlags(p_knn.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_knn)
 
-        p_ens_p4 = QgsProcessingParameterBoolean(
-            self.ENABLE_ENSEMBLE_P4,
-            "⚙️ [Phase 04] Enable Ensemble of Top Models",
-            defaultValue=False,
-        )
-        p_ens_p4.setFlags(p_ens_p4.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
-        self.addParameter(p_ens_p4)
-
-        p_ens_meth_p4 = QgsProcessingParameterEnum(
-            self.ENSEMBLE_METHOD_P4,
-            "📊 [Phase 04] Ensemble Blending Method",
-            options=["Average", "Median", "Stacking", "Uncertainty-Weighted Fusion"],
-            defaultValue=0,
-        )
-        p_ens_meth_p4.setFlags(p_ens_meth_p4.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
-        self.addParameter(p_ens_meth_p4)
-
-        p_ens_size_p4 = QgsProcessingParameterNumber(
-            self.ENSEMBLE_SIZE_P4,
-            "📊 [Phase 04] Ensemble Size (Top N Models to blend)",
-            type=QgsProcessingParameterNumber.Integer,
-            defaultValue=3,
-            minValue=2,
-            maxValue=5,
-        )
-        p_ens_size_p4.setFlags(p_ens_size_p4.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
-        self.addParameter(p_ens_size_p4)
 
         p_sp_p4 = QgsProcessingParameterBoolean(
             self.SPATIAL_CV_P4,
@@ -719,13 +702,21 @@ class SDBSpatiotemporalFlow(SDBMasterOrchestrator):
         )
         p_sp_p4.setFlags(p_sp_p4.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_sp_p4)
+
+        p_var_corr_p4 = QgsProcessingParameterBoolean(
+            self.ENABLE_DEPTH_VARIANCE_CORR_P4,
+            "🎛️ [Phase 04] Enable Depth Variance Correction",
+            defaultValue=False,
+        )
+        p_var_corr_p4.setFlags(p_var_corr_p4.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_var_corr_p4)
         # Note: Phase 04 (Adaptive) and Phase 05 (Validation) shapefiles are 
         # auto-discovered by the TemporalDataScanner inside the year folders.
         self.addParameter(
             QgsProcessingParameterString(
                 self.FIELD_ADAPTIVE_DEPTH,
                 "🎯 [4] Adaptive Depth Field (For Auto-discovered Control Points)",
-                defaultValue="field_3"
+                defaultValue="Field_3"
             )
         )
 
@@ -743,7 +734,7 @@ class SDBSpatiotemporalFlow(SDBMasterOrchestrator):
             QgsProcessingParameterString(
                 self.FIELD_TEST_DEPTH,
                 "📉 [5] Validation Depth Field (For Auto-discovered Validation Points)",
-                defaultValue="field_3"
+                defaultValue="Field_3"
             )
         )
 

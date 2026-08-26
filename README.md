@@ -31,7 +31,23 @@ The toolkit also provides advanced Masterflows and standalone modules for more c
 
 ---
 
-### 🆕 What's New in Version 7.2 (Changelog)
+### 🆕 What's New in Version 7.4 (Changelog)
+
+* 🎯 **Advanced Model Selection & Winner Stability (Monte Carlo Sensitivity):**
+  * Introduced **7 specialized selection strategies** to govern algorithm choice during Phase 03/04:
+    * `0. Winner Stability (Monte Carlo Sensitivity)`: Tests candidate models across $N$ simulation rounds with stochastic weight variations ($\pm 20\%$ default) to select the most noise-resilient regressor.
+    * `1. SDB Composite Score`: Deterministic multi-metric weighting.
+    * `2. Highest R²`, `3. Lowest RMSE`, `4. Lowest wMAPE`, `5. Lowest |Bias|`, and `6. Lowest MAE`.
+  * **Auto-Balanced Weighting & Custom Syntax**: Selecting metric checkboxes automatically rebalances weights to sum to $1.0$, with support for custom syntax configuration (e.g. `R2: 70, RMSE: 30, Rounds: 50, Variation: +/-25%`).
+* 🌊 **Automated Hydrodynamic Tidal Datum Engine (NASA GSFC GOT4.10c):**
+  * Integrated automated remote retrieval, extraction, and constituent grid caching for the **NASA GSFC GOT4.10c** global ocean tide model.
+  * Provides seamless offline hydrodynamic transformations between geodetic and tidal reference datums ($WGS84 \leftrightarrow MSL \leftrightarrow LAT \leftrightarrow CD$).
+* 🔗 **Interactive Clickable Log Navigation & Unified Symbology:**
+  * Standardized all execution summaries and completion banners with clickable `file:///` URLs, enabling instant access to output directories, generated GeoTIFF rasters, and HTML dashboards directly from the QGIS log panel.
+
+---
+
+### 📦 Previous Release Notes (Version 7.2)
 
 * 📊 **Physics-Driven Feature Engineering (Bias Error Elimination):**
   * Introduced separate manual selection for **`[All Raw Bands]`** (Raw Reflectance / DN) vs. **`[All Log Bands]`** ($\ln(10000 \cdot R + 1)$).
@@ -97,6 +113,7 @@ This is the main machine-learning stage of the workflow.
 Instead of relying on a single predefined algorithm, Bathymetrix-AI automatically evaluates multiple models and determines which approach is most suitable for the available dataset.
 - **Feature Analysis:** Identifies weak, redundant, or highly correlated features using Pearson correlation, Spearman correlation, and automated selection approaches such as Automatic-RANSAC and Automatic-Random Forest.
 - **Algorithm Benchmarking:** Evaluates more than 15 machine-learning algorithms, including models such as Random Forest, Gradient Boosting, XGBoost, CatBoost, SVR, MLP, and other supported regressors.
+- **Model Selection & Winner Stability:** Evaluates models using 7 distinct selection strategies (Winner Stability via Monte Carlo Sensitivity Simulation, SDB Composite Score, Max R², Min RMSE, Min wMAPE, Min |Bias|, Min MAE) with auto-balanced metric weighting and custom syntax parsing.
 - **Hyperparameter Optimization:** Automatically searches for suitable model parameters using Random Search, Grid Search, or Bayesian Optimization.
 - **Spatial Cross-Validation:** Provides independent spatial block cross-validation to evaluate model performance while reducing the risk of overly optimistic results caused by spatial dependence.
 - **Ensemble Blending:** Supports multiple prediction-combination strategies, including Standard Average, Median, Stacking, and **Uncertainty-Weighted Pixel Fusion**. The Uncertainty-Weighted approach gives greater influence to predictions with lower estimated residual uncertainty.
@@ -249,7 +266,7 @@ This creates a complete chain from satellite observations to temporal coastal in
 A specialized standalone tool to query, filter, and download ICESat-2 (ATL24) LiDAR bathymetry data directly from NSIDC for integration into the MasterFlow pipeline.
 
 **Tidal Datum Converter**
-A dedicated standalone tool to seamlessly convert and correct bathymetric data across different tidal datums (e.g., Mean Sea Level to Chart Datum), ensuring accurate vertical alignment for precise charting and temporal comparisons.
+A dedicated standalone tool to seamlessly convert and correct bathymetric data across different tidal datums (e.g., Mean Sea Level to Chart Datum) integrating the NASA GSFC GOT4.10c automated global ocean tide model, ensuring accurate vertical alignment for precise charting and temporal comparisons.
 
 📊 **Performance Metrics**
 
@@ -269,8 +286,6 @@ pip install numpy pandas rasterio matplotlib seaborn scikit-learn>=1.5.0 scipy j
 
 **Author:** Mohamed Aly Nasef  
 **Email:** Eng.m.nasef2017@gmail.com, Nasefm.aly@alexu.edu.eg  
-
-Nasef M.Aly. (2026). Nasef2017/Bathymetrix-AI: Bathymetrix_AI V7.2 (Version v7.2) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.22020963
 
 
 🤖 **AI Acknowledgment**  

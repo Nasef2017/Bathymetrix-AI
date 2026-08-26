@@ -5,16 +5,27 @@ import matplotlib
 import numpy as np
 import pandas as pd
 import rasterio
-import seaborn as sns
+try:
+    import seaborn as sns
+except ImportError:
+    sns = None
 from scipy.stats import gaussian_kde
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-from qgis.core import (
-    QgsCoordinateTransform,
-    QgsProcessingException,
-    QgsProject,
-    QgsRasterLayer,
-)
+
+try:
+    from qgis.core import (
+        QgsCoordinateTransform,
+        QgsProcessingException,
+        QgsProject,
+        QgsRasterLayer,
+    )
+except ImportError:
+    QgsCoordinateTransform = None
+    QgsProcessingException = Exception
+    QgsProject = None
+    QgsRasterLayer = None
+
 
 warnings.filterwarnings("ignore")
 matplotlib.use("Agg")
@@ -560,5 +571,24 @@ def run_phase05_reporting(algorithm, parameters, context, feedback):
         os.path.basename(p4_path) if has_p4 else "None",
     )
 
-    feedback.pushInfo(f"\n>>> Phase 05 complete. Reports saved to: {out_dir}")
+    try:
+        from Bathymetrix_AI.infrastructure.logging import log_module_completion
+        primary_files = {
+            "Summary Report": report_path,
+            "Scatter Plot": os.path.join(out_dir, "5_Plot_1_Scatter.png"),
+            "Residuals Plot": os.path.join(out_dir, "5_Plot_2_Residuals.png"),
+            "Histograms Plot": os.path.join(out_dir, "5_Plot_3_Histograms.png"),
+            "Stratified CSV": os.path.join(out_dir, "5_Stratified_Error_Analysis.csv"),
+            "Raw Data CSV": os.path.join(out_dir, "5_Validation_Raw_Data.csv")
+        }
+        log_module_completion(
+            module_title="Phase 05: Scientific Validation & Reporting",
+            out_dir=out_dir,
+            primary_files=primary_files,
+            log_path=os.path.join(out_dir, "05_Validation_Log.txt"),
+            feedback=feedback
+        )
+    except Exception:
+        pass
+
     return {"OUTPUT_REPORT": report_path}

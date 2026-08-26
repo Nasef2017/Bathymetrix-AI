@@ -1,6 +1,12 @@
 # infrastructure/vector_io.py
-import processing
-from qgis.core import QgsVectorLayer, QgsCoordinateReferenceSystem
+try:
+    import processing
+    from qgis.core import QgsVectorLayer, QgsCoordinateReferenceSystem
+except ImportError:
+    processing = None
+    QgsVectorLayer = None
+    QgsCoordinateReferenceSystem = None
+
 
 
 def resolve_depth_field(vector_layer, requested_field: str) -> str:
@@ -27,6 +33,9 @@ def resolve_depth_field(vector_layer, requested_field: str) -> str:
 
     # Known bathymetry depth field candidates
     candidates = [
+        "field_3",
+        "field3",
+        "final_level",
         "ortho_h",
         "h_mean",
         "depth",

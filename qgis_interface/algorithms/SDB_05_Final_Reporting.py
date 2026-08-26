@@ -42,6 +42,7 @@ class SDBModule05(QgsProcessingAlgorithm):
             QgsProcessingParameterField(
                 self.FIELD_TRAIN,
                 "Depth Field (Training)",
+                defaultValue="ortho_h",
                 parentLayerParameterName=self.INPUT_TRAIN,
                 type=QgsProcessingParameterField.Numeric,
             )
@@ -56,6 +57,7 @@ class SDBModule05(QgsProcessingAlgorithm):
             QgsProcessingParameterField(
                 self.FIELD_VAL_DEPTH,
                 "Depth Field (Validation)",
+                defaultValue="ortho_h",
                 parentLayerParameterName=self.INPUT_VALIDATION,
                 type=QgsProcessingParameterField.Numeric,
                 optional=True,

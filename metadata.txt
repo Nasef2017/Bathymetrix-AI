@@ -2,7 +2,7 @@
 name=Bathymetrix-AI
 qgisMinimumVersion=3.22
 qgisMaximumVersion=4.99
-version=7.2
+version=7.4
 author=Mohamed Aly Nasef
 email=Eng.m.nasef2017@gmail.com
 description=A professional QGIS research toolkit for Satellite-Derived Bathymetry (SDB), integrating multispectral imagery with ICESat-2 LiDAR via Auto-ML, SpatioSpectral aggregation, SpatioTemporal modeling, Adaptive Refinement, and Coastal Dynamics.
@@ -32,6 +32,7 @@ about=<h3>Bathymetrix-AI: Advanced SDB Toolkit & Coastal Dynamics</h3>
             <ul>
                 <li><i>Feature Analysis:</i> Evaluates feature correlation, redundancy, and importance using Pearson/Spearman correlation, Auto-RANSAC, and Auto-Random Forest.</li>
                 <li><i>Algorithm Benchmarking:</i> Evaluates 15+ machine-learning regressors (Random Forest, Gradient Boosting, XGBoost, LightGBM, CatBoost, SVR, MLP, etc.).</li>
+                <li><i>Model Selection & Winner Stability:</i> Evaluates models using 7 distinct selection strategies (Winner Stability via Monte Carlo Sensitivity Simulation, SDB Composite Score, Max R², Min RMSE, Min wMAPE, Min |Bias|, Min MAE) with auto-balanced metric weighting and custom syntax parsing.</li>
                 <li><i>Hyperparameter Optimization:</i> Supports Bayesian Optimization, Grid Search, and Random Search.</li>
                 <li><i>Spatial Cross-Validation:</i> Provides independent spatial block cross-validation for model evaluation.</li>
                 <li><i>Ensemble Blending:</i> Supports Standard Average, Median, Stacking, and Uncertainty-Weighted Pixel Fusion.</li>
@@ -66,7 +67,7 @@ about=<h3>Bathymetrix-AI: Advanced SDB Toolkit & Coastal Dynamics</h3>
         <li><b>3. SDB SpatioTemporal Masterflow:</b> Multi-year SDB modeling integrating Year/Time directly into a Global Spatiotemporal AI model, followed by year-specific adaptive refinement to produce a consistent temporal series of SDB maps.</li>
         <li><b>4. Coastal Dynamics Analysis (Module 06):</b> Uses yearly SDB maps to analyze long-term bathymetric trends, Net Bathymetric Change, Morphological Stability Index (MSI), Statistical Level of Detection (StatCD), Erosion and Accretion, Shoreline Movement, Volumetric Sediment Tracking, and Target ROI Analytics.</li>
         <li><b>5. ICESat-2 Downloader:</b> Specialized tool for querying, filtering, and downloading ICESat-2 ATL24 bathymetry data directly from NSIDC.</li>
-        <li><b>6. Tidal Datum Converter:</b> Dedicated tool for converting and vertically aligning bathymetric observations between different tidal reference datums (e.g., MSL to Chart Datum).</li>
+        <li><b>6. Tidal Datum Converter:</b> Dedicated tool for converting and vertically aligning bathymetric observations between different tidal reference datums (e.g., MSL to Chart Datum) integrating NASA GSFC GOT4.10c automated global tidal modeling.</li>
     </ul>
 
     <p><b>📊 Performance Metrics:</b><br>
@@ -98,4 +99,4 @@ tracker=https://github.com/Nasef2017/Bathymetrix-AI/issues
 icon=icon.png
 tags=sdb,bathymetry,machine learning,icesat-2,ransac,spatial correction,remote sensing,hydrography,satellite imagery,python,coastal dynamics,volumetric change,quantile regression,spatiotemporal,spatiospectral,iho-s44
 category=Raster
-changelog=v7.2: (1) Physics-Driven Feature Engineering: Introduced separate [All Raw Bands] vs [All Log Bands] spectral options; log-transformation linearizes optical exponential attenuation according to Beer-Lambert law, dramatically reducing depth systematic bias error (near-zero bias) and preventing volumetric distortion in sediment calculations. Raw bands excluded from default selection to protect against non-linear bias while remaining optional for ultra-shallow water micro-topography. (2) Multi-Otsu / GMM 3D Spectral Clustering set as the Recommended default OSW method. (3) Coastal Dynamics Target ROI Processing Modes: Added dropdown parameter supporting 'Clip Full Analysis to ROI (Crop Rasters & Vectors)' vs 'Calculate Sub-Region Quantities Only (Preserve Full Rasters)' for localized dredging/QC studies. (4) Thread-Safe QGIS Symbology: Fixed background worker thread GUI crashes and preserved vibrant thematic color styling via QgsProcessingLayerPostProcessorInterface.
+changelog=v7.4: (1) Advanced Model Selection & Winner Stability: Introduced 7 customizable selection strategies featuring Monte Carlo Sensitivity Winner Stability simulation (testing weight noise robustness across N iterations), automatic metric weight rebalancing, and flexible custom syntax parsing. (2) Automated Tidal Datum Engine: Integrated NASA GSFC GOT4.10c global ocean tide model with automated remote download, constituent grid caching, and offline support for seamless WGS84/MSL/LAT/CD datum conversions. (3) Interactive Clickable Log Navigation: Unified processing completion banners with clickable file:/// URLs for direct, instant access to output directories, maps, and HTML dashboards.

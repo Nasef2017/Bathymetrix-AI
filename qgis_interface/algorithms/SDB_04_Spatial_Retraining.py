@@ -67,6 +67,29 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
     RESIDUAL_INTERP_METHOD = "RESIDUAL_INTERP_METHOD"
     KNN_NEIGHBORS = "KNN_NEIGHBORS"
     SPATIAL_CV = "SPATIAL_CV"
+    ENABLE_DEPTH_VARIANCE_CORR = "ENABLE_DEPTH_VARIANCE_CORR"
+
+    SCORE_SELECTION_STRATEGY = "SCORE_SELECTION_STRATEGY"
+    SCORE_METRICS = "SCORE_METRICS"
+    SCORE_CUSTOM_CONFIG = "SCORE_CUSTOM_CONFIG"
+
+    SCORE_STRATEGY_OPTIONS = [
+        "Winner Stability (Monte Carlo Sensitivity Analysis) [Default]",
+        "Highest SDB Composite Score (Max Baseline Score 0-100)",
+        "Highest R² Accuracy",
+        "Lowest RMSE (Minimum Vertical Error)",
+        "Lowest wMAPE (%)",
+        "Lowest |Bias| (Zero-Mean Residual Offset)",
+        "Lowest MAE (Mean Absolute Error)",
+    ]
+
+    SCORE_METRIC_OPTIONS = [
+        "R² Accuracy (Correlation & Explained Variance)",
+        "RMSE (Root Mean Squared Vertical Error)",
+        "wMAPE (Weighted Mean Absolute Percentage Error)",
+        "|Bias| (Zero-Mean Residual Shift Offset)",
+        "MAE (Mean Absolute Error)",
+    ]
 
     REMOVE_POSITIVES = "REMOVE_POSITIVES"
     ENABLE_SLOPE_FILTER = "ENABLE_SLOPE_FILTER"
@@ -91,6 +114,10 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
         "XGBoost",
         "LightGBM",
         "CatBoost",
+        "Ensemble (Average)",
+        "Ensemble (Median)",
+        "Ensemble (Stacking)",
+        "Ensemble (Uncertainty-Weighted Fusion)",
     ]
     OPTIMIZER_LIST = ["Random Search", "Grid Search", "Bayesian Search"]
     COLLISION_LIST = ["Keep All", "Highest Conf", "Closest", "Hybrid", "Strict Center"]
@@ -120,6 +147,7 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
             QgsProcessingParameterField(
                 self.FIELD_TRAIN,
                 "Depth Field",
+                defaultValue="ortho_h",
                 parentLayerParameterName=self.INPUT_TRAIN,
                 type=QgsProcessingParameterField.Numeric,
             )
@@ -140,7 +168,7 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
                 "Refinement Algorithms",
                 options=self.MODEL_LIST,
                 allowMultiple=True,
-                defaultValue=[0, 1],
+                defaultValue=[3, 12, 13, 14, 15, 17],
             )
         )
         self.addParameter(
@@ -194,22 +222,13 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
         p_sp.setFlags(p_sp.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_sp)
 
-        p_ens = QgsProcessingParameterBoolean(
-            self.ENABLE_ENSEMBLE,
-            "⚙️ Enable Ensemble of Top Models",
+        p_var_corr = QgsProcessingParameterBoolean(
+            self.ENABLE_DEPTH_VARIANCE_CORR,
+            "🎛️ Enable Depth Variance Correction (Control Points Mean Shift)",
             defaultValue=False,
         )
-        p_ens.setFlags(p_ens.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
-        self.addParameter(p_ens)
-
-        p_ens_meth = QgsProcessingParameterEnum(
-            self.ENSEMBLE_METHOD,
-            "📊 Ensemble Blending Method",
-            options=["Average", "Median", "Stacking", "Uncertainty-Weighted Fusion"],
-            defaultValue=0,
-        )
-        p_ens_meth.setFlags(p_ens_meth.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
-        self.addParameter(p_ens_meth)
+        p_var_corr.setFlags(p_var_corr.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_var_corr)
 
         p_ens_size = QgsProcessingParameterNumber(
             self.ENSEMBLE_SIZE,
@@ -398,6 +417,35 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
         p_max_d.setFlags(p_max_d.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_max_d)
 
+        # --- SDB Composite Score & Model Selection Strategy ---
+        p_strat = QgsProcessingParameterEnum(
+            self.SCORE_SELECTION_STRATEGY,
+            "🎯 [Auto-ML Ranking] Model Selection Strategy / Criterion",
+            options=self.SCORE_STRATEGY_OPTIONS,
+            defaultValue=0,
+        )
+        p_strat.setFlags(p_strat.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_strat)
+
+        p_metrics = QgsProcessingParameterEnum(
+            self.SCORE_METRICS,
+            "⚖️ [Score Equation] Included Evaluation Metrics (Auto-Balanced)",
+            options=self.SCORE_METRIC_OPTIONS,
+            allowMultiple=True,
+            defaultValue=[0, 1, 2, 3],
+        )
+        p_metrics.setFlags(p_metrics.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_metrics)
+
+        p_custom_cfg = QgsProcessingParameterString(
+            self.SCORE_CUSTOM_CONFIG,
+            "🎛️ [Custom Score Matrix] Optional Weights (e.g. 'R2: 50, MAE: 50') & Simulation Settings",
+            defaultValue="R2: 35, RMSE: 30, wMAPE: 20, Bias: 15, Rounds: 20, Variation: +/-35%",
+            optional=True,
+        )
+        p_custom_cfg.setFlags(p_custom_cfg.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_custom_cfg)
+
     def name(self):
         return "sdb_phase4_adaptive"
 
@@ -442,6 +490,28 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
         return self.shortHelpString()
 
     def processAlgorithm(self, parameters, context, feedback):
+        import os
         from ...core.ml.evaluators import run_phase04_spatial_retraining
+        from ...infrastructure.raster_io import StylePostProcessor
 
-        return run_phase04_spatial_retraining(self, parameters, context, feedback)
+        results = run_phase04_spatial_retraining(self, parameters, context, feedback)
+
+        try:
+            depth_map = results.get("OUTPUT_FINAL")
+            if (
+                depth_map
+                and os.path.exists(depth_map)
+                and context
+                and hasattr(context, "layerToLoadOnCompletionDetails")
+                and parameters.get(self.OUTPUT_FINAL) is not None
+            ):
+                qml_path = os.path.splitext(depth_map)[0] + ".qml"
+                if os.path.exists(qml_path) and StylePostProcessor:
+                    details = context.layerToLoadOnCompletionDetails(self.OUTPUT_FINAL)
+                    if details:
+                        details.setPostProcessor(StylePostProcessor(qml_path))
+        except Exception:
+            pass
+
+
+        return results

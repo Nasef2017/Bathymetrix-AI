@@ -25,12 +25,16 @@ MODEL_LIST_NAMES = [
     "ElasticNet",
     "KNN",
     "Decision Tree",
-    "MLP",
+    "MLP (Neural Net)",
     "SVR",
     "Huber Regressor",
     "XGBoost",
     "LightGBM",
     "CatBoost",
+    "Ensemble (Average)",
+    "Ensemble (Median)",
+    "Ensemble (Stacking)",
+    "Ensemble (Uncertainty-Weighted Fusion)",
 ]
 
 # Optimizers

@@ -1,12 +1,24 @@
 import os
 import joblib
 import numpy as np
-from qgis.core import QgsProcessingException, QgsProject, QgsRasterLayer
-from qgis import processing
+try:
+    from qgis.core import QgsProcessingException, QgsProject, QgsRasterLayer
+    from qgis import processing
+except ImportError:
+    QgsProcessingException = Exception
+    QgsProject = None
+    QgsRasterLayer = None
+    processing = None
 
-from Bathymetrix_AI.infrastructure.logging import append_log
-from Bathymetrix_AI.core.ml.trainers import extract_samples, run_phase03_initial_modeling, predict_map
-from Bathymetrix_AI.core.temporal.temporal_reporting import TemporalReportGenerator
+try:
+    from Bathymetrix_AI.infrastructure.logging import append_log
+    from Bathymetrix_AI.core.ml.trainers import extract_samples, run_phase03_initial_modeling, predict_map
+    from Bathymetrix_AI.core.temporal.temporal_reporting import TemporalReportGenerator
+except (ImportError, ValueError):
+    from infrastructure.logging import append_log
+    from core.ml.trainers import extract_samples, run_phase03_initial_modeling, predict_map
+    from core.temporal.temporal_reporting import TemporalReportGenerator
+
 
 class SpatiotemporalSDBRunner:
     def __init__(self, master_output_folder):
@@ -430,8 +442,8 @@ class SpatiotemporalSDBRunner:
             run_params["INPUT_ORIGINAL_FEAT"] = p1_feat
             run_params["INPUT_GLOBAL_RASTER"] = p3_map
             run_params["INPUT_TRAIN"] = outputs["P2_VEC"]
-            run_params["FIELD_TRAIN"] = run_params.get("FIELD_DEPTH", "")
-            run_params["SPATIAL_CV"] = algorithm.parameterAsBool(masterflow_params, "SPATIAL_CV_P4", context)
+            run_params["SPATIAL_CV"] = algorithm.parameterAsBool(masterflow_params, "SPATIAL_CV_P4", context) if (algorithm and hasattr(algorithm, "parameterAsBool")) else masterflow_params.get("SPATIAL_CV_P4", False)
+            run_params["ENABLE_DEPTH_VARIANCE_CORR"] = algorithm.parameterAsBool(masterflow_params, "ENABLE_DEPTH_VARIANCE_CORR_P4", context) if (algorithm and hasattr(algorithm, "parameterAsBool")) else masterflow_params.get("ENABLE_DEPTH_VARIANCE_CORR_P4", False)
             
             ui_stack = run_params.get("STACK_COMPONENTS_P4", [0, 1])
             run_params["STACK_COMPONENTS"] = [x + 1 for x in ui_stack]
@@ -589,17 +601,14 @@ class SpatiotemporalSDBRunner:
                 final_sdb_path = os.path.join(year_out_dir, f"SDB {year}.tif")
                 shutil.copy2(final_map, final_sdb_path)
                 
-                # Copy QML style if it exists
-                src_qml = os.path.splitext(final_map)[0] + ".qml"
-                dst_qml = os.path.splitext(final_sdb_path)[0] + ".qml"
-                if os.path.exists(src_qml):
-                    shutil.copy2(src_qml, dst_qml)
+                # Generate standardized QML style
+                from Bathymetrix_AI.infrastructure.raster_io import write_qml_style, StylePostProcessor
+                dst_qml = write_qml_style(final_sdb_path)
                 
                 append_log(f"  ✓ Saved final map: {os.path.basename(final_sdb_path)}", log_path, feedback)
                 
                 details = QgsProcessingContext.LayerDetails(f"SDB {year}", QgsProject.instance(), "SDB")
-                if os.path.exists(dst_qml):
-                    from Bathymetrix_AI.core.pipeline import StylePostProcessor
+                if dst_qml and os.path.exists(dst_qml):
                     details.setPostProcessor(StylePostProcessor(dst_qml))
                 context.addLayerToLoadOnCompletion(final_sdb_path, details)
             
@@ -612,9 +621,23 @@ class SpatiotemporalSDBRunner:
         tm, ts = divmod(int(total_elapsed), 60)
         th, tm = divmod(tm, 60)
         
-        append_log("════════════════════════════════════════════════════════════", log_path, feedback)
-        append_log(f"✓ SDB Spatiotemporal Masterflow Completed".center(60), log_path, feedback)
-        append_log(f"Total Time: {th:02d}:{tm:02d}:{ts:02d}", log_path, feedback)
-        append_log("════════════════════════════════════════════════════════════", log_path, feedback)
+        try:
+            from Bathymetrix_AI.infrastructure.logging import log_module_completion
+            primary_files = {
+                "Multi-Year Analytics": os.path.join(self.master_output_folder, "MultiYear_Analytics"),
+                "Final Execution Log": log_path
+            }
+            log_module_completion(
+                module_title=f"SDB Spatiotemporal Masterflow ({len(yearly_datasets)} Years - Elapsed: {th:02d}:{tm:02d}:{ts:02d})",
+                out_dir=self.master_output_folder,
+                primary_files=primary_files,
+                log_path=log_path,
+                feedback=feedback
+            )
+        except Exception:
+            append_log("════════════════════════════════════════════════════════════", log_path, feedback)
+            append_log(f"✓ SDB Spatiotemporal Masterflow Completed".center(60), log_path, feedback)
+            append_log(f"Total Time: {th:02d}:{tm:02d}:{ts:02d}", log_path, feedback)
+            append_log("════════════════════════════════════════════════════════════", log_path, feedback)
         
         return {"OUTPUT_FOLDER": self.master_output_folder, "LOG_FILE": log_path}

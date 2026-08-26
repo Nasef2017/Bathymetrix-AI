@@ -1,19 +1,33 @@
 import os
 import shutil
 from typing import Dict, Any, Optional
-from qgis.core import (
-    QgsProcessingContext,
-    QgsProcessingFeedback,
-    QgsProcessingException,
-    QgsVectorLayer,
-    QgsFeature,
-    QgsField,
-    QgsVectorFileWriter,
-    QgsWkbTypes,
-    QgsProject,
-)
-from qgis.PyQt.QtCore import QVariant
-import processing
+try:
+    from qgis.core import (
+        QgsProcessingContext,
+        QgsProcessingFeedback,
+        QgsProcessingException,
+        QgsVectorLayer,
+        QgsFeature,
+        QgsField,
+        QgsVectorFileWriter,
+        QgsWkbTypes,
+        QgsProject,
+    )
+    from qgis.PyQt.QtCore import QVariant
+    import processing
+except ImportError:
+    QgsProcessingContext = None
+    QgsProcessingFeedback = object
+    QgsProcessingException = Exception
+    QgsVectorLayer = None
+    QgsFeature = None
+    QgsField = None
+    QgsVectorFileWriter = None
+    QgsWkbTypes = None
+    QgsProject = None
+    QVariant = None
+    processing = None
+
 
 
 class TemporalSDBRunner:
@@ -39,7 +53,7 @@ class TemporalSDBRunner:
             return default_field
             
         # Common depth field names to try if default_field is not found
-        common_names = ["depth", "z", "elevation", "z_value", "value", "ortho_h", "dz"]
+        common_names = ["field_3", "field3", "final_level", "depth", "z", "elevation", "z_value", "value", "ortho_h", "dz"]
         lower_fields = {f.lower(): f for f in field_names}
         
         for cn in common_names:
@@ -49,7 +63,7 @@ class TemporalSDBRunner:
                 return detected
                 
         # Fallback to the last numeric field
-        for f in reversed(vlayer.fields().toList()):
+        for f in reversed([f for f in vlayer.fields()]):
             if f.isNumeric():
                 feedback.pushInfo(f"⚠️ Field '{default_field}' not found. Auto-fallback to numeric field '{f.name()}'.")
                 return f.name()
@@ -279,35 +293,6 @@ class TemporalSDBRunner:
             del writer
 
         return out_shp
-
-    def _resolve_depth_field(self, layer_path: str, requested_field: str, feedback: QgsProcessingFeedback) -> str:
-        """
-        Attempts to resolve the depth field for a shapefile if the requested field does not exist.
-        """
-        layer = QgsVectorLayer(layer_path, "temp", "ogr")
-        if not layer.isValid():
-            return requested_field
-            
-        fields = [f.name() for f in layer.fields()]
-        if requested_field in fields:
-            return requested_field
-            
-        # Fallback to common depth fields
-        common_depth_fields = ["depth", "z", "elevation", "ortho_h", "z_depth", "z_value", "z_m"]
-        for cf in common_depth_fields:
-            for f in fields:
-                if f.lower() == cf:
-                    feedback.pushWarning(f"⚠️ Requested depth field '{requested_field}' not found. Falling back to '{f}'.")
-                    return f
-                    
-        # Fallback to the last numeric field
-        for i in range(len(layer.fields()) - 1, -1, -1):
-            if layer.fields().at(i).type() in [QVariant.Double, QVariant.Int]:
-                f_name = layer.fields().at(i).name()
-                feedback.pushWarning(f"⚠️ No common depth field found. Falling back to last numeric field: '{f_name}'.")
-                return f_name
-                
-        return requested_field
 
     def _find_raster_output(self, folder: str, keywords: list) -> Optional[str]:
         for kw in keywords:

@@ -63,6 +63,28 @@ class SDBModule03(QgsProcessingAlgorithm):
     ENSEMBLE_SIZE = "ENSEMBLE_SIZE"
     SPATIAL_CV = "SPATIAL_CV"
 
+    SCORE_SELECTION_STRATEGY = "SCORE_SELECTION_STRATEGY"
+    SCORE_METRICS = "SCORE_METRICS"
+    SCORE_CUSTOM_CONFIG = "SCORE_CUSTOM_CONFIG"
+
+    SCORE_STRATEGY_OPTIONS = [
+        "Winner Stability (Monte Carlo Sensitivity Analysis) [Default]",
+        "Highest SDB Composite Score (Max Baseline Score 0-100)",
+        "Highest R² Accuracy",
+        "Lowest RMSE (Minimum Vertical Error)",
+        "Lowest wMAPE (%)",
+        "Lowest |Bias| (Zero-Mean Residual Offset)",
+        "Lowest MAE (Mean Absolute Error)",
+    ]
+
+    SCORE_METRIC_OPTIONS = [
+        "R² Accuracy (Correlation & Explained Variance)",
+        "RMSE (Root Mean Squared Vertical Error)",
+        "wMAPE (Weighted Mean Absolute Percentage Error)",
+        "|Bias| (Zero-Mean Residual Shift Offset)",
+        "MAE (Mean Absolute Error)",
+    ]
+
     REMOVE_POSITIVES = "REMOVE_POSITIVES"
     ENABLE_SLOPE_FILTER = "ENABLE_SLOPE_FILTER"
     SLOPE_THRESHOLD = "SLOPE_THRESHOLD"
@@ -86,6 +108,10 @@ class SDBModule03(QgsProcessingAlgorithm):
         "XGBoost",
         "LightGBM",
         "CatBoost",
+        "Ensemble (Average)",
+        "Ensemble (Median)",
+        "Ensemble (Stacking)",
+        "Ensemble (Uncertainty-Weighted Fusion)",
     ]
     OPTIMIZER_LIST = ["Random Search", "Grid Search", "Bayesian Search"]
     COLLISION_LIST = [
@@ -114,7 +140,7 @@ class SDBModule03(QgsProcessingAlgorithm):
             QgsProcessingParameterField(
                 self.FIELD_DEPTH,
                 "Depth Field",
-                defaultValue="depth",
+                defaultValue="ortho_h",
                 parentLayerParameterName=self.INPUT_POINTS,
                 type=QgsProcessingParameterField.Numeric,
             )
@@ -123,6 +149,7 @@ class SDBModule03(QgsProcessingAlgorithm):
             QgsProcessingParameterField(
                 self.FIELD_WEIGHT,
                 "Weight Field",
+                defaultValue="confidence",
                 parentLayerParameterName=self.INPUT_POINTS,
                 type=QgsProcessingParameterField.Numeric,
                 optional=True,
@@ -135,7 +162,7 @@ class SDBModule03(QgsProcessingAlgorithm):
                 "Select Algorithms",
                 options=self.MODEL_LIST,
                 allowMultiple=True,
-                defaultValue=[3, 12, 13, 14], # Extra Trees, XGBoost, LightGBM, CatBoost
+                defaultValue=[3, 12, 13, 14, 15, 17], # Extra Trees, XGBoost, LightGBM, CatBoost, Ensemble Average, Ensemble Stacking
             )
         )
         self.addParameter(
@@ -160,21 +187,6 @@ class SDBModule03(QgsProcessingAlgorithm):
                 "Optimization Iterations",
                 type=QgsProcessingParameterNumber.Integer,
                 defaultValue=10,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterBoolean(
-                self.ENABLE_ENSEMBLE,
-                "⚙️ Enable Ensemble of Top Models",
-                defaultValue=False,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterEnum(
-                self.ENSEMBLE_METHOD,
-                "📊 Ensemble Blending Method",
-                options=["Average", "Median", "Stacking", "Uncertainty-Weighted Fusion"],
-                defaultValue=0,
             )
         )
         p_ens_size = QgsProcessingParameterNumber(
@@ -355,6 +367,35 @@ class SDBModule03(QgsProcessingAlgorithm):
         p_max_d.setFlags(p_max_d.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_max_d)
 
+        # --- SDB Composite Score & Model Selection Strategy ---
+        p_strat = QgsProcessingParameterEnum(
+            self.SCORE_SELECTION_STRATEGY,
+            "🎯 [Auto-ML Ranking] Model Selection Strategy / Criterion",
+            options=self.SCORE_STRATEGY_OPTIONS,
+            defaultValue=0,
+        )
+        p_strat.setFlags(p_strat.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_strat)
+
+        p_metrics = QgsProcessingParameterEnum(
+            self.SCORE_METRICS,
+            "⚖️ [Score Equation] Included Evaluation Metrics (Auto-Balanced)",
+            options=self.SCORE_METRIC_OPTIONS,
+            allowMultiple=True,
+            defaultValue=[0, 1, 2, 3],
+        )
+        p_metrics.setFlags(p_metrics.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_metrics)
+
+        p_custom_cfg = QgsProcessingParameterString(
+            self.SCORE_CUSTOM_CONFIG,
+            "🎛️ [Custom Score Matrix] Optional Weights (e.g. 'R2: 50, MAE: 50') & Simulation Settings",
+            defaultValue="R2: 35, RMSE: 30, wMAPE: 20, Bias: 15, Rounds: 20, Variation: +/-35%",
+            optional=True,
+        )
+        p_custom_cfg.setFlags(p_custom_cfg.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_custom_cfg)
+
         self.addOutput(
             QgsProcessingOutputRasterLayer(self.OUTPUT_DEPTH_MAP, "Output Depth Map")
         )
@@ -403,6 +444,28 @@ class SDBModule03(QgsProcessingAlgorithm):
         return self.shortHelpString()
 
     def processAlgorithm(self, parameters, context, feedback):
+        import os
         from ...core.ml.trainers import run_phase03_initial_modeling
+        from ...infrastructure.raster_io import StylePostProcessor
 
-        return run_phase03_initial_modeling(self, parameters, context, feedback)
+        results = run_phase03_initial_modeling(self, parameters, context, feedback)
+
+        try:
+            depth_map = results.get("OUTPUT_DEPTH_MAP")
+            if (
+                depth_map
+                and os.path.exists(depth_map)
+                and context
+                and hasattr(context, "layerToLoadOnCompletionDetails")
+                and parameters.get(self.OUTPUT_DEPTH_MAP) is not None
+            ):
+                qml_path = os.path.splitext(depth_map)[0] + ".qml"
+                if os.path.exists(qml_path) and StylePostProcessor:
+                    details = context.layerToLoadOnCompletionDetails(self.OUTPUT_DEPTH_MAP)
+                    if details:
+                        details.setPostProcessor(StylePostProcessor(qml_path))
+        except Exception:
+            pass
+
+
+        return results

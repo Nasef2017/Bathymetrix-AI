@@ -1,7 +1,10 @@
 # infrastructure/raster_io.py
 import rasterio
 import numpy as np
-import processing
+try:
+    import processing
+except ImportError:
+    processing = None
 
 
 def remove_positive_pixels(in_path, out_path, nodata_val=-9999.0, feedback=None):
@@ -143,3 +146,156 @@ def slope_filter_depth(
         if feedback:
             feedback.pushWarning(f"Failed to apply slope filter: {str(e)}")
         return depth_raster
+
+
+def get_raster_min_max(raster_path):
+    """
+    Robust calculation of raster min/max depths for bathymetry color ramp scaling.
+    Excludes nodata, NaNs, and extreme outliers.
+    """
+    import os
+    if not raster_path or not os.path.exists(raster_path):
+        return -30.0, 0.0
+    try:
+        with rasterio.open(raster_path) as src:
+            data = src.read(1)
+            nodata = src.nodata if src.nodata is not None else -9999.0
+            valid = (data != nodata) & (data > -9000) & (~np.isnan(data))
+            if not np.any(valid):
+                return -30.0, 0.0
+            v_data = data[valid]
+            p2 = float(np.nanpercentile(v_data, 1.0))
+            p98 = float(np.nanpercentile(v_data, 99.0))
+            if p2 >= p98:
+                p2 = float(np.min(v_data))
+                p98 = float(np.max(v_data))
+            if p2 >= p98:
+                p2, p98 = p2 - 5.0, p2 + 1.0
+            return p2, p98
+    except Exception:
+        return -30.0, 0.0
+
+
+def write_qml_style(tif_path):
+    """
+    Writes a standardized QGIS Layer Style (.qml) alongside the given GeoTIFF raster.
+    Creates a unified Single-Band Pseudocolor ocean bathymetry theme (Deep Navy -> Shallow Surf/White).
+    """
+    import os
+    if not tif_path or not os.path.exists(tif_path):
+        return None
+    
+    qml_path = os.path.splitext(tif_path)[0] + ".qml"
+    min_d, max_d = get_raster_min_max(tif_path)
+    
+    step = (max_d - min_d) / 8.0
+    if step <= 0:
+        step = 1.0
+    
+    # Base palette: Deep Navy -> Pale White/Surf
+    palette = [
+        "#08306b", "#08519c", "#2171b5", "#4292c6",
+        "#6baed6", "#9ecae1", "#c6dbef", "#deebf7", "#f7fbff"
+    ]
+    
+    # Check if depths are positive convention (e.g. 0m shallow -> +30m deep)
+    is_positive_convention = (min_d >= 0 and max_d > 0)
+    
+    if is_positive_convention:
+        # min_d is Shallow, max_d is Deep -> reverse palette so max_d gets deep navy
+        colors = list(reversed(palette))
+        items_xml = []
+        for i in range(9):
+            val = min_d + step * i if i < 8 else max_d
+            lbl = f"{val:.2f} m"
+            if i == 0:
+                lbl += " (Shallow)"
+            elif i == 8:
+                lbl += " (Deep)"
+            items_xml.append(f'          <item alpha="255" value="{val}" label="{lbl}" color="{colors[i]}"/>')
+    else:
+        # min_d is Deep (e.g. -30m), max_d is Shallow (e.g. 0m)
+        colors = palette
+        items_xml = []
+        for i in range(9):
+            val = min_d + step * i if i < 8 else max_d
+            lbl = f"{val:.2f} m"
+            if i == 0:
+                lbl += " (Deep)"
+            elif i == 8:
+                lbl += " (Shallow)"
+            items_xml.append(f'          <item alpha="255" value="{val}" label="{lbl}" color="{colors[i]}"/>')
+            
+    items_block = "\n".join(items_xml)
+    
+    qml_content = f"""<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
+<qgis version="3.28.0" hasScaleBasedVisibilityFlag="0" minScale="1e+08" maxScale="0">
+  <pipe>
+    <provider>
+      <resampling zoomedOutResamplingMethod="nearestNeighbour" maxOversampling="2" zoomedInResamplingMethod="nearestNeighbour" enabled="false"/>
+    </provider>
+    <rasterrenderer opacity="1" classificationMin="{min_d}" nodataColor="" alphaBand="-1" classificationMax="{max_d}" band="1" type="singlebandpseudocolor">
+      <rasterTransparency/>
+      <minMaxOrigin>
+        <limits>None</limits>
+        <extent>WholeRaster</extent>
+        <statAccuracy>Estimated</statAccuracy>
+        <cumulativeCutLower>0.02</cumulativeCutLower>
+        <cumulativeCutUpper>0.98</cumulativeCutUpper>
+        <stdDevFactor>2</stdDevFactor>
+      </minMaxOrigin>
+      <rastershader>
+        <colorrampshader classificationMode="1" colorRampType="INTERPOLATED" labelPrecision="4" clip="0">
+{items_block}
+        </colorrampshader>
+      </rastershader>
+    </rasterrenderer>
+    <brightnesscontrast brightness="0" contrast="0"/>
+    <huesaturation colorizeGreen="128" colorizeStrength="100" saturation="0" colorizeOn="0" grayscaleMode="0" colorizeRed="255" colorizeBlue="128"/>
+    <rasterresampler maxOversampling="2"/>
+  </pipe>
+  <blendMode>0</blendMode>
+</qgis>
+"""
+    try:
+        with open(qml_path, "w", encoding="utf-8") as f:
+            f.write(qml_content)
+        return qml_path
+    except Exception:
+        return None
+
+
+try:
+    from qgis.core import QgsProcessingLayerPostProcessorInterface
+
+    class StylePostProcessor(QgsProcessingLayerPostProcessorInterface):
+        """
+        QGIS Processing Layer Post-Processor to apply a .qml style file
+        automatically when a layer is loaded upon algorithm completion.
+        Maintains an internal reference registry to prevent garbage collection by PyQGIS.
+        """
+        _instances = []
+
+        def __init__(self, style_path):
+            super().__init__()
+            self.style_path = str(style_path) if style_path else ""
+            StylePostProcessor._instances.append(self)
+
+        def postProcessLayer(self, layer, context, feedback):
+            import os
+            try:
+                if layer and layer.isValid() and self.style_path and os.path.exists(self.style_path):
+                    layer.loadNamedStyle(self.style_path)
+                    layer.triggerRepaint()
+                    if feedback:
+                        feedback.pushInfo(f"🎨 Applied bathymetric symbology from: {self.style_path}")
+            except Exception:
+                pass
+
+        @staticmethod
+        def create(style_path):
+            return StylePostProcessor(style_path)
+except Exception:
+    StylePostProcessor = None
+
+

@@ -7,21 +7,30 @@ import matplotlib
 import numpy as np
 import pandas as pd
 import rasterio
-from qgis.PyQt.QtCore import QVariant
-from qgis.core import (
-    QgsCoordinateReferenceSystem,
-    QgsRasterLayer,
-    QgsCoordinateTransform,
-    QgsProject,
-    QgsPointXY,
-)
+try:
+    from qgis.PyQt.QtCore import QVariant
+    from qgis.core import (
+        QgsCoordinateReferenceSystem,
+        QgsRasterLayer,
+        QgsCoordinateTransform,
+        QgsProject,
+        QgsPointXY,
+    )
+except ImportError:
+    QVariant = None
+    QgsCoordinateReferenceSystem = None
+    QgsRasterLayer = None
+    QgsCoordinateTransform = None
+    QgsProject = None
+    QgsPointXY = None
+
 from sklearn.ensemble import (
     ExtraTreesRegressor,
     GradientBoostingRegressor,
     RandomForestRegressor,
 )
 from sklearn.linear_model import ElasticNet, Lasso, LinearRegression, Ridge, HuberRegressor
-from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, train_test_split
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.neural_network import MLPRegressor
@@ -121,21 +130,33 @@ class CustomEnsembleRegressor(BaseEstimator, RegressorMixin):
 
         return np.mean(preds, axis=1)
 
-from qgis.core import (
-    QgsCoordinateTransform,
-    QgsFeature,
-    QgsField,  # <--- تم إضافة هذا السطر لحل المشكلة
-    QgsFields,
-    QgsGeometry,
-    QgsPointXY,
-    QgsProcessingException,
-    QgsProject,
-    QgsRasterLayer,
-    QgsVectorFileWriter,
-    QgsWkbTypes,
-)
+try:
+    from qgis.core import (
+        QgsCoordinateTransform,
+        QgsFeature,
+        QgsField,
+        QgsFields,
+        QgsGeometry,
+        QgsPointXY,
+        QgsProcessingException,
+        QgsProject,
+        QgsRasterLayer,
+        QgsVectorFileWriter,
+        QgsWkbTypes,
+    )
+except ImportError:
+    QgsFields = None
+    QgsGeometry = None
+    QgsProcessingException = Exception
+    QgsVectorFileWriter = None
+    QgsWkbTypes = None
 
-from ...infrastructure.logging import append_log
+
+try:
+    from ...infrastructure.logging import append_log
+except (ImportError, ValueError):
+    from infrastructure.logging import append_log
+
 
 try:
     from skopt import BayesSearchCV
@@ -710,7 +731,6 @@ def export_feature_importance(model, win_name, X_val, y_val, out_dir, log_path, 
     plt.title(f"Model Feature Importance ({win_name})\nMethod: {method_used}")
     plt.grid(axis="x", linestyle="--", alpha=0.7)
     plt.tight_layout()
-    
     img_path = os.path.join(out_dir, "3_Model_Feature_Importance.png")
     plt.savefig(img_path, dpi=150)
     plt.close()
@@ -718,11 +738,432 @@ def export_feature_importance(model, win_name, X_val, y_val, out_dir, log_path, 
     append_log(f"   Saved feature importance plot and report to: {out_dir}", log_path, feedback)
 
 
+def parse_score_config(algorithm, parameters, context=None) -> dict:
+    """
+    Parses customizable score settings and model selection strategy from QGIS algorithm parameters.
+    Supports:
+      - SCORE_SELECTION_STRATEGY: Strategy Enum (0 to 6)
+      - SCORE_METRICS: Multi-select checkboxes for metrics [0: R2, 1: RMSE, 2: wMAPE, 3: Bias, 4: MAE]
+      - SCORE_CUSTOM_CONFIG: Optional custom weights (e.g. 'R2: 70, RMSE: 30') and simulation settings
+    """
+    config = {
+        "selection_strategy": 0,
+        "strategy_name": "Winner Stability (Monte Carlo Sensitivity)",
+        "weights": {
+            "R2": 0.35,
+            "RMSE": 0.30,
+            "wMAPE": 0.20,
+            "Bias": 0.15,
+            "MAE": 0.0,
+        },
+        "n_rounds": 20,
+        "variation_pct": 0.35,
+        "weight_ranges": "",
+    }
+
+    if parameters is None:
+        return config
+
+    def _get_val(param_name, default_val):
+        if hasattr(algorithm, "parameterDefinition") and algorithm.parameterDefinition(param_name):
+            if isinstance(default_val, bool):
+                return algorithm.parameterAsBool(parameters, param_name, context)
+            elif isinstance(default_val, int):
+                return algorithm.parameterAsInt(parameters, param_name, context)
+            elif isinstance(default_val, float):
+                return algorithm.parameterAsDouble(parameters, param_name, context)
+            elif isinstance(default_val, list):
+                return algorithm.parameterAsEnums(parameters, param_name, context)
+            elif isinstance(default_val, str):
+                return algorithm.parameterAsString(parameters, param_name, context)
+        # Fallback to dict lookup
+        if isinstance(parameters, dict) and param_name in parameters:
+            val = parameters[param_name]
+            if val is not None and str(val).strip() != "":
+                try:
+                    if isinstance(default_val, list):
+                        if isinstance(val, (list, tuple)):
+                            return [int(x) for x in val]
+                        return [int(x.strip()) for x in str(val).split(",") if x.strip().isdigit()]
+                    elif isinstance(default_val, int):
+                        return int(val)
+                    elif isinstance(default_val, float):
+                        return float(val)
+                    elif isinstance(default_val, bool):
+                        return bool(val)
+                    return str(val)
+                except Exception:
+                    pass
+        return default_val
+
+    # 1. Strategy Enum
+    strategy_options = [
+        "Winner Stability (Monte Carlo Sensitivity)",
+        "Highest SDB Composite Score (Max Baseline Score)",
+        "Highest R² Accuracy",
+        "Lowest RMSE (Minimum Vertical Error)",
+        "Lowest wMAPE (%)",
+        "Lowest |Bias| (Zero-Mean Residual Offset)",
+        "Lowest MAE (Mean Absolute Error)",
+    ]
+    strat_idx = _get_val("SCORE_SELECTION_STRATEGY", 0)
+    if isinstance(strat_idx, int) and 0 <= strat_idx < len(strategy_options):
+        config["selection_strategy"] = strat_idx
+        config["strategy_name"] = strategy_options[strat_idx]
+    elif isinstance(strat_idx, str):
+        config["strategy_name"] = strat_idx
+        for idx, opt in enumerate(strategy_options):
+            if opt.lower().startswith(strat_idx.lower()) or strat_idx.lower() in opt.lower():
+                config["selection_strategy"] = idx
+                config["strategy_name"] = opt
+                break
+
+    # 2. Metric Checkboxes (0: R2, 1: RMSE, 2: wMAPE, 3: Bias, 4: MAE)
+    metric_keys = ["R2", "RMSE", "wMAPE", "Bias", "MAE"]
+    default_base_weights = {"R2": 35.0, "RMSE": 30.0, "wMAPE": 20.0, "Bias": 15.0, "MAE": 15.0}
+    
+    selected_metric_indices = _get_val("SCORE_METRICS", [0, 1, 2, 3])
+    if not isinstance(selected_metric_indices, list) or len(selected_metric_indices) == 0:
+        selected_metric_indices = [0, 1, 2, 3]
+
+    active_metrics = set()
+    for m_idx in selected_metric_indices:
+        try:
+            m_int = int(m_idx)
+            if 0 <= m_int < len(metric_keys):
+                active_metrics.add(metric_keys[m_int])
+        except Exception:
+            pass
+
+    if not active_metrics:
+        active_metrics = {"R2", "RMSE"}
+
+    # Compute initial default weights for active metrics
+    raw_weights = {}
+    for m in metric_keys:
+        if m in active_metrics:
+            raw_weights[m] = default_base_weights.get(m, 20.0)
+        else:
+            raw_weights[m] = 0.0
+
+    # 3. Custom Config String (Custom Weights & Monte Carlo settings)
+    custom_cfg_str = _get_val("SCORE_CUSTOM_CONFIG", _get_val("SCORE_WEIGHT_RANGES", ""))
+    
+    # Check for legacy parameter overrides if present
+    for legacy_k, metric_name in [("SCORE_WEIGHT_R2", "R2"), ("SCORE_WEIGHT_RMSE", "RMSE"), 
+                                  ("SCORE_WEIGHT_WMAPE", "wMAPE"), ("SCORE_WEIGHT_BIAS", "Bias"), 
+                                  ("SCORE_WEIGHT_MAE", "MAE")]:
+        if isinstance(parameters, dict) and legacy_k in parameters:
+            try:
+                val = float(parameters[legacy_k])
+                raw_weights[metric_name] = max(0.0, val)
+                if val > 0:
+                    active_metrics.add(metric_name)
+            except Exception:
+                pass
+
+    if custom_cfg_str and isinstance(custom_cfg_str, str) and custom_cfg_str.strip():
+        import re
+        # Check for Rounds / n_rounds: e.g. "Rounds: 50"
+        rounds_m = re.search(r"(?:rounds|iterations|n_rounds|sim_rounds)\s*[:=]\s*(\d+)", custom_cfg_str, re.IGNORECASE)
+        if rounds_m:
+            config["n_rounds"] = max(1, int(rounds_m.group(1)))
+            
+        # Check for Variation / Variation_pct: e.g. "Variation: +/-25%" or "Variation: 30"
+        var_m = re.search(r"(?:variation|var|pct|tolerance)\s*[:=]\s*[\+\-\/\s]*([0-9.]+)\s*%?", custom_cfg_str, re.IGNORECASE)
+        if var_m:
+            v_val = float(var_m.group(1))
+            if v_val > 1.0:
+                v_val = v_val / 100.0
+            config["variation_pct"] = max(0.05, min(0.95, v_val))
+
+        # Check for custom weight assignments: e.g. "R2: 70, RMSE: 30" or "R2=50"
+        custom_weights_dict = {}
+        for m in metric_keys:
+            m_regex = re.compile(rf"\b{re.escape(m)}\b\s*[:=]\s*([0-9.]+)(?![\s,]*[0-9.]+\])", re.IGNORECASE)
+            match = m_regex.search(custom_cfg_str)
+            if match:
+                val = float(match.group(1))
+                custom_weights_dict[m] = max(0.0, val)
+
+        if custom_weights_dict:
+            max_c_val = max(custom_weights_dict.values())
+            scale_factor = 1.0 if (max_c_val <= 1.0 and sum(custom_weights_dict.values()) <= 1.5) else 100.0
+
+            if len(custom_weights_dict) >= len(metric_keys) - 1:
+                # Full matrix template provided
+                for m in metric_keys:
+                    if m in active_metrics:
+                        c_val = custom_weights_dict.get(m, 0.0)
+                        if c_val > 0:
+                            raw_weights[m] = c_val
+                        else:
+                            # Metric is active in checkboxes; assign proportional base weight
+                            raw_weights[m] = (default_base_weights.get(m, 20.0) / 100.0 * scale_factor) if scale_factor > 1.0 else (default_base_weights.get(m, 20.0) / 100.0)
+                    else:
+                        raw_weights[m] = 0.0
+            else:
+                # Short custom string (e.g. "R2: 70, RMSE: 30")
+                active_metrics = set(k for k, v in custom_weights_dict.items() if v > 0)
+                for m in metric_keys:
+                    raw_weights[m] = custom_weights_dict.get(m, 0.0)
+
+        config["weight_ranges"] = custom_cfg_str
+
+    # Simulation rounds direct fallback
+    if isinstance(parameters, dict) and "SCORE_SIM_ROUNDS" in parameters:
+        try:
+            config["n_rounds"] = max(1, int(parameters["SCORE_SIM_ROUNDS"]))
+        except Exception:
+            pass
+
+    # Normalize weights to sum exactly to 1.0 across active metrics
+    active_sum = sum(raw_weights[m] for m in active_metrics)
+    if active_sum <= 0:
+        # Fallback to equal weighting among active metrics
+        eq_w = 1.0 / len(active_metrics) if len(active_metrics) > 0 else 0.5
+        config["weights"] = {m: (eq_w if m in active_metrics else 0.0) for m in metric_keys}
+    else:
+        config["weights"] = {m: ((raw_weights[m] / active_sum) if m in active_metrics else 0.0) for m in metric_keys}
+
+    return config
+
+
+def parse_weight_ranges(ranges_str: str, base_weights: dict, variation_pct: float = 0.35) -> dict:
+    """
+    Parses custom weight bounds for Monte Carlo simulation.
+    Automatically scales bounds around active base weights using variation_pct (default +/-35%)
+    while clamping zero-weighted / unselected metrics to (0.0, 0.0).
+    """
+    ranges = {}
+    for k, w in base_weights.items():
+        if w <= 0.0:
+            ranges[k] = (0.0, 0.0)
+        else:
+            low_b = max(0.01, w * (1.0 - variation_pct))
+            high_b = min(1.0, w * (1.0 + variation_pct))
+            ranges[k] = (low_b, high_b)
+
+    if ranges_str and isinstance(ranges_str, str) and ranges_str.strip():
+        import re
+        pattern = re.compile(r"([A-Za-z0-9_]+)\s*[:=]\s*\[\s*([0-9.]+)\s*[,;\-\s]+\s*([0-9.]+)\s*\]")
+        for match in pattern.finditer(ranges_str):
+            metric_name, min_v, max_v = match.groups()
+            for k in base_weights.keys():
+                if metric_name.lower() == k.lower():
+                    try:
+                        low = float(min_v)
+                        high = float(max_v)
+                        if low > high:
+                            low, high = high, low
+                        if base_weights[k] <= 0.0:
+                            ranges[k] = (0.0, 0.0)
+                        else:
+                            ranges[k] = (max(0.0, low), max(low, high))
+                    except Exception:
+                        pass
+    return ranges
+
+
+def calculate_sdb_composite_score(
+    df: pd.DataFrame,
+    n_rounds: int = 20,
+    random_state: int = 42,
+    score_config: dict = None,
+    out_dir: str = None,
+    prefix: str = "3_",
+    **kwargs
+) -> pd.DataFrame:
+    """
+    Computes the SDB Composite Score (0-100) and executes a Multi-Weight Sensitivity
+    & Winner Stability Analysis across randomized weight configurations.
+    
+    Supports customizable weights, Monte Carlo bounds, and multiple model selection strategies:
+      - 0: "Winner Stability (Monte Carlo Sensitivity)" [Default]
+      - 1: "Highest SDB Composite Score (Max Baseline Score)"
+      - 2: "Highest R² Accuracy"
+      - 3: "Lowest RMSE (Minimum Vertical Error)"
+      - 4: "Lowest wMAPE (%)"
+      - 5: "Lowest |Bias| (Zero-Mean Residual Offset)"
+      - 6: "Lowest MAE (Mean Absolute Error)"
+    """
+    df = df.copy()
+    if len(df) == 0:
+        return df
+
+    if score_config is None:
+        score_config = {}
+
+    strat = score_config.get("selection_strategy", 0)
+    user_weights = score_config.get("weights", {
+        "R2": 0.35, "RMSE": 0.30, "wMAPE": 0.20, "Bias": 0.15, "MAE": 0.0
+    })
+    sim_rounds = score_config.get("n_rounds", n_rounds)
+    ranges_str = score_config.get("weight_ranges", "")
+
+    # Ensure required columns exist
+    for col in ["R2", "RMSE", "wMAPE"]:
+        if col not in df.columns:
+            df[col] = 0.0
+    if "Bias" not in df.columns:
+        df["Bias"] = 0.0
+    if "MAE" not in df.columns:
+        df["MAE"] = df["Bias"].abs()
+
+    # Normalize user weights to sum to 1.0
+    tot_w = sum(user_weights.values())
+    if tot_w <= 0:
+        norm_weights = {"R2": 0.35, "RMSE": 0.30, "wMAPE": 0.20, "Bias": 0.15, "MAE": 0.0}
+    else:
+        norm_weights = {k: v / tot_w for k, v in user_weights.items()}
+
+    if len(df) == 1:
+        df["SDB_Score"] = 100.0
+        df["Stability"] = 100.0
+        df["Wins"] = f"{sim_rounds}/{sim_rounds}"
+        df["Mean_Score"] = 100.0
+        return df
+
+    # Normalization helper (0 to 1)
+    def _norm_higher(series):
+        s_min = float(series.min())
+        s_max = float(series.max())
+        if np.isclose(s_max, s_min) or s_max == s_min:
+            return np.ones(len(series))
+        return ((series - s_min) / (s_max - s_min)).to_numpy()
+
+    def _norm_lower(series):
+        s_min = float(series.min())
+        s_max = float(series.max())
+        if np.isclose(s_max, s_min) or s_max == s_min:
+            return np.ones(len(series))
+        return ((s_max - series) / (s_max - s_min)).to_numpy()
+
+    r2_n = _norm_higher(df["R2"])
+    rmse_n = _norm_lower(df["RMSE"])
+    wmape_n = _norm_lower(df["wMAPE"])
+    bias_n = _norm_lower(df["Bias"].abs())
+    mae_n = _norm_lower(df["MAE"])
+
+    norm_series = {
+        "R2": r2_n,
+        "RMSE": rmse_n,
+        "wMAPE": wmape_n,
+        "Bias": bias_n,
+        "MAE": mae_n,
+    }
+
+    # Standard baseline composite score (0-100)
+    baseline_score = np.zeros(len(df))
+    for k, w in norm_weights.items():
+        if w > 0.0 and k in norm_series:
+            baseline_score += w * norm_series[k]
+    baseline_score *= 100.0
+
+    # Multi-Weight Sensitivity Simulation (sim_rounds)
+    rng = np.random.RandomState(random_state)
+    sim_bounds = parse_weight_ranges(ranges_str, norm_weights, variation_pct=score_config.get("variation_pct", 0.35))
+
+    round_scores = np.zeros((len(df), sim_rounds))
+    wins = np.zeros(len(df), dtype=int)
+    rounds_log = []
+
+    for k in range(sim_rounds):
+        sampled_u = {}
+        tot_u = 0.0
+        for metric, (low_b, high_b) in sim_bounds.items():
+            if norm_weights.get(metric, 0.0) <= 0.0 or high_b <= 0.0:
+                sampled_u[metric] = 0.0
+            else:
+                val = rng.uniform(low_b, high_b)
+                sampled_u[metric] = val
+                tot_u += val
+
+        if tot_u <= 0.0:
+            tot_u = 1.0
+            sampled_u = norm_weights.copy()
+
+        score_k = np.zeros(len(df))
+        normalized_weights_k = {}
+        for metric, val in sampled_u.items():
+            w_k = val / tot_u
+            normalized_weights_k[metric] = round(float(w_k), 4)
+            if w_k > 0.0 and metric in norm_series:
+                score_k += w_k * norm_series[metric]
+        score_k *= 100.0
+
+        round_scores[:, k] = score_k
+        winner_k = int(np.argmax(score_k))
+        wins[winner_k] += 1
+
+        if out_dir:
+            round_entry = {
+                "Round": k + 1,
+                "Weight_R2": normalized_weights_k.get("R2", 0.0),
+                "Weight_RMSE": normalized_weights_k.get("RMSE", 0.0),
+                "Weight_wMAPE": normalized_weights_k.get("wMAPE", 0.0),
+                "Weight_Bias": normalized_weights_k.get("Bias", 0.0),
+                "Weight_MAE": normalized_weights_k.get("MAE", 0.0),
+            }
+            if "Algorithm" in df.columns:
+                for algo_idx, algo_name in enumerate(df["Algorithm"]):
+                    round_entry[f"Score_{algo_name}"] = round(float(score_k[algo_idx]), 2)
+                round_entry["Round_Winner"] = str(df.iloc[winner_k]["Algorithm"])
+            else:
+                round_entry["Round_Winner"] = f"Model_{winner_k + 1}"
+            round_entry["Winning_Score"] = round(float(score_k[winner_k]), 2)
+            rounds_log.append(round_entry)
+
+    if out_dir and len(rounds_log) > 0:
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+            csv_name = f"{prefix}Score_Sensitivity_Rounds.csv"
+            rounds_csv_path = os.path.join(out_dir, csv_name)
+            df_rounds = pd.DataFrame(rounds_log)
+            df_rounds.to_csv(rounds_csv_path, index=False, encoding="utf-8")
+        except Exception:
+            pass
+
+    df["Stability"] = np.round((wins / sim_rounds) * 100.0, 1)
+    df["Wins"] = [f"{w}/{sim_rounds}" for w in wins]
+    df["Mean_Score"] = np.round(np.mean(round_scores, axis=1), 2)
+    df["SDB_Score"] = np.round(baseline_score, 2)
+
+    # Ranking and Winner Selection Strategy
+    df["Abs_Bias"] = df["Bias"].abs()
+    if strat == 1 or strat == "Highest Composite Score (SDB Score)" or strat == "Highest SDB Composite Score (Max Baseline Score)":
+        # Sort by SDB Composite Score descending
+        df = df.sort_values(by=["SDB_Score", "R2", "Stability"], ascending=[False, False, False]).reset_index(drop=True)
+    elif strat == 2 or strat == "Highest R² Accuracy":
+        # Sort by R2 descending
+        df = df.sort_values(by=["R2", "SDB_Score", "Stability"], ascending=[False, False, False]).reset_index(drop=True)
+    elif strat == 3 or strat == "Lowest RMSE (Minimum Vertical Error)":
+        # Sort by RMSE ascending
+        df = df.sort_values(by=["RMSE", "SDB_Score"], ascending=[True, False]).reset_index(drop=True)
+    elif strat == 4 or strat == "Lowest wMAPE (%)":
+        # Sort by wMAPE ascending
+        df = df.sort_values(by=["wMAPE", "SDB_Score"], ascending=[True, False]).reset_index(drop=True)
+    elif strat == 5 or strat == "Lowest |Bias| (Zero-Mean Residual Offset)":
+        # Sort by Abs_Bias ascending
+        df = df.sort_values(by=["Abs_Bias", "SDB_Score"], ascending=[True, False]).reset_index(drop=True)
+    elif strat == 6 or strat == "Lowest MAE (Mean Absolute Error)":
+        # Sort by MAE ascending
+        df = df.sort_values(by=["MAE", "SDB_Score"], ascending=[True, False]).reset_index(drop=True)
+    else:
+        # Default: Winner Stability % (Wins), tie-break with Mean_Score, then SDB_Score, then R2
+        df = df.sort_values(by=["Stability", "Mean_Score", "SDB_Score", "R2"], ascending=[False, False, False, False]).reset_index(drop=True)
+
+    if "Abs_Bias" in df.columns:
+        df = df.drop(columns=["Abs_Bias"])
+
+    return df
+
+
 def run_benchmarking(
     X, y, weights, indices, n_iter, out_dir, feedback, opt_idx, log_path, custom_params,
-    test_size=0.2, random_state=42, n_jobs=-1, enable_ensemble=False, ensemble_method="Average",
+    test_size=0.2, random_state=42, n_jobs=-1, enable_ensemble=False, ensemble_method="All Ensemble Methods (Auto-Select)",
     spatial_cv=False, coords=None, selected_indices=None, ensemble_size=3, feature_names=None,
-    cv_folds=3
+    cv_folds=3, enable_depth_variance_corr=False, score_config=None
 ):
     X = np.nan_to_num(X, nan=0.0)
     
@@ -739,14 +1180,23 @@ def run_benchmarking(
         y_tr, y_val = y[train_idx], y[val_idx]
         w_tr = weights[train_idx]
         groups_tr = spatial_groups[train_idx]
-        append_log(f"   [Spatial CV] Split data into 5 geographic clusters using KMeans.", log_path, feedback)
+        append_log("   [Spatial CV] Split data into 5 geographic clusters using KMeans.", log_path, feedback)
     else:
+        from sklearn.model_selection import train_test_split
         X_tr, X_val, y_tr, y_val, w_tr, _ = train_test_split(
             X, y, weights, test_size=test_size, random_state=random_state
         )
 
+    all_indices = [int(i) for i in indices]
+    base_indices = [i for i in all_indices if i < 15]
+    ensemble_selected_indices = [i for i in all_indices if i >= 15]
+
+    if not base_indices:
+        base_indices = [3, 12, 13, 14]
+
     results = []
-    for idx in [int(i) for i in indices]:
+
+    for idx in base_indices:
         name, raw_base_model, default_params = get_model_and_params(idx, opt_idx, random_state, n_jobs)
         if raw_base_model is None:
             append_log(f"      ! Skipping {name}: Library is not installed.", log_path, feedback)
@@ -807,11 +1257,13 @@ def run_benchmarking(
                         import scipy.stats as stats
                         opt_params = {}
                         for k, v in params.items():
-                            if isinstance(v, list) and len(v) == 2 and all(isinstance(x, (int, float)) for x in v):
+                            if isinstance(v, list) and len(v) == 2 and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in v):
                                 if all(isinstance(x, int) for x in v) and v[0] < v[1]:
                                     opt_params[k] = stats.randint(v[0], v[1] + 1)
-                                else:
+                                elif v[0] < v[1]:
                                     opt_params[k] = stats.uniform(v[0], v[1] - v[0])
+                                else:
+                                    opt_params[k] = v
                             else:
                                 opt_params[k] = v
                         search = RandomizedSearchCV(
@@ -820,34 +1272,38 @@ def run_benchmarking(
                     elif current_opt_idx == 1:
                         opt_params = {}
                         for k, v in params.items():
-                            if isinstance(v, list) and len(v) == 2 and all(isinstance(x, (int, float)) for x in v):
+                            if isinstance(v, list) and len(v) == 2 and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in v):
                                 if all(isinstance(x, int) for x in v) and v[0] < v[1]:
-                                    opt_params[k] = list(np.linspace(v[0], v[1], 5, dtype=int))
-                                else:
+                                    opt_params[k] = list(np.linspace(v[0], v[1], min(5, v[1] - v[0] + 1), dtype=int))
+                                elif v[0] < v[1]:
                                     opt_params[k] = list(np.linspace(v[0], v[1], 5))
+                                else:
+                                    opt_params[k] = v
                             else:
                                 opt_params[k] = v
                         search = GridSearchCV(clone(raw_base_model), opt_params, cv=cv_splitter, n_jobs=search_n_jobs)
                     elif current_opt_idx == 2:
                         if OPTUNA_AVAILABLE:
-                            best_model_opt, best_params_opt = run_optuna_search(
+                            best_m, best_params = run_optuna_search(
                                 clone(raw_base_model), name, params, X_tr, y_tr, fit_params,
-                                n_iter=n_iter, cv=cv_folds, random_state=random_state, n_jobs=n_jobs,
+                                n_iter=n_iter, cv=cv_folds, random_state=random_state, n_jobs=search_n_jobs,
                                 groups=groups_tr
                             )
-                            model = best_model_opt
+                            model = best_m
                             model.fit(X_tr, y_tr, **fit_params)
-                            params_str = str(best_params_opt)
                             search = None
+                            params_str = str(best_params)
                         else:
                             import scipy.stats as stats
                             opt_params = {}
                             for k, v in params.items():
-                                if isinstance(v, list) and len(v) == 2 and all(isinstance(x, (int, float)) for x in v):
+                                if isinstance(v, list) and len(v) == 2 and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in v):
                                     if all(isinstance(x, int) for x in v) and v[0] < v[1]:
                                         opt_params[k] = stats.randint(v[0], v[1] + 1)
-                                    else:
+                                    elif v[0] < v[1]:
                                         opt_params[k] = stats.uniform(v[0], v[1] - v[0])
+                                    else:
+                                        opt_params[k] = v
                                 else:
                                     opt_params[k] = v
                             search = (
@@ -868,18 +1324,22 @@ def run_benchmarking(
                     elif not OPTUNA_AVAILABLE or current_opt_idx != 2:
                         model = clone(raw_base_model)
                         model.fit(X_tr, y_tr, **fit_params)
-                        params_str = "Default"
+                        params_str = "Default / Custom"
                 else:
                     model = clone(raw_base_model)
                     model.fit(X_tr, y_tr, **fit_params)
-                    params_str = "Default"
+                    params_str = "Default / Custom"
 
             y_p = model.predict(X_val)
-            r2 = r2_score(y_val, y_p)
-            rmse = np.sqrt(mean_squared_error(y_val, y_p))
+
+            r2 = float(r2_score(y_val, y_p))
+
+            rmse = float(np.sqrt(mean_squared_error(y_val, y_p)))
             sum_abs_diff = np.sum(np.abs(y_val - y_p))
             sum_abs_true = np.sum(np.abs(y_val))
-            wmape = (sum_abs_diff / sum_abs_true) * 100 if sum_abs_true != 0 else 0
+            wmape = float((sum_abs_diff / sum_abs_true) * 100 if sum_abs_true != 0 else 0.0)
+            bias = float(np.mean(y_p - y_val))
+            mae = float(mean_absolute_error(y_val, y_p))
 
             save_algo_artifacts(
                 y_val,
@@ -902,10 +1362,12 @@ def run_benchmarking(
                     "R2": r2,
                     "RMSE": rmse,
                     "wMAPE": wmape,
+                    "Bias": bias,
+                    "MAE": mae,
                 }
             )
             append_log(
-                f"      > {name}: R2={r2:.3f}, RMSE={rmse:.2f}m", log_path, feedback
+                f"      > {name}: R2={r2:.3f}, RMSE={rmse:.2f}m, wMAPE={wmape:.1f}%, Bias={bias:+.3f}m, MAE={mae:.2f}m", log_path, feedback
             )
 
         except Exception as e:
@@ -914,75 +1376,89 @@ def run_benchmarking(
     if not results:
         raise QgsProcessingException("All selected algorithms failed.")
 
-    if enable_ensemble and len(results) >= 2:
-        df_temp = pd.DataFrame(results)
-        max_rmse = df_temp["RMSE"].max() if len(df_temp) > 0 else 1.0
-        temp_scores = []
-        for r in results:
-            s_r2 = max(0, r["R2"])
-            s_rmse = 1.0 - (r["RMSE"] / max_rmse) if max_rmse != 0 else 0
-            temp_scores.append(0.6 * s_r2 + 0.4 * s_rmse)
-
-        sorted_indices = np.argsort(temp_scores)[::-1]
-        top_results = [results[i] for i in sorted_indices[:ensemble_size]]
-
+    has_ensemble_selected = len(ensemble_selected_indices) > 0 or enable_ensemble
+    if has_ensemble_selected and len(results) >= 2:
+        df_base = calculate_sdb_composite_score(pd.DataFrame(results), random_state=random_state, score_config=score_config)
+        top_results = df_base.sort_values(by="SDB_Score", ascending=False).head(ensemble_size).to_dict("records")
         estimators = [(r["Algorithm"], r["Model"]) for r in top_results]
-        append_log(f"   [Ensemble] Blending top models: {[r['Algorithm'] for r in top_results]} using {ensemble_method}", log_path, feedback)
+        append_log(f"   [Ensemble] Blending top {len(estimators)} base models ({[r['Algorithm'] for r in top_results]})", log_path, feedback)
 
-        ensemble_model = CustomEnsembleRegressor(estimators=estimators, method=ensemble_method)
-        ensemble_model.fit(X_tr, y_tr, sample_weight=w_tr)
+        methods_to_test = []
+        if 19 in ensemble_selected_indices or (enable_ensemble and ensemble_method in ["All Ensemble Methods (Auto-Select)", "All"]):
+            methods_to_test = ["Average", "Median", "Stacking", "Uncertainty-Weighted Fusion"]
+        else:
+            if 15 in ensemble_selected_indices:
+                methods_to_test.append("Average")
+            if 16 in ensemble_selected_indices:
+                methods_to_test.append("Median")
+            if 17 in ensemble_selected_indices:
+                methods_to_test.append("Stacking")
+            if 18 in ensemble_selected_indices:
+                methods_to_test.append("Uncertainty-Weighted Fusion")
+            if not methods_to_test and enable_ensemble:
+                methods_to_test = [ensemble_method]
 
-        y_p = ensemble_model.predict(X_val)
-        r2 = r2_score(y_val, y_p)
-        rmse = np.sqrt(mean_squared_error(y_val, y_p))
-        sum_abs_diff = np.sum(np.abs(y_val - y_p))
-        sum_abs_true = np.sum(np.abs(y_val))
-        wmape = (sum_abs_diff / sum_abs_true) * 100 if sum_abs_true != 0 else 0
+        for m_name in methods_to_test:
+            try:
+                ensemble_model = CustomEnsembleRegressor(estimators=estimators, method=m_name)
+                ensemble_model.fit(X_tr, y_tr, sample_weight=w_tr)
 
-        ensemble_dir = os.path.join(out_dir, "Ensemble_Model")
-        os.makedirs(ensemble_dir, exist_ok=True)
-        save_algo_artifacts(
-            y_val,
-            y_p,
-            np.abs(y_val - y_p),
-            f"Ensemble ({ensemble_method})",
-            ensemble_dir,
-            r2,
-            rmse,
-            wmape,
-            f"Method: {ensemble_method}, Models: {[r['Algorithm'] for r in top_results]}",
-            scaler_name="Composite",
-        )
+                y_p = ensemble_model.predict(X_val)
+                r2 = float(r2_score(y_val, y_p))
+                rmse = float(np.sqrt(mean_squared_error(y_val, y_p)))
+                sum_abs_diff = np.sum(np.abs(y_val - y_p))
+                sum_abs_true = np.sum(np.abs(y_val))
+                wmape = float((sum_abs_diff / sum_abs_true) * 100 if sum_abs_true != 0 else 0.0)
+                bias = float(np.mean(y_p - y_val))
+                mae = float(mean_absolute_error(y_val, y_p))
 
-        results.append(
-            {
-                "Algorithm": f"Ensemble ({ensemble_method})",
-                "Feature Scaling": "Composite",
-                "Model": ensemble_model,
-                "R2": r2,
-                "RMSE": rmse,
-                "wMAPE": wmape,
-            }
-        )
-        append_log(
-            f"      > Ensemble ({ensemble_method}): R2={r2:.3f}, RMSE={rmse:.2f}m", log_path, feedback
-        )
+                ens_dir = os.path.join(out_dir, f"Ensemble_{m_name.replace(' ', '_')}")
+                os.makedirs(ens_dir, exist_ok=True)
+                save_algo_artifacts(
+                    y_val,
+                    y_p,
+                    np.abs(y_val - y_p),
+                    f"Ensemble ({m_name})",
+                    ens_dir,
+                    r2,
+                    rmse,
+                    wmape,
+                    f"Method: {m_name}, Models: {[r['Algorithm'] for r in top_results]}",
+                    scaler_name="Composite",
+                )
+
+                results.append(
+                    {
+                        "Algorithm": f"Ensemble ({m_name})",
+                        "Feature Scaling": "Composite",
+                        "Model": ensemble_model,
+                        "R2": r2,
+                        "RMSE": rmse,
+                        "wMAPE": wmape,
+                        "Bias": bias,
+                        "MAE": mae,
+                    }
+                )
+                append_log(
+                    f"      > Ensemble ({m_name}): R2={r2:.3f}, RMSE={rmse:.2f}m, wMAPE={wmape:.1f}%, Bias={bias:+.3f}m, MAE={mae:.2f}m", log_path, feedback
+                )
+            except Exception as e:
+                append_log(f"      ! Failed Ensemble ({m_name}): {e}", log_path, feedback)
 
     df = pd.DataFrame(results)
-    df["score"] = (0.6 * df["R2"].clip(lower=0)) + (
-        0.4 * (1 - (df["RMSE"] / df["RMSE"].max()))
-    )
-    
-    winner = df.loc[df["score"].idxmax()]
+    df = calculate_sdb_composite_score(df, random_state=random_state, score_config=score_config, out_dir=out_dir, prefix="3_")
+    winner = df.iloc[0]
 
-    if enable_ensemble:
-        ens_name = f"Ensemble ({ensemble_method})"
-        if any(df["Algorithm"] == ens_name):
-            ens_row = df[df["Algorithm"] == ens_name].iloc[0]
-            if winner["Algorithm"] != ens_name:
-                append_log(f"   [Ensemble] Ensemble did not beat winner {winner['Algorithm']} (Ensemble Score={ens_row['score']:.4f} vs Winner Score={winner['score']:.4f})", log_path, feedback)
-            else:
-                append_log(f"   [Ensemble] Ensemble wins the benchmark! Score={winner['score']:.4f}", log_path, feedback)
+    strat_title = score_config.get("strategy_name", "Winner Stability & SDB Composite Ranking") if score_config else "Winner Stability & SDB Composite Ranking"
+    append_log(f"\n   📊 [Phase 03 Auto-ML Leaderboard - Selection Strategy: {strat_title}]:", log_path, feedback)
+    for rank, row in df.iterrows():
+        prefix = "🥇" if rank == 0 else ("🥈" if rank == 1 else ("🥉" if rank == 2 else "  "))
+        append_log(
+            f"      {prefix} {row['Algorithm']:<32} | Stability: {row['Stability']:>5.1f}% ({row['Wins']:>5}) | Mean Score: {row['Mean_Score']:>5.2f} | Baseline Score: {row['SDB_Score']:>5.2f} | R²={row['R2']:>6.4f} | RMSE={row['RMSE']:>5.2f}m | wMAPE={row['wMAPE']:>5.2f}% | Bias={row['Bias']:>+6.3f}m",
+            log_path, feedback
+        )
+
+    append_log(f"\n   ⭐ Winner Selected: {winner['Algorithm']} (Stability: {winner['Stability']:.1f}% [{winner['Wins']}], SDB Score: {winner['SDB_Score']:.2f}, Mean Score: {winner['Mean_Score']:.2f}/100)", log_path, feedback)
 
     final_model = winner["Model"]
     fit_params_final = {}
@@ -1027,10 +1503,11 @@ def run_benchmarking(
         "name": winner["Algorithm"],
         "scaler": winner.get("Feature Scaling", "None"),
         "model": final_model,
-        "score": winner["score"],
+        "score": winner["SDB_Score"],
         "r2": winner["R2"],
         "rmse": winner["RMSE"],
         "wmape": winner["wMAPE"],
+        "bias": winner.get("Bias", 0.0),
     }
 
 
@@ -1452,10 +1929,10 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback, pre_e
 
     try:
         ens_idx = algorithm.parameterAsEnum(parameters, "ENSEMBLE_METHOD", context)
-        ens_map = {0: "Average", 1: "Median", 2: "Stacking", 3: "Uncertainty-Weighted Fusion"}
-        ensemble_method = ens_map.get(ens_idx, "Average")
+        ens_map = {0: "All Ensemble Methods (Auto-Select)", 1: "Average", 2: "Median", 3: "Stacking", 4: "Uncertainty-Weighted Fusion"}
+        ensemble_method = ens_map.get(ens_idx, "All Ensemble Methods (Auto-Select)")
     except Exception:
-        ensemble_method = "Average"
+        ensemble_method = "All Ensemble Methods (Auto-Select)"
 
     try:
         enable_depth_variance_corr = algorithm.parameterAsBool(parameters, "ENABLE_DEPTH_VARIANCE_CORR", context)
@@ -1474,7 +1951,7 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback, pre_e
     except Exception:
         ensemble_size = 3
 
-
+    score_config = parse_score_config(algorithm, parameters, context)
 
     results_df, best_algo_data = run_benchmarking(
         X,
@@ -1497,11 +1974,19 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback, pre_e
         selected_indices,
         ensemble_size,
         feature_names,
-        cv_folds
+        cv_folds,
+        enable_depth_variance_corr=enable_depth_variance_corr,
+        score_config=score_config
     )
-    results_df.to_csv(
-        os.path.join(out_dir, "3_All_Algorithms_Benchmark.csv"), index=False
-    )
+    try:
+        csv_cols = [c for c in ["Algorithm", "Stability", "Wins", "Mean_Score", "SDB_Score", "R2", "RMSE", "wMAPE", "Bias", "MAE", "Feature Scaling"] if c in results_df.columns]
+        results_df[csv_cols].to_csv(
+            os.path.join(out_dir, "3_All_Algorithms_Benchmark.csv"), index=False
+        )
+    except Exception:
+        results_df.to_csv(
+            os.path.join(out_dir, "3_All_Algorithms_Benchmark.csv"), index=False
+        )
 
     # ---------------------------------------------------------
     # Generate strictly Linear Regression SDB ONLY if manually selected by user
@@ -1668,6 +2153,33 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback, pre_e
         append_log(f"   [Warning] Failed to generate Phase 03 uncertainty model: {e}", log_path, feedback)
         p_uncert_map = None
         p_uncert_model = None
+
+    # Generate standardized ocean bathymetry .qml style alongside depth map
+    if p_map and os.path.exists(p_map):
+        try:
+            from Bathymetrix_AI.infrastructure.raster_io import write_qml_style
+            write_qml_style(p_map)
+        except Exception:
+            pass
+
+    try:
+        from Bathymetrix_AI.infrastructure.logging import log_module_completion
+        primary_files = {
+            "Phase 03 Depth Map": p_map,
+            "Uncertainty Map": p_uncert_map,
+            "Best ML Model": os.path.join(out_dir, "3_Best_Global_Model.pkl"),
+            "Algorithms Benchmark": os.path.join(out_dir, "3_All_Algorithms_Benchmark.csv"),
+            "Validation Plot": os.path.join(out_dir, "3_Validation_Scatter_Plot.png")
+        }
+        log_module_completion(
+            module_title=f"Phase 03: Global Auto-ML Modeling (Winner: {win_name})",
+            out_dir=out_dir,
+            primary_files=primary_files,
+            log_path=log_path,
+            feedback=feedback
+        )
+    except Exception:
+        pass
 
     return {
         "OUTPUT_DEPTH_MAP": p_map,

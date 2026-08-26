@@ -42,7 +42,7 @@ class SDBModule02(QgsProcessingAlgorithm):
             QgsProcessingParameterField(
                 self.FIELD_DEPTH,
                 "Depth Field",
-                defaultValue="depth",
+                defaultValue="ortho_h",
                 parentLayerParameterName=self.INPUT_POINTS,
                 type=QgsProcessingParameterField.Numeric,
             )

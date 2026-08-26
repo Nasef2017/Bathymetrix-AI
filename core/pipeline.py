@@ -1,35 +1,55 @@
 import datetime
 import os
-import processing
 
-from qgis.core import (
-    QgsProcessingContext,
-    QgsProcessingException,
-    QgsProject,
-    QgsRasterLayer,
-    QgsProcessingFeedback,
-    QgsProcessingLayerPostProcessorInterface,
-    QgsVectorLayer,
-    NULL,
-)
+try:
+    import processing
+except ImportError:
+    processing = None
 
-class StylePostProcessor(QgsProcessingLayerPostProcessorInterface):
-    def __init__(self, qml_path):
-        super().__init__()
-        self.qml_path = qml_path
-        
-    def postProcessLayer(self, layer, context, feedback):
-        if layer and layer.isValid():
-            layer.loadNamedStyle(self.qml_path)
-            layer.triggerRepaint()
+try:
+    from qgis.core import (
+        QgsProcessingContext,
+        QgsProcessingException,
+        QgsProject,
+        QgsRasterLayer,
+        QgsProcessingFeedback,
+        QgsProcessingLayerPostProcessorInterface,
+        QgsVectorLayer,
+        NULL,
+    )
+except ImportError:
+    QgsProcessingContext = None
+    QgsProcessingException = Exception
+    QgsProject = None
+    QgsRasterLayer = None
+    QgsProcessingFeedback = object
+    QgsProcessingLayerPostProcessorInterface = object
+    QgsVectorLayer = None
+    NULL = None
 
-from ..infrastructure.logging import append_log
-from ..infrastructure.raster_io import (
-    clean_depth_map,
-    remove_positive_pixels,
-    slope_filter_depth,
-)
-from ..infrastructure.vector_io import filter_by_depth, reproject_layer_if_needed
+try:
+    from Bathymetrix_AI.infrastructure.logging import append_log
+    from Bathymetrix_AI.infrastructure.raster_io import (
+        clean_depth_map,
+        remove_positive_pixels,
+        slope_filter_depth,
+        get_raster_min_max,
+        write_qml_style,
+        StylePostProcessor,
+    )
+    from Bathymetrix_AI.infrastructure.vector_io import filter_by_depth, reproject_layer_if_needed
+except (ImportError, ValueError):
+    from infrastructure.logging import append_log
+    from infrastructure.raster_io import (
+        clean_depth_map,
+        remove_positive_pixels,
+        slope_filter_depth,
+        get_raster_min_max,
+        write_qml_style,
+        StylePostProcessor,
+    )
+    from infrastructure.vector_io import filter_by_depth, reproject_layer_if_needed
+
 
 
 class LoggingFeedback(QgsProcessingFeedback):
@@ -82,75 +102,7 @@ class LoggingFeedback(QgsProcessingFeedback):
                 pass
 
 
-def get_raster_min_max(raster_path):
-    try:
-        import rasterio
-        import numpy as np
-        with rasterio.open(raster_path) as src:
-            data = src.read(1).astype(float)
-            nodata = src.nodata
-            if nodata is not None:
-                data[data == nodata] = np.nan
-            data[~np.isfinite(data)] = np.nan
-            valid = data[np.isfinite(data)]
-            if len(valid) > 0:
-                return float(np.nanmin(valid)), float(np.nanmax(valid))
-    except Exception:  # nosec B110
-        pass
-    return -30.0, 0.0
 
-
-def write_qml_style(tif_path):
-    if not tif_path or not os.path.exists(tif_path):
-        return
-    
-    qml_path = os.path.splitext(tif_path)[0] + ".qml"
-    min_d, max_d = get_raster_min_max(tif_path)
-    
-    step = (max_d - min_d) / 8.0
-    
-    qml_content = f"""<!DOCTYPE qgis PUBLIC 'http://mrcc.com/qgis.dtd' 'SYSTEM'>
-<qgis version="3.28.0" hasScaleBasedVisibilityFlag="0" minScale="1e+08" maxScale="0">
-  <pipe>
-    <provider>
-      <resampling zoomedOutResamplingMethod="nearestNeighbour" maxOversampling="2" zoomedInResamplingMethod="nearestNeighbour" enabled="false"/>
-    </provider>
-    <rasterrenderer opacity="1" classificationMin="{min_d}" nodataColor="" alphaBand="-1" classificationMax="{max_d}" band="1" type="singlebandpseudocolor">
-      <rasterTransparency/>
-      <minMaxOrigin>
-        <limits>None</limits>
-        <extent>WholeRaster</extent>
-        <statAccuracy>Estimated</statAccuracy>
-        <cumulativeCutLower>0.02</cumulativeCutLower>
-        <cumulativeCutUpper>0.98</cumulativeCutUpper>
-        <stdDevFactor>2</stdDevFactor>
-      </minMaxOrigin>
-      <rastershader>
-        <colorrampshader classificationMode="1" colorRampType="INTERPOLATED" labelPrecision="4" clip="0">
-          <item alpha="255" value="{min_d}" label="{min_d:.2f}" color="#08306b"/>
-          <item alpha="255" value="{min_d + step * 1}" label="{(min_d + step * 1):.2f}" color="#08519c"/>
-          <item alpha="255" value="{min_d + step * 2}" label="{(min_d + step * 2):.2f}" color="#2171b5"/>
-          <item alpha="255" value="{min_d + step * 3}" label="{(min_d + step * 3):.2f}" color="#4292c6"/>
-          <item alpha="255" value="{min_d + step * 4}" label="{(min_d + step * 4):.2f}" color="#6baed6"/>
-          <item alpha="255" value="{min_d + step * 5}" label="{(min_d + step * 5):.2f}" color="#9ecae1"/>
-          <item alpha="255" value="{min_d + step * 6}" label="{(min_d + step * 6):.2f}" color="#c6dbef"/>
-          <item alpha="255" value="{min_d + step * 7}" label="{(min_d + step * 7):.2f}" color="#deebf7"/>
-          <item alpha="255" value="{max_d}" label="{max_d:.2f}" color="#f7fbff"/>
-        </colorrampshader>
-      </rastershader>
-    </rasterrenderer>
-    <brightnesscontrast brightness="0" contrast="0"/>
-    <huesaturation colorizeGreen="128" colorizeStrength="100" saturation="0" colorizeOn="0" grayscaleMode="0" colorizeRed="255" colorizeBlue="128"/>
-    <rasterresampler maxOversampling="2"/>
-  </pipe>
-  <blendMode>0</blendMode>
-</qgis>
-"""
-    try:
-        with open(qml_path, "w", encoding="utf-8") as f:
-            f.write(qml_content)
-    except Exception:  # nosec B110
-        pass
 
 
 def generate_3d_seabed_png(raster_path, out_png_path, feedback=None):
@@ -340,11 +292,12 @@ def generate_3d_seabed_png(raster_path, out_png_path, feedback=None):
         return False
 
 
-def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, spatial_cv_p4=True, enable_ransac=False, filter_mode=0, field_depth=None, field_weight=None, collision_handling_idx=0, log_path=None, feedback=None, raster_name="Satellite Imagery", train_name="ICESat-2 (ATL24) LiDAR", test_name="In-situ Echosounder Surveys", final_raster_path=None, is_spatiospectral=False, p2_dir=None):
+def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, spatial_cv_p4=True, enable_ransac=False, filter_mode=0, field_depth=None, field_weight=None, collision_handling_idx=0, log_path=None, feedback=None, raster_name="Satellite Imagery", train_name="ICESat-2 (ATL24) LiDAR", test_name="In-situ Echosounder Surveys", final_raster_path=None, is_spatiospectral=False, p2_dir=None, p5_dir=None):
     import json
     import csv
     benchmark_csv = os.path.join(p3_dir, "3_All_Algorithms_Benchmark.csv")
     p4_benchmark_csv = os.path.join(p4_dir, "4_All_Algorithms_Benchmark.csv") if p4_dir else None
+
     
     cv_type_p3 = "Spatial K-Fold Cross Validation" if spatial_cv_p3 else "Standard Random K-Fold Cross Validation"
     cv_type_p4 = "Spatial K-Fold Cross Validation" if spatial_cv_p4 else "Standard Random K-Fold Cross Validation"
@@ -505,6 +458,7 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
     best_algo = "N/A"
     best_r2 = -9999.0
     best_rmse = 9999.0
+    best_score = -9999.0
     
     import csv
     
@@ -519,6 +473,19 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                 for row in reader:
                     algo = row.get("Algorithm", "Unknown")
                     try:
+                        stability = float(row.get("Stability", 0.0))
+                    except ValueError:
+                        stability = 0.0
+                    wins = row.get("Wins", "")
+                    try:
+                        mean_score = float(row.get("Mean_Score", 0.0))
+                    except ValueError:
+                        mean_score = 0.0
+                    try:
+                        sdb_score = float(row.get("SDB_Score", row.get("Score", 0.0)))
+                    except ValueError:
+                        sdb_score = 0.0
+                    try:
                         r2 = float(row.get("R2", 0.0))
                     except ValueError:
                         r2 = -9999.0
@@ -530,39 +497,56 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                         wmape = float(row.get("wMAPE", 0.0))
                     except ValueError:
                         wmape = 0.0
+                    try:
+                        bias = float(row.get("Bias", 0.0))
+                    except ValueError:
+                        bias = 0.0
                     
                     p3_models.append({
                         "Algorithm": algo,
+                        "Stability": stability,
+                        "Wins": wins,
+                        "Mean_Score": mean_score,
+                        "SDB_Score": sdb_score,
                         "R2": r2,
                         "RMSE": rmse,
-                        "wMAPE": wmape
+                        "wMAPE": wmape,
+                        "Bias": bias
                     })
         except Exception:  # nosec B110
             pass
-            
-    p3_models.sort(key=lambda x: x["R2"], reverse=True)
-    
+
+    if p3_models:
+        best_algo = p3_models[0]["Algorithm"]
+        best_r2 = p3_models[0]["R2"]
+        best_rmse = p3_models[0]["RMSE"]
+        best_score = p3_models[0]["SDB_Score"]
+
     for m in p3_models:
         algo = m["Algorithm"]
+        stability = m.get("Stability", 0.0)
+        wins = m.get("Wins", "")
+        sdb_score = m["SDB_Score"]
         r2 = m["R2"]
         rmse = m["RMSE"]
         wmape = m["wMAPE"]
-        
-        if r2 > best_r2:
-            best_r2 = r2
-            best_algo = algo
-            best_rmse = rmse
+        bias = m["Bias"]
             
         algo_folder = algo.replace(" ", "_")
         if algo.startswith("Ensemble"):
-            algo_folder = "Ensemble_Model"
+            method_clean = algo.replace("Ensemble (", "").replace(")", "").replace(" ", "_")
+            algo_folder = f"Ensemble_{method_clean}" if os.path.exists(os.path.join(p3_dir, f"Ensemble_{method_clean}")) else "Ensemble_Model"
             
+        wins_str = f" ({wins})" if wins else ""
         rows_p3_html += f"""
         <tr class="hover:bg-slate-700/50 transition-colors border-b border-slate-700/30">
             <td class="px-6 py-4 text-sm font-semibold text-slate-200">{algo}</td>
+            <td class="px-6 py-4 text-sm font-bold text-emerald-400">{stability:.1f}%<span class="text-xs font-normal text-slate-400">{wins_str}</span></td>
+            <td class="px-6 py-4 text-sm font-bold text-amber-400">{sdb_score:.2f}</td>
             <td class="px-6 py-4 text-sm font-medium text-emerald-400">{r2:.4f}</td>
             <td class="px-6 py-4 text-sm font-medium text-blue-400">{rmse:.2f}m</td>
             <td class="px-6 py-4 text-sm font-medium text-indigo-400">{wmape:.2f}%</td>
+            <td class="px-6 py-4 text-sm font-medium text-rose-400">{bias:+.3f}m</td>
             <td class="px-6 py-4 text-sm">
                 <a href="{p3_rel}/{algo_folder}/Validation_Scatter_Plot.png" target="_blank" class="text-xs text-sky-400 hover:text-sky-300 font-semibold underline">View Plot</a>
             </td>
@@ -582,6 +566,19 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                 for row in reader:
                     algo = row.get("Algorithm", "Unknown")
                     try:
+                        stability = float(row.get("Stability", 0.0))
+                    except ValueError:
+                        stability = 0.0
+                    wins = row.get("Wins", "")
+                    try:
+                        mean_score = float(row.get("Mean_Score", 0.0))
+                    except ValueError:
+                        mean_score = 0.0
+                    try:
+                        sdb_score = float(row.get("SDB_Score", row.get("Score", 0.0)))
+                    except ValueError:
+                        sdb_score = 0.0
+                    try:
                         r2 = float(row.get("R2", 0.0))
                     except ValueError:
                         r2 = -9999.0
@@ -593,32 +590,292 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                         wmape = float(row.get("wMAPE", 0.0))
                     except ValueError:
                         wmape = 0.0
+                    try:
+                        bias = float(row.get("Bias", 0.0))
+                    except ValueError:
+                        bias = 0.0
                         
                     p4_models.append({
                         "Algorithm": algo,
+                        "Stability": stability,
+                        "Wins": wins,
+                        "Mean_Score": mean_score,
+                        "SDB_Score": sdb_score,
                         "R2": r2,
                         "RMSE": rmse,
-                        "wMAPE": wmape
+                        "wMAPE": wmape,
+                        "Bias": bias
                     })
         except Exception:  # nosec B110
             pass
-            
-    p4_models.sort(key=lambda x: x["R2"], reverse=True)
-    
+
     for m in p4_models:
         algo = m["Algorithm"]
+        stability = m.get("Stability", 0.0)
+        wins = m.get("Wins", "")
+        sdb_score = m["SDB_Score"]
         r2 = m["R2"]
         rmse = m["RMSE"]
         wmape = m["wMAPE"]
+        bias = m["Bias"]
         
+        wins_str = f" ({wins})" if wins else ""
         rows_p4_html += f"""
         <tr class="hover:bg-slate-700/50 transition-colors border-b border-slate-700/30">
             <td class="px-6 py-4 text-sm font-semibold text-slate-200">{algo}</td>
+            <td class="px-6 py-4 text-sm font-bold text-emerald-400">{stability:.1f}%<span class="text-xs font-normal text-slate-400">{wins_str}</span></td>
+            <td class="px-6 py-4 text-sm font-bold text-amber-400">{sdb_score:.2f}</td>
             <td class="px-6 py-4 text-sm font-medium text-emerald-400">{r2:.4f}</td>
             <td class="px-6 py-4 text-sm font-medium text-blue-400">{rmse:.2f}m</td>
             <td class="px-6 py-4 text-sm font-medium text-indigo-400">{wmape:.2f}%</td>
+            <td class="px-6 py-4 text-sm font-medium text-rose-400">{bias:+.3f}m</td>
         </tr>
         """
+
+    # -------------------------------------------------------------
+    # SpatioSpectral Multi-Scene Benchmarks Collection
+    # -------------------------------------------------------------
+    spatiospectral_scenes = []
+    spatiospectral_p3_html = ""
+    spatiospectral_p3_report_html = ""
+
+    if is_spatiospectral:
+        candidate_roots = []
+        if p3_dir and os.path.exists(p3_dir):
+            candidate_roots.append(p3_dir)
+        parent_out = os.path.dirname(out_dir)
+        if parent_out and os.path.exists(parent_out) and parent_out not in candidate_roots:
+            candidate_roots.append(parent_out)
+        grandparent_out = os.path.dirname(parent_out)
+        if grandparent_out and os.path.exists(grandparent_out) and grandparent_out not in candidate_roots:
+            candidate_roots.append(grandparent_out)
+
+        found_scene_paths = []
+        for root in candidate_roots:
+            try:
+                for item in os.listdir(root):
+                    full_p = os.path.join(root, item)
+                    if os.path.isdir(full_p) and (item.lower().startswith("scene_") or item.lower().startswith("scene")):
+                        if full_p not in found_scene_paths:
+                            found_scene_paths.append(full_p)
+            except Exception:
+                pass
+
+        import re
+        def scene_sort_key(p):
+            base = os.path.basename(p)
+            m = re.search(r"[Ss]cene_?(\d+)", base)
+            if m:
+                return (int(m.group(1)), base)
+            return (999, base)
+
+        found_scene_paths.sort(key=scene_sort_key)
+
+        for sp in found_scene_paths:
+            s_base = os.path.basename(sp)
+            m = re.search(r"[Ss]cene_?(\d+)_(.+)", s_base)
+            if m:
+                s_name = f"Scene {m.group(1)} ({m.group(2)})"
+            else:
+                m_num = re.search(r"[Ss]cene_?(\d+)", s_base)
+                if m_num:
+                    s_name = f"Scene {m_num.group(1)}"
+                else:
+                    s_name = s_base.replace("_", " ")
+
+            csv_candidates = [
+                os.path.join(sp, "Phase_03_Initial_Modeling", "3_All_Algorithms_Benchmark.csv"),
+                os.path.join(sp, "3_All_Algorithms_Benchmark.csv")
+            ]
+            scene_csv = None
+            for c in csv_candidates:
+                if os.path.exists(c):
+                    scene_csv = c
+                    break
+
+            if scene_csv:
+                algo_dict = {}
+                try:
+                    with open(scene_csv, "r", encoding="utf-8") as f:
+                        reader = csv.DictReader(f)
+                        for row in reader:
+                            algo = row.get("Algorithm", "Unknown")
+                            try:
+                                r2_v = float(row.get("R2", 0.0))
+                            except ValueError:
+                                r2_v = 0.0
+                            try:
+                                rmse_v = float(row.get("RMSE", 0.0))
+                            except ValueError:
+                                rmse_v = 0.0
+                            try:
+                                wmape_v = float(row.get("wMAPE", 0.0))
+                            except ValueError:
+                                wmape_v = 0.0
+                            try:
+                                bias_v = float(row.get("Bias", 0.0))
+                            except ValueError:
+                                bias_v = 0.0
+                            try:
+                                score_v = float(row.get("SDB_Score", 0.0))
+                            except ValueError:
+                                score_v = 0.0
+
+                            algo_dict[algo] = {
+                                "R2": r2_v,
+                                "RMSE": rmse_v,
+                                "wMAPE": wmape_v,
+                                "Bias": bias_v,
+                                "SDB_Score": score_v
+                            }
+                except Exception:
+                    pass
+
+                if algo_dict:
+                    spatiospectral_scenes.append({
+                        "name": s_name,
+                        "path": sp,
+                        "data": algo_dict
+                    })
+
+        if spatiospectral_scenes:
+            unique_algos = []
+            algo_avg_r2 = {}
+            for sc in spatiospectral_scenes:
+                for algo, vals in sc["data"].items():
+                    if algo not in unique_algos:
+                        unique_algos.append(algo)
+
+            for algo in unique_algos:
+                r2_list = [sc["data"][algo]["R2"] for sc in spatiospectral_scenes if algo in sc["data"]]
+                algo_avg_r2[algo] = sum(r2_list) / len(r2_list) if r2_list else -9999.0
+
+            unique_algos.sort(key=lambda a: algo_avg_r2.get(a, -9999.0), reverse=True)
+
+            if unique_algos:
+                best_algo = unique_algos[0]
+                all_r2 = [sc["data"][a]["R2"] for sc in spatiospectral_scenes for a in sc["data"]]
+                all_rmse = [sc["data"][a]["RMSE"] for sc in spatiospectral_scenes for a in sc["data"]]
+                if all_r2:
+                    best_r2 = max(all_r2)
+                if all_rmse:
+                    best_rmse = min(all_rmse)
+
+            # 1. HTML Dashboard Multi-Scene Table
+            top_th = '<th rowspan="2" class="px-4 py-3 text-left bg-slate-800 border-r border-slate-700 text-slate-200 font-bold sticky left-0 z-20">Algorithm</th>'
+            for sc in spatiospectral_scenes:
+                top_th += f'<th colspan="4" class="px-4 py-2.5 text-center border-r border-slate-700 bg-slate-800/80 text-sky-400 font-bold text-xs">{sc["name"]}</th>'
+
+            sub_th = ""
+            for sc in spatiospectral_scenes:
+                sub_th += """
+                <th class="px-3 py-2 text-emerald-400 font-semibold text-[11px] bg-slate-800/50">R²</th>
+                <th class="px-3 py-2 text-blue-400 font-semibold text-[11px] bg-slate-800/50">RMSE</th>
+                <th class="px-3 py-2 text-indigo-400 font-semibold text-[11px] bg-slate-800/50">wMAPE</th>
+                <th class="px-3 py-2 text-rose-400 font-semibold text-[11px] bg-slate-800/50 border-r border-slate-700">Bias</th>
+                """
+
+            rows_html = ""
+            for algo in unique_algos:
+                row_cells = f'<td class="px-4 py-3 text-left font-semibold text-slate-200 border-r border-slate-700 bg-slate-900 sticky left-0 z-10 whitespace-nowrap">{algo}</td>'
+                for sc in spatiospectral_scenes:
+                    if algo in sc["data"]:
+                        d = sc["data"][algo]
+                        row_cells += f"""
+                        <td class="px-3 py-2.5 text-emerald-400 font-medium whitespace-nowrap">{d['R2']:.4f}</td>
+                        <td class="px-3 py-2.5 text-blue-400 font-medium whitespace-nowrap">{d['RMSE']:.2f}m</td>
+                        <td class="px-3 py-2.5 text-indigo-400 font-medium whitespace-nowrap">{d['wMAPE']:.2f}%</td>
+                        <td class="px-3 py-2.5 text-rose-400 font-medium border-r border-slate-700/60 whitespace-nowrap">{d['Bias']:+.2f}</td>
+                        """
+                    else:
+                        row_cells += """
+                        <td class="px-3 py-2.5 text-slate-500 font-medium whitespace-nowrap">-</td>
+                        <td class="px-3 py-2.5 text-slate-500 font-medium whitespace-nowrap">-</td>
+                        <td class="px-3 py-2.5 text-slate-500 font-medium whitespace-nowrap">-</td>
+                        <td class="px-3 py-2.5 text-slate-500 font-medium border-r border-slate-700/60 whitespace-nowrap">-</td>
+                        """
+                rows_html += f'<tr class="hover:bg-slate-700/40 transition-colors border-b border-slate-800/80">{row_cells}</tr>'
+
+            spatiospectral_p3_html = f"""
+            <div class="bg-slate-800/30 border border-slate-700/30 rounded-2xl overflow-hidden mb-8">
+                <div class="px-6 py-5 border-b border-slate-800 bg-slate-800/50 flex justify-between items-center flex-wrap gap-2">
+                    <div>
+                        <h2 class="text-lg font-bold text-slate-100">🏆 Phase 03: Initial Modeling Leaderboard</h2>
+                        <p class="text-xs text-slate-400 mt-1">Cross-Validation performance of benchmarked algorithms across all scenes</p>
+                    </div>
+                    <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20">{cv_type_p3}</span>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-800 text-center border-collapse text-xs">
+                        <thead class="bg-slate-800/60 text-slate-300 font-bold uppercase tracking-wider">
+                            <tr class="border-b border-slate-700">
+                                {top_th}
+                            </tr>
+                            <tr class="border-b border-slate-700">
+                                {sub_th}
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-800/60 bg-transparent text-sm">
+                            {rows_html}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            """
+
+            # 2. PDF/HTML Technical Report Multi-Scene Table
+            rep_top_th = '<th rowspan="2" style="white-space: nowrap; background-color: #f1f5f9; border: 1px solid #cbd5e1; padding: 4pt 6pt;">Algorithm</th>'
+            for sc in spatiospectral_scenes:
+                rep_top_th += f'<th colspan="4" style="white-space: nowrap; background-color: #e2e8f0; border: 1px solid #cbd5e1; text-align: center; padding: 4pt 6pt; font-weight: bold; color: #1e293b;">{sc["name"]}</th>'
+
+            rep_sub_th = ""
+            for sc in spatiospectral_scenes:
+                rep_sub_th += """
+                <th style="white-space: nowrap; background-color: #f8fafc; border: 1px solid #cbd5e1; padding: 3pt 5pt; color: #0f766e;">R²</th>
+                <th style="white-space: nowrap; background-color: #f8fafc; border: 1px solid #cbd5e1; padding: 3pt 5pt; color: #1d4ed8;">RMSE</th>
+                <th style="white-space: nowrap; background-color: #f8fafc; border: 1px solid #cbd5e1; padding: 3pt 5pt; color: #4f46e5;">wMAPE</th>
+                <th style="white-space: nowrap; background-color: #f8fafc; border: 1px solid #cbd5e1; padding: 3pt 5pt; color: #be123c;">Bias</th>
+                """
+
+            rep_rows_html = ""
+            for idx, algo in enumerate(unique_algos):
+                bg = ' bgcolor="#f8fafc"' if idx % 2 == 1 else ''
+                row_cells = f'<td style="white-space: nowrap; border: 1px solid #cbd5e1; padding: 3pt 5pt; font-weight: bold;">{algo}</td>'
+                for sc in spatiospectral_scenes:
+                    if algo in sc["data"]:
+                        d = sc["data"][algo]
+                        row_cells += f"""
+                        <td style="white-space: nowrap; border: 1px solid #cbd5e1; padding: 3pt 5pt; color: #0f766e; font-weight: 500;">{d['R2']:.4f}</td>
+                        <td style="white-space: nowrap; border: 1px solid #cbd5e1; padding: 3pt 5pt; color: #1d4ed8; font-weight: 500;">{d['RMSE']:.2f}m</td>
+                        <td style="white-space: nowrap; border: 1px solid #cbd5e1; padding: 3pt 5pt; color: #4f46e5; font-weight: 500;">{d['wMAPE']:.2f}%</td>
+                        <td style="white-space: nowrap; border: 1px solid #cbd5e1; padding: 3pt 5pt; color: #be123c; font-weight: 500;">{d['Bias']:+.2f}</td>
+                        """
+                    else:
+                        row_cells += """
+                        <td style="white-space: nowrap; border: 1px solid #cbd5e1; padding: 3pt 5pt; color: #94a3b8;">-</td>
+                        <td style="white-space: nowrap; border: 1px solid #cbd5e1; padding: 3pt 5pt; color: #94a3b8;">-</td>
+                        <td style="white-space: nowrap; border: 1px solid #cbd5e1; padding: 3pt 5pt; color: #94a3b8;">-</td>
+                        <td style="white-space: nowrap; border: 1px solid #cbd5e1; padding: 3pt 5pt; color: #94a3b8;">-</td>
+                        """
+                rep_rows_html += f'<tr{bg}>{row_cells}</tr>'
+
+            spatiospectral_p3_report_html = f"""
+            <h2>🏆 Phase 03: Multi-Scene Initial Modeling Leaderboard</h2>
+            <p style="color: #64748b; font-size: 8pt; margin-bottom: 5px;">
+                Cross-Validation accuracy metrics for each candidate algorithm across all evaluated satellite scenes.
+            </p>
+            <div style="overflow-x: auto; width: 100%;">
+                <table border="1" cellspacing="0" cellpadding="4" bordercolor="#cbd5e1" style="width: 100%; border-collapse: collapse; margin-top: 8pt; margin-bottom: 12pt; text-align: center;">
+                    <thead>
+                        <tr>{rep_top_th}</tr>
+                        <tr>{rep_sub_th}</tr>
+                    </thead>
+                    <tbody>
+                        {rep_rows_html}
+                    </tbody>
+                </table>
+            </div>
+            """
 
     # -------------------------------------------------------------
     # Phase 02 Filtering & Shapefile Reading
@@ -796,8 +1053,27 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
         </div>
         """
 
-    stratified_csv = os.path.join(out_dir, "5_Stratified_Error_Analysis.csv")
-    if os.path.exists(stratified_csv):
+    stratified_csv = None
+    candidate_strat_paths = []
+    if p5_dir:
+        candidate_strat_paths.append(os.path.join(p5_dir, "5_Stratified_Error_Analysis.csv"))
+    candidate_strat_paths.extend([
+        os.path.join(out_dir, "Phase_05_Scientific_Validation", "5_Stratified_Error_Analysis.csv"),
+        os.path.join(out_dir, "5_Stratified_Error_Analysis.csv"),
+    ])
+    if p4_dir:
+        candidate_strat_paths.append(os.path.join(p4_dir, "5_Stratified_Error_Analysis.csv"))
+        candidate_strat_paths.append(os.path.join(p4_dir, "Phase_05_Scientific_Validation", "5_Stratified_Error_Analysis.csv"))
+    if p3_dir:
+        candidate_strat_paths.append(os.path.join(p3_dir, "Phase_05_Scientific_Validation", "5_Stratified_Error_Analysis.csv"))
+        candidate_strat_paths.append(os.path.join(p3_dir, "5_Stratified_Error_Analysis.csv"))
+
+    for cpath in candidate_strat_paths:
+        if cpath and os.path.exists(cpath):
+            stratified_csv = cpath
+            break
+
+    if stratified_csv and os.path.exists(stratified_csv):
         has_strat = True
         try:
             with open(stratified_csv, "r", encoding="utf-8") as f:
@@ -891,10 +1167,95 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
         </div>
         """
 
-    has_val_plots = os.path.exists(os.path.join(out_dir, "5_Plot_Scatter_Comparison.png"))
+    # Resolution of Phase 05 validation plots
+    val_scatter_path = None
+    val_hist_path = None
+    val_residuals_path = None
+    seabed_3d_img_path = None
+
+    plot_search_dirs = []
+    if p5_dir:
+        plot_search_dirs.append(p5_dir)
+    plot_search_dirs.extend([
+        os.path.join(out_dir, "Phase_05_Scientific_Validation"),
+        out_dir,
+    ])
+    if p4_dir:
+        plot_search_dirs.append(p4_dir)
+        plot_search_dirs.append(os.path.join(p4_dir, "Phase_05_Scientific_Validation"))
+    if p3_dir:
+        plot_search_dirs.append(os.path.join(p3_dir, "Phase_05_Scientific_Validation"))
+        plot_search_dirs.append(p3_dir)
+
+    for pdir in plot_search_dirs:
+        if pdir and os.path.exists(pdir):
+            if not val_scatter_path:
+                for cand in ["5_Plot_Scatter_Comparison.png", "5_Plot_1_Scatter.png"]:
+                    tp = os.path.join(pdir, cand)
+                    if os.path.exists(tp):
+                        val_scatter_path = tp
+                        break
+            if not val_hist_path:
+                for cand in ["5_Plot_Error_Histogram.png", "5_Plot_3_Histograms.png", "5_Plot_Histograms.png"]:
+                    tp = os.path.join(pdir, cand)
+                    if os.path.exists(tp):
+                        val_hist_path = tp
+                        break
+            if not val_residuals_path:
+                for cand in ["5_Plot_Residuals.png", "5_Plot_2_Residuals.png"]:
+                    tp = os.path.join(pdir, cand)
+                    if os.path.exists(tp):
+                        val_residuals_path = tp
+                        break
+            if not seabed_3d_img_path:
+                for cand in ["5_Plot_3D_Seabed.png", "3D_Seabed_Plot.png"]:
+                    tp = os.path.join(pdir, cand)
+                    if os.path.exists(tp):
+                        seabed_3d_img_path = tp
+                        break
+
+    import shutil
+    # Ensure all found plot files exist in both out_dir and p5_dir for seamless browser loading
+    plot_map = {
+        "5_Plot_Scatter_Comparison.png": val_scatter_path,
+        "5_Plot_Error_Histogram.png": val_hist_path,
+        "5_Plot_Residuals.png": val_residuals_path,
+        "5_Plot_3D_Seabed.png": seabed_3d_img_path
+    }
+    for base_name, src_path in plot_map.items():
+        if src_path and os.path.exists(src_path):
+            target_out = os.path.join(out_dir, base_name)
+            if os.path.abspath(src_path) != os.path.abspath(target_out) and not os.path.exists(target_out):
+                try:
+                    shutil.copy2(src_path, target_out)
+                except Exception:
+                    pass
+            if p5_dir and os.path.exists(p5_dir):
+                target_p5 = os.path.join(p5_dir, base_name)
+                if os.path.abspath(src_path) != os.path.abspath(target_p5) and not os.path.exists(target_p5):
+                    try:
+                        shutil.copy2(src_path, target_p5)
+                    except Exception:
+                        pass
+
+    def _calc_rel(path_val, base_dir):
+        if not path_val or not os.path.exists(path_val):
+            return None
+        try:
+            return os.path.relpath(path_val, base_dir).replace("\\", "/")
+        except Exception:
+            return os.path.basename(path_val)
+
+    scatter_rel = _calc_rel(val_scatter_path, out_dir) or "5_Plot_Scatter_Comparison.png"
+    hist_rel = _calc_rel(val_hist_path, out_dir) or "5_Plot_Error_Histogram.png"
+    residuals_rel = _calc_rel(val_residuals_path, out_dir) or "5_Plot_Residuals.png"
+    seabed_3d_rel = _calc_rel(seabed_3d_img_path, out_dir) or "5_Plot_3D_Seabed.png"
+    has_val_plots = bool((val_scatter_path and os.path.exists(val_scatter_path)) or (val_hist_path and os.path.exists(val_hist_path)) or (val_residuals_path and os.path.exists(val_residuals_path)))
     main_grid_col_class = "lg:col-span-2" if has_val_plots else "lg:col-span-3"
     best_r2_str = f"{best_r2:.4f}" if best_r2 != -9999.0 else "N/A"
     best_rmse_str = f"{best_rmse:.2f}m" if best_rmse != 9999.0 else "N/A"
+
+
 
     html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -929,7 +1290,7 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
         </header>
 
         <!-- Quick Metrics -->
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8" style="display: {'none' if is_spatiospectral else 'grid'};">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
             <div class="bg-slate-800/40 border border-slate-700/50 rounded-2xl p-6 backdrop-blur-sm">
                 <h3 class="text-slate-400 text-xs font-semibold uppercase tracking-wider mb-2">Best Performing Algorithm</h3>
                 <div class="text-2xl font-bold text-slate-100">{best_algo}</div>
@@ -944,102 +1305,111 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
             </div>
         </div>
 
-        {html_p2_section}
+        {spatiospectral_p3_html}
 
-        <!-- Main Grid -->
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <!-- Left Column: Leaderboards -->
-            <div class="{main_grid_col_class} space-y-8">
-                <!-- Phase 03 Leaderboard -->
-                <div class="bg-slate-800/30 border border-slate-700/30 rounded-2xl overflow-hidden" style="display: {'none' if is_spatiospectral else 'block'};">
-                    <div class="px-6 py-5 border-b border-slate-800 bg-slate-800/50 flex justify-between items-center flex-wrap gap-2">
-                        <div>
-                            <h2 class="text-lg font-bold text-slate-100">🏆 Phase 03: Initial Modeling Leaderboard</h2>
-                            <p class="text-xs text-slate-400 mt-1">Cross-Validation performance of benchmarked algorithms</p>
-                        </div>
-                        <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20">{cv_type_p3}</span>
-                    </div>
-                    <div class="overflow-x-auto">
-                        <table class="min-w-full divide-y divide-slate-800 text-left">
-                            <thead class="bg-slate-800/20 text-slate-400 text-xs font-semibold uppercase tracking-wider">
-                                <tr>
-                                    <th class="px-6 py-3">Algorithm</th>
-                                    <th class="px-6 py-3">R²</th>
-                                    <th class="px-6 py-3">RMSE</th>
-                                    <th class="px-6 py-3">wMAPE</th>
-                                    <th class="px-6 py-3">Details</th>
-                                </tr>
-                            </thead>
-                            <tbody class="divide-y divide-slate-800 bg-transparent">
-                                {rows_p3_html if rows_p3_html else '<tr><td colspan="5" class="px-6 py-4 text-center text-slate-400 text-sm">No Phase 03 results found.</td></tr>'}
-                            </tbody>
-                        </table>
-                    </div>
+        {f'''<!-- Phase 03 Leaderboard (Single Mode) -->
+        <div class="bg-slate-800/30 border border-slate-700/30 rounded-2xl overflow-hidden mb-8">
+            <div class="px-6 py-5 border-b border-slate-800 bg-slate-800/50 flex justify-between items-center flex-wrap gap-2">
+                <div>
+                    <h2 class="text-lg font-bold text-slate-100">🏆 Phase 03: Initial Modeling Leaderboard</h2>
+                    <p class="text-xs text-slate-400 mt-1">Cross-Validation performance of benchmarked algorithms</p>
                 </div>
-
-                <!-- Phase 04 Leaderboard (Conditionally Shown) -->
-                {f'''<div class="bg-slate-800/30 border border-slate-700/30 rounded-2xl overflow-hidden">
-                    <div class="px-6 py-5 border-b border-slate-800 bg-slate-800/50 flex justify-between items-center flex-wrap gap-2">
-                        <div>
-                            <h2 class="text-lg font-bold text-slate-100">⚡ Phase 04: Depth-Dependent Residual Calibration Leaderboard</h2>
-                            <p class="text-xs text-slate-400 mt-1">Cross-Validation/Retraining performance after Depth-Dependent Residual Calibration</p>
-                        </div>
-                        <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-violet-500/10 text-violet-400 border border-violet-500/20">{cv_type_p4}</span>
-                    </div>
-                    <div class="overflow-x-auto">
-                        <table class="min-w-full divide-y divide-slate-800 text-left">
-                            <thead class="bg-slate-800/20 text-slate-400 text-xs font-semibold uppercase tracking-wider">
-                                <tr>
-                                    <th class="px-6 py-3">Algorithm</th>
-                                    <th class="px-6 py-3">R²</th>
-                                    <th class="px-6 py-3">RMSE</th>
-                                    <th class="px-6 py-3">wMAPE</th>
-                                </tr>
-                            </thead>
-                            <tbody class="divide-y divide-slate-800 bg-transparent">
-                                {rows_p4_html if rows_p4_html else '<tr><td colspan="4" class="px-6 py-4 text-center text-slate-400 text-sm">No Phase 04 results found.</td></tr>'}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>''' if has_p4 and not is_spatiospectral else ''}
+                <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20">{cv_type_p3}</span>
             </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-800 text-left">
+                    <thead class="bg-slate-800/20 text-slate-400 text-xs font-semibold uppercase tracking-wider">
+                        <tr>
+                            <th class="px-6 py-3">Algorithm</th>
+                            <th class="px-6 py-3">Winner Stability</th>
+                            <th class="px-6 py-3">SDB Score</th>
+                            <th class="px-6 py-3">R²</th>
+                            <th class="px-6 py-3">RMSE</th>
+                            <th class="px-6 py-3">wMAPE</th>
+                            <th class="px-6 py-3">Bias</th>
+                            <th class="px-6 py-3">Details</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-800 bg-transparent">
+                        {rows_p3_html if rows_p3_html else '<tr><td colspan="8" class="px-6 py-4 text-center text-slate-400 text-sm">No Phase 03 results found.</td></tr>'}
+                    </tbody>
+                </table>
+            </div>
+        </div>''' if not is_spatiospectral else ''}
 
-            {f'''<!-- Right Column: Final Validation Outputs -->
-            <div class="space-y-6">
-                <div class="bg-slate-800/30 border border-slate-700/30 rounded-2xl p-6">
-                    <h2 class="text-lg font-bold text-slate-100 mb-4">📈 Phase 05 Validation Plots</h2>
-                    
-                    <div class="space-y-4">
-                           <div>
-                               <h4 class="text-sm font-semibold text-slate-300 mb-2">Density Scatter Plot</h4>
-                               <div class="bg-slate-900 rounded-lg overflow-hidden border border-slate-800">
-                                   <a href="5_Plot_Scatter_Comparison.png" target="_blank">
-                                       <img src="5_Plot_Scatter_Comparison.png" alt="Density Scatter Plot" class="w-full h-auto hover:opacity-90 transition-opacity" onerror="this.src='https://placehold.co/400x300/1e293b/94a3b8?text=Scatter+Plot+Not+Found'"/>
-                                   </a>
-                                </div>
-                           </div>
-                           
-                           <div>
-                               <h4 class="text-sm font-semibold text-slate-300 mb-2">Error Distribution Histogram</h4>
-                               <div class="bg-slate-900 rounded-lg overflow-hidden border border-slate-800">
-                                   <a href="5_Plot_Error_Histogram.png" target="_blank">
-                                       <img src="5_Plot_Error_Histogram.png" alt="Error Histogram" class="w-full h-auto hover:opacity-90 transition-opacity" onerror="this.src='https://placehold.co/400x300/1e293b/94a3b8?text=Histogram+Not+Found'"/>
-                                   </a>
-                                </div>
-                           </div>
+        {f'''<!-- Phase 04 Leaderboard (Conditionally Shown) -->
+        <div class="bg-slate-800/30 border border-slate-700/30 rounded-2xl overflow-hidden mb-8">
+            <div class="px-6 py-5 border-b border-slate-800 bg-slate-800/50 flex justify-between items-center flex-wrap gap-2">
+                <div>
+                    <h2 class="text-lg font-bold text-slate-100">⚡ Phase 04: Depth-Dependent Residual Calibration Leaderboard</h2>
+                    <p class="text-xs text-slate-400 mt-1">Cross-Validation/Retraining performance after Depth-Dependent Residual Calibration</p>
+                </div>
+                <span class="px-2 py-0.5 rounded text-[10px] font-semibold bg-violet-500/10 text-violet-400 border border-violet-500/20">{cv_type_p4}</span>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-800 text-left">
+                    <thead class="bg-slate-800/20 text-slate-400 text-xs font-semibold uppercase tracking-wider">
+                        <tr>
+                            <th class="px-6 py-3">Algorithm</th>
+                            <th class="px-6 py-3">Winner Stability</th>
+                            <th class="px-6 py-3">SDB Score</th>
+                            <th class="px-6 py-3">R²</th>
+                            <th class="px-6 py-3">RMSE</th>
+                            <th class="px-6 py-3">wMAPE</th>
+                            <th class="px-6 py-3">Bias</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-800 bg-transparent">
+                        {rows_p4_html if rows_p4_html else '<tr><td colspan="7" class="px-6 py-4 text-center text-slate-400 text-sm">No Phase 04 results found.</td></tr>'}
+                    </tbody>
+                </table>
+            </div>
+        </div>''' if has_p4 else ''}
 
-                           <div>
-                               <h4 class="text-sm font-semibold text-slate-300 mb-2">Residuals vs Depth Plot</h4>
-                               <div class="bg-slate-900 rounded-lg overflow-hidden border border-slate-800">
-                                   <a href="5_Plot_Residuals.png" target="_blank">
-                                       <img src="5_Plot_Residuals.png" alt="Residuals Plot" class="w-full h-auto hover:opacity-90 transition-opacity" onerror="this.src='https://placehold.co/400x300/1e293b/94a3b8?text=Residuals+Plot+Not+Found'"/>
-                                   </a>
-                               </div>
-                           </div>
+        {f'''<!-- Phase 05 Validation Plots (Clean 3-Column Responsive Grid) -->
+        <div class="bg-slate-800/30 border border-slate-700/30 rounded-2xl p-6 mb-8">
+            <div class="flex items-center justify-between mb-5 border-b border-slate-800 pb-4">
+                <div>
+                    <h2 class="text-lg font-bold text-slate-100">📈 Phase 05: Independent Validation Plots</h2>
+                    <p class="text-xs text-slate-400 mt-1">Model accuracy assessment and residual error distribution against ground truth</p>
+                </div>
+                <span class="px-2.5 py-1 rounded-full text-xs font-semibold bg-sky-500/10 text-sky-400 border border-sky-500/20">Validation Outputs</span>
+            </div>
+            
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <!-- Density Scatter Plot -->
+                <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-800 flex flex-col justify-between">
+                    <h4 class="text-xs font-semibold text-slate-300 mb-2 uppercase tracking-wider">Density Scatter Plot</h4>
+                    <div class="bg-slate-950 rounded-lg overflow-hidden border border-slate-800/80">
+                        <a href="{scatter_rel if scatter_rel else '5_Plot_Scatter_Comparison.png'}" target="_blank">
+                            <img src="{scatter_rel if scatter_rel else '5_Plot_Scatter_Comparison.png'}" alt="Density Scatter Plot" class="w-full h-auto hover:opacity-90 transition-opacity" onerror="if(!this.dataset.retried){{this.dataset.retried='1'; this.src='Phase_05_Scientific_Validation/5_Plot_Scatter_Comparison.png';}}else if(this.dataset.retried==='1'){{this.dataset.retried='2'; this.src='5_Plot_Scatter_Comparison.png';}}else{{this.src='https://placehold.co/400x300/1e293b/94a3b8?text=Scatter+Plot+Not+Found';}}"/>
+                        </a>
                     </div>
                 </div>
-            </div>''' if has_val_plots else ''}
-        </div>
+                
+                <!-- Error Distribution Histogram -->
+                <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-800 flex flex-col justify-between">
+                    <h4 class="text-xs font-semibold text-slate-300 mb-2 uppercase tracking-wider">Error Distribution Histogram</h4>
+                    <div class="bg-slate-950 rounded-lg overflow-hidden border border-slate-800/80">
+                        <a href="{hist_rel if hist_rel else '5_Plot_Error_Histogram.png'}" target="_blank">
+                            <img src="{hist_rel if hist_rel else '5_Plot_Error_Histogram.png'}" alt="Error Histogram" class="w-full h-auto hover:opacity-90 transition-opacity" onerror="if(!this.dataset.retried){{this.dataset.retried='1'; this.src='Phase_05_Scientific_Validation/5_Plot_Error_Histogram.png';}}else if(this.dataset.retried==='1'){{this.dataset.retried='2'; this.src='5_Plot_Error_Histogram.png';}}else{{this.src='https://placehold.co/400x300/1e293b/94a3b8?text=Histogram+Not+Found';}}"/>
+                        </a>
+                    </div>
+                </div>
+
+                <!-- Residuals vs Depth Plot -->
+                <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-800 flex flex-col justify-between">
+                    <h4 class="text-xs font-semibold text-slate-300 mb-2 uppercase tracking-wider">Residuals vs Depth Plot</h4>
+                    <div class="bg-slate-950 rounded-lg overflow-hidden border border-slate-800/80">
+                        <a href="{residuals_rel if residuals_rel else '5_Plot_Residuals.png'}" target="_blank">
+                            <img src="{residuals_rel if residuals_rel else '5_Plot_Residuals.png'}" alt="Residuals Plot" class="w-full h-auto hover:opacity-90 transition-opacity" onerror="if(!this.dataset.retried){{this.dataset.retried='1'; this.src='Phase_05_Scientific_Validation/5_Plot_Residuals.png';}}else if(this.dataset.retried==='1'){{this.dataset.retried='2'; this.src='5_Plot_Residuals.png';}}else{{this.src='https://placehold.co/400x300/1e293b/94a3b8?text=Residuals+Plot+Not+Found';}}"/>
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>''' if has_val_plots else ''}
+
+        {html_p2_section}
         
         <!-- 3D Seabed Viewer & Plot Section -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-8">
@@ -1069,12 +1439,14 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                     <p class="text-xs text-slate-400 mb-3">Cropped to the surveyed bathymetric domain with automatic front-facing slope perspective.</p>
                 </div>
                 <div class="bg-slate-900 rounded-xl overflow-hidden border border-slate-800 h-[430px] flex items-center justify-center">
-                    <a href="5_Plot_3D_Seabed.png" target="_blank" class="w-full h-full flex items-center justify-center p-2">
-                        <img src="5_Plot_3D_Seabed.png" alt="Static 3D Seabed Plot" class="max-w-full max-h-full object-contain hover:opacity-95 transition-opacity" onerror="this.src='https://placehold.co/500x400/020617/94a3b8?text=3D+Seabed+Plot+Not+Found'"/>
+                    <a href="{seabed_3d_rel if seabed_3d_rel else '5_Plot_3D_Seabed.png'}" target="_blank" class="w-full h-full flex items-center justify-center p-2">
+                        <img src="{seabed_3d_rel if seabed_3d_rel else '5_Plot_3D_Seabed.png'}" alt="Static 3D Seabed Plot" class="max-w-full max-h-full object-contain hover:opacity-95 transition-opacity" onerror="if(!this.dataset.retried){{this.dataset.retried='1'; this.src='Phase_05_Scientific_Validation/5_Plot_3D_Seabed.png';}}else if(this.dataset.retried==='1'){{this.dataset.retried='2'; this.src='5_Plot_3D_Seabed.png';}}else{{this.src='https://placehold.co/500x400/020617/94a3b8?text=3D+Seabed+Plot+Not+Found';}}"/>
                     </a>
                 </div>
             </div>
         </div>
+
+
         
         {html_strat_section}
         
@@ -1153,48 +1525,20 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
         dashboard_path = os.path.join(out_dir, "SDB_Validation_Dashboard.html")
         with open(dashboard_path, "w", encoding="utf-8") as f:
             f.write(html_content)
-    except Exception:  # nosec B110
-        pass
-
-    # Generate HTML Technical Report
-    try:
-        generate_pdf_report(
-            out_dir=out_dir,
-            p3_models=p3_models,
-            p4_models=p4_models,
-            has_p4=has_p4,
-            enable_ransac=enable_ransac,
-            pt_count=pt_count,
-            depth_min=depth_min,
-            depth_max=depth_max,
-            has_weight_stats=has_weight_stats,
-            weight_min=weight_min,
-            weight_max=weight_max,
-            actual_pt_count=actual_pt_count,
-            collision_handling=collision_handling,
-            filter_mode_name=filter_mode_name,
-            strat_rows=strat_rows,
-            log_path=log_path,
-            feedback=feedback,
-            raster_name=raster_name,
-            train_name=train_name,
-            test_name=test_name,
-            is_spatiospectral=is_spatiospectral,
-            p2_dir=p2_dir
-        )
-    except Exception as e:
-        msg = f"Failed to invoke HTML report generation: {str(e)}\n{__import__('traceback').format_exc()}"
-        if log_path:
-            with open(log_path, 'a', encoding='utf-8') as f:
-                f.write(msg + '\n')
-        if feedback is not None:
-            feedback.pushWarning(msg)
-        elif log_path:
+        exec_path = os.path.join(out_dir, "SDB_Executive_Summary_Dashboard.html")
+        with open(exec_path, "w", encoding="utf-8") as f:
+            f.write(html_content)
+        if p5_dir and os.path.exists(p5_dir) and os.path.abspath(p5_dir) != os.path.abspath(out_dir):
             try:
-                with open(log_path, "a", encoding="utf-8") as f:
-                    f.write(f"[Warning] {msg}\n")
+                html_p5 = html_content.replace('Phase_05_Scientific_Validation/', '')
+                with open(os.path.join(p5_dir, "SDB_Validation_Dashboard.html"), "w", encoding="utf-8") as f:
+                    f.write(html_p5)
+                with open(os.path.join(p5_dir, "SDB_Executive_Summary_Dashboard.html"), "w", encoding="utf-8") as f:
+                    f.write(html_p5)
             except Exception:
                 pass
+    except Exception:  # nosec B110
+        pass
 
 
 def run_master_pipeline(algorithm, parameters, context, feedback):
@@ -1521,7 +1865,9 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
         "TRAIN_TEST_SPLIT": parameters[algorithm.TRAIN_TEST_SPLIT],
         "RANDOM_STATE": parameters[algorithm.RANDOM_STATE],
         "NUM_THREADS": parameters[algorithm.NUM_THREADS],
-        "OUTPUT_FORMAT": parameters[algorithm.OUTPUT_FORMAT],
+        "SCORE_SELECTION_STRATEGY": parameters.get(getattr(algorithm, "SCORE_SELECTION_STRATEGY", "SCORE_SELECTION_STRATEGY"), 0),
+        "SCORE_METRICS": parameters.get(getattr(algorithm, "SCORE_METRICS", "SCORE_METRICS"), [0, 1, 2, 3]),
+        "SCORE_CUSTOM_CONFIG": parameters.get(getattr(algorithm, "SCORE_CUSTOM_CONFIG", "SCORE_CUSTOM_CONFIG"), ""),
     }
     if p1.get("OUTPUT_MASK"):
         p3_params["INPUT_MASK"] = p1["OUTPUT_MASK"]
@@ -1602,16 +1948,18 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
             "PARAM_XGB": parameters.get(algorithm.PARAM_XGB, ""),
             "PARAM_LGBM": parameters.get(algorithm.PARAM_LGBM, ""),
             "PARAM_CATBOOST": parameters.get(algorithm.PARAM_CATBOOST, ""),
-            "ENABLE_ENSEMBLE": parameters.get(algorithm.ENABLE_ENSEMBLE_P4, False),
-            "ENSEMBLE_METHOD": parameters.get(algorithm.ENSEMBLE_METHOD_P4, 0),
-            "ENSEMBLE_SIZE": parameters.get(algorithm.ENSEMBLE_SIZE_P4, 3),
+            "ENSEMBLE_SIZE": parameters.get(getattr(algorithm, "ENSEMBLE_SIZE", "ENSEMBLE_SIZE"), parameters.get("ENSEMBLE_SIZE", 3)),
             "RESIDUAL_INTERP_METHOD": parameters.get(algorithm.RESIDUAL_INTERP_METHOD, 0),
             "KNN_NEIGHBORS": parameters.get(algorithm.KNN_NEIGHBORS, 15),
             "SPATIAL_CV": parameters.get(algorithm.SPATIAL_CV_P4, False),
+            "ENABLE_DEPTH_VARIANCE_CORR": parameters.get(getattr(algorithm, "ENABLE_DEPTH_VARIANCE_CORR_P4", "ENABLE_DEPTH_VARIANCE_CORR_P4"), parameters.get("ENABLE_DEPTH_VARIANCE_CORR_P4", False)),
             "TRAIN_TEST_SPLIT": parameters[algorithm.TRAIN_TEST_SPLIT],
             "RANDOM_STATE": parameters[algorithm.RANDOM_STATE],
             "NUM_THREADS": parameters[algorithm.NUM_THREADS],
             "OUTPUT_FORMAT": parameters[algorithm.OUTPUT_FORMAT],
+            "SCORE_SELECTION_STRATEGY": parameters.get(getattr(algorithm, "SCORE_SELECTION_STRATEGY", "SCORE_SELECTION_STRATEGY"), 0),
+            "SCORE_METRICS": parameters.get(getattr(algorithm, "SCORE_METRICS", "SCORE_METRICS"), [0, 1, 2, 3]),
+            "SCORE_CUSTOM_CONFIG": parameters.get(getattr(algorithm, "SCORE_CUSTOM_CONFIG", "SCORE_CUSTOM_CONFIG"), ""),
         }
         if p1.get("OUTPUT_MASK"):
             p4_params["INPUT_MASK"] = p1["OUTPUT_MASK"]
@@ -1994,14 +2342,34 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
     mins = int(elapsed // 60)
     secs = int(elapsed % 60)
     
-    append_log("════════════════════════════════════════════════════════════", log_path, feedback)
-    append_log(f"✓ SDB Single Masterflow Completed in {mins}m {secs}s".center(60), log_path, feedback)
-    append_log("════════════════════════════════════════════════════════════\n", log_path, feedback)
+    try:
+        from Bathymetrix_AI.infrastructure.logging import log_module_completion
+        primary_files = {
+            "Phase 03 Depth Map": p3.get("OUTPUT_DEPTH_MAP"),
+            "Phase 04 Refined Map": path_refined,
+            "HTML Dashboard": os.path.join(out_dir, "SDB_Executive_Summary_Dashboard.html"),
+            "3D Seabed Plot": os.path.join(out_dir, "5_Plot_3D_Seabed.png"),
+            "Cleaned Vectors": path_clean
+        }
+        log_module_completion(
+            module_title=f"SDB Single-Scene Masterflow (Completed in {mins}m {secs}s)",
+            out_dir=out_dir,
+            primary_files=primary_files,
+            log_path=log_path,
+            feedback=feedback
+        )
+    except Exception:
+        append_log("════════════════════════════════════════════════════════════", log_path, feedback)
+        append_log(f"✓ SDB Single Masterflow Completed in {mins}m {secs}s".center(60), log_path, feedback)
+        append_log("════════════════════════════════════════════════════════════\n", log_path, feedback)
 
-    return {}
+    return {
+        "OUTPUT_DEPTH": path_refined if path_refined and os.path.exists(path_refined) else p3.get("OUTPUT_DEPTH_MAP"),
+        "OUTPUT_FOLDER": out_dir
+    }
 
 
-def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt_count, depth_min, depth_max, has_weight_stats, weight_min, weight_max, actual_pt_count, collision_handling, filter_mode_name, strat_rows, log_path=None, feedback=None, raster_name="Satellite Imagery", train_name="ICESat-2 (ATL24) LiDAR", test_name="In-situ Echosounder Surveys", is_spatiospectral=False, p2_dir=None):
+def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt_count, depth_min, depth_max, has_weight_stats, weight_min, weight_max, actual_pt_count, collision_handling, filter_mode_name, strat_rows, log_path=None, feedback=None, raster_name="Satellite Imagery", train_name="ICESat-2 (ATL24) LiDAR", test_name="In-situ Echosounder Surveys", is_spatiospectral=False, p2_dir=None, spatiospectral_p3_report_html=""):
     import datetime
     
     date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -2012,16 +2380,24 @@ def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt
     p3_rows_html = ""
     for idx, m in enumerate(p3_models):
         algo = m["Algorithm"]
+        stability = m.get("Stability", 0.0)
+        wins = m.get("Wins", "")
+        sdb_score = m.get("SDB_Score", 0.0)
         r2 = m["R2"]
         rmse = m["RMSE"]
         wmape = m["wMAPE"]
+        bias = m.get("Bias", 0.0)
         bg = ' bgcolor="#f8fafc"' if idx % 2 == 1 else ''
+        wins_str = f" ({wins})" if wins else ""
         p3_rows_html += f"""
         <tr{bg}>
             <td style="white-space: nowrap;"><strong>{algo}</strong></td>
+            <td style="color: #059669; font-weight: bold; white-space: nowrap;">{stability:.1f}%<span style="font-size: 7pt; color: #64748b; font-weight: normal;">{wins_str}</span></td>
+            <td style="color: #b45309; font-weight: bold; white-space: nowrap;">{sdb_score:.2f}</td>
             <td style="color: #0f766e; font-weight: bold; white-space: nowrap;">{r2:.4f}</td>
             <td style="color: #1d4ed8; font-weight: bold; white-space: nowrap;">{rmse:.2f}m</td>
             <td style="color: #4f46e5; font-weight: bold; white-space: nowrap;">{wmape:.2f}%</td>
+            <td style="color: #be123c; font-weight: bold; white-space: nowrap;">{bias:+.3f}m</td>
         </tr>
         """
 
@@ -2030,20 +2406,28 @@ def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt
     if has_p4:
         for idx, m in enumerate(p4_models):
             algo = m["Algorithm"]
+            stability = m.get("Stability", 0.0)
+            wins = m.get("Wins", "")
+            sdb_score = m.get("SDB_Score", 0.0)
             r2 = m["R2"]
             rmse = m["RMSE"]
             wmape = m["wMAPE"]
+            bias = m.get("Bias", 0.0)
             bg = ' bgcolor="#f8fafc"' if idx % 2 == 1 else ''
+            wins_str = f" ({wins})" if wins else ""
             p4_rows_html += f"""
             <tr{bg}>
                 <td style="white-space: nowrap;"><strong>{algo}</strong></td>
+                <td style="color: #059669; font-weight: bold; white-space: nowrap;">{stability:.1f}%<span style="font-size: 7pt; color: #64748b; font-weight: normal;">{wins_str}</span></td>
+                <td style="color: #b45309; font-weight: bold; white-space: nowrap;">{sdb_score:.2f}</td>
                 <td style="color: #0f766e; font-weight: bold; white-space: nowrap;">{r2:.4f}</td>
                 <td style="color: #1d4ed8; font-weight: bold; white-space: nowrap;">{rmse:.2f}m</td>
                 <td style="color: #4f46e5; font-weight: bold; white-space: nowrap;">{wmape:.2f}%</td>
+                <td style="color: #be123c; font-weight: bold; white-space: nowrap;">{bias:+.3f}m</td>
             </tr>
             """
     else:
-        p4_rows_html = "<tr><td colspan='4' style='text-align: center; color: #64748b; padding: 6px;'>Phase 04 Refinement was bypassed/disabled.</td></tr>"
+        p4_rows_html = "<tr><td colspan='7' style='text-align: center; color: #64748b; padding: 6px;'>Phase 04 Refinement was bypassed/disabled.</td></tr>"
 
     # Stratified Table
     strat_rows_html = ""
@@ -2395,7 +2779,7 @@ def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt
         {p2_plots_html}
 
         {
-        f'''<h2>🏆 Phase 03: AutoML Leaderboard (Global Model)</h2>
+        spatiospectral_p3_report_html if (is_spatiospectral and spatiospectral_p3_report_html) else (f'''<h2>🏆 Phase 03: AutoML Leaderboard (Global Model)</h2>
         <p style="color: #64748b; font-size: 8pt; margin-bottom: 5px;">
             The algorithms are optimized and evaluated against independent cross-validation blocks.
         </p>
@@ -2403,18 +2787,21 @@ def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt
             <thead>
                 <tr bgcolor="#f1f5f9">
                     <th style="white-space: nowrap;">Algorithm</th>
+                    <th style="white-space: nowrap;">Winner Stability</th>
+                    <th style="white-space: nowrap;">SDB Score (0-100)</th>
                     <th style="white-space: nowrap;">R² Accuracy</th>
                     <th style="white-space: nowrap;">RMSE (Vertical Error)</th>
                     <th style="white-space: nowrap;">wMAPE (%)</th>
+                    <th style="white-space: nowrap;">Bias (m)</th>
                 </tr>
             </thead>
             <tbody>
                 {p3_rows_html}
             </tbody>
-        </table>''' if not is_spatiospectral else ''
+        </table>''' if not is_spatiospectral else '')
         }
 
-        {f"<h2>🔄 Phase 04: Depth-Dependent Residual Calibration Leaderboard</h2><table border='1' cellspacing='0' cellpadding='6' bordercolor='#cbd5e1' style='width: 100%; border-collapse: collapse; margin-top: 8pt; margin-bottom: 12pt;'><thead><tr bgcolor='#f1f5f9'><th style='white-space: nowrap;'>Algorithm</th><th style='white-space: nowrap;'>R² Accuracy</th><th style='white-space: nowrap;'>RMSE (Vertical Error)</th><th style='white-space: nowrap;'>wMAPE (%)</th></tr></thead><tbody>{p4_rows_html}</tbody></table>" if has_p4 and not is_spatiospectral else ""}
+        {f"<h2>🔄 Phase 04: Depth-Dependent Residual Calibration Leaderboard</h2><table border='1' cellspacing='0' cellpadding='6' bordercolor='#cbd5e1' style='width: 100%; border-collapse: collapse; margin-top: 8pt; margin-bottom: 12pt;'><thead><tr bgcolor='#f1f5f9'><th style='white-space: nowrap;'>Algorithm</th><th style='white-space: nowrap;'>Winner Stability</th><th style='white-space: nowrap;'>SDB Score (0-100)</th><th style='white-space: nowrap;'>R² Accuracy</th><th style='white-space: nowrap;'>RMSE (Vertical Error)</th><th style='white-space: nowrap;'>wMAPE (%)</th><th style='white-space: nowrap;'>Bias (m)</th></tr></thead><tbody>{p4_rows_html}</tbody></table>" if has_p4 else ""}
 
         <div class="footer">
             Report generated automatically by Bathymetrix-AI V7.0. All rights reserved. &copy; Mohamed Aly Nasef (2026).

@@ -8,11 +8,17 @@ import rasterio
 
 from rasterio.features import geometry_mask
 
-from qgis.core import (
-    QgsProcessingException,
-    QgsCoordinateTransform,
-    QgsProject,
-)
+try:
+    from qgis.core import (
+        QgsProcessingException,
+        QgsCoordinateTransform,
+        QgsProject,
+    )
+except ImportError:
+    QgsProcessingException = Exception
+    QgsCoordinateTransform = None
+    QgsProject = None
+
 
 _SAFE_OP = {
     ast.Add: operator.add,
@@ -1307,5 +1313,22 @@ def run_phase01_preprocessing(algorithm, parameters, context, feedback):
         output_dict["OUTPUT_MASK"] = final_mask_path
     if osw_poly:
         output_dict["OUTPUT_OSW_POLY"] = osw_poly
+
+    try:
+        from Bathymetrix_AI.infrastructure.logging import log_module_completion
+        primary_files = {
+            "Feature Stack": p_stack,
+            "Water Mask": final_mask_path,
+            "OSW Polygon": osw_poly
+        }
+        log_module_completion(
+            module_title="Phase 01: Preprocessing & Feature Extraction",
+            out_dir=out_dir,
+            primary_files=primary_files,
+            log_path=os.path.join(out_dir, "01_Preprocessing_Log.txt"),
+            feedback=feedback
+        )
+    except Exception:
+        pass
 
     return output_dict

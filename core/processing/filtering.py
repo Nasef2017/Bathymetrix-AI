@@ -4,24 +4,45 @@ import warnings
 import matplotlib
 import numpy as np
 import rasterio
-from qgis.PyQt.QtCore import QVariant
-from sklearn.linear_model import HuberRegressor, LinearRegression, RANSACRegressor
+from sklearn.linear_model import LinearRegression, RANSACRegressor, HuberRegressor
 from sklearn.preprocessing import PolynomialFeatures
 
-from qgis.core import (
-    QgsCoordinateTransform,
-    QgsCoordinateReferenceSystem,
-    QgsFeature,
-    QgsField,
-    QgsGeometry,
-    QgsProcessingException,
-    QgsProject,
-    QgsRasterLayer,
-    QgsVectorFileWriter,
-    QgsWkbTypes,
-)
+try:
 
-from ...infrastructure.vector_io import resolve_depth_field
+    from qgis.PyQt.QtCore import QVariant
+    from qgis.core import (
+        QgsCoordinateTransform,
+        QgsCoordinateReferenceSystem,
+        QgsFeature,
+        QgsField,
+        QgsGeometry,
+        QgsProcessingException,
+        QgsProject,
+        QgsRasterLayer,
+        QgsVectorLayer,
+        QgsVectorFileWriter,
+        QgsWkbTypes,
+    )
+except ImportError:
+    QVariant = None
+    QgsCoordinateTransform = None
+    QgsCoordinateReferenceSystem = None
+    QgsFeature = None
+    QgsField = None
+    QgsGeometry = None
+    QgsProcessingException = Exception
+    QgsProject = None
+    QgsRasterLayer = None
+    QgsVectorLayer = None
+    QgsVectorFileWriter = None
+    QgsWkbTypes = None
+
+
+try:
+    from ...infrastructure.vector_io import resolve_depth_field
+except (ImportError, ValueError):
+    from infrastructure.vector_io import resolve_depth_field
+
 
 warnings.filterwarnings("ignore")
 matplotlib.use("Agg")
@@ -523,5 +544,24 @@ def run_phase02_filtering(algorithm, parameters, context, feedback):
     feedback.pushInfo(f"      • Rejected (Outliers Filtered): {n_rej} ({pct_rej:.1f}%)")
     feedback.pushInfo(f"      • Cleaned Output Layer: {clean_shp}")
     feedback.pushInfo("   ══════════════════════════════════════════════════")
+
+    try:
+        from Bathymetrix_AI.infrastructure.logging import log_module_completion
+        primary_files = {
+            "Cleaned Inliers": clean_shp,
+            "Outliers Rejected": reject_shp,
+            "Physics Trend Plot": os.path.join(out_dir, "2_Plot_1_Trend.png"),
+            "Variance Analysis": os.path.join(out_dir, "2_Plot_2_Variance.png"),
+            "Envelope Plot": os.path.join(out_dir, "2_Plot_3_Envelope.png"),
+        }
+        log_module_completion(
+            module_title="Phase 02: Robust Bathymetric Filtering",
+            out_dir=out_dir,
+            primary_files=primary_files,
+            log_path=os.path.join(out_dir, "02_Filtering_Log.txt"),
+            feedback=feedback
+        )
+    except Exception:
+        pass
 
     return {"OUTPUT_CLEAN_VEC": clean_shp}

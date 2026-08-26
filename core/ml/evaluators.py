@@ -5,6 +5,7 @@ import warnings
 
 import matplotlib
 import numpy as np
+import pandas as pd
 import rasterio
 from sklearn.ensemble import (
     ExtraTreesRegressor,
@@ -12,7 +13,7 @@ from sklearn.ensemble import (
     RandomForestRegressor,
 )
 from sklearn.linear_model import ElasticNet, Lasso, LinearRegression, Ridge, HuberRegressor
-from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV, train_test_split
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.neural_network import MLPRegressor
@@ -25,6 +26,8 @@ from sklearn.gaussian_process.kernels import RBF, ConstantKernel as C
 from .trainers import (
     CustomEnsembleRegressor,
     run_optuna_search,
+    calculate_sdb_composite_score,
+    parse_score_config,
     OPTUNA_AVAILABLE,
     XGB_AVAILABLE,
     LGBM_AVAILABLE,
@@ -38,14 +41,24 @@ if LGBM_AVAILABLE:
 if CATBOOST_AVAILABLE:
     import catboost as cb
 
-from qgis.core import (
-    QgsCoordinateTransform,
-    QgsProcessingException,
-    QgsProject,
-    QgsRasterLayer,
-)
+try:
+    from qgis.core import (
+        QgsCoordinateTransform,
+        QgsProcessingException,
+        QgsProject,
+        QgsRasterLayer,
+    )
+except ImportError:
+    QgsCoordinateTransform = None
+    QgsProcessingException = Exception
+    QgsProject = None
+    QgsRasterLayer = None
 
-from ...infrastructure.logging import append_log
+try:
+    from ...infrastructure.logging import append_log
+except (ImportError, ValueError):
+    from infrastructure.logging import append_log
+
 
 try:
     from skopt import BayesSearchCV
@@ -406,6 +419,8 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
     random_state = algorithm.parameterAsInt(parameters, algorithm.RANDOM_STATE, context)
     n_jobs = algorithm.parameterAsInt(parameters, algorithm.NUM_THREADS, context)
     
+    score_config = parse_score_config(algorithm, parameters, context)
+    
     max_gpr_samples = 1500
     if algorithm.parameterDefinition("MAX_GPR_SAMPLES"):
         try:
@@ -468,10 +483,32 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
             "Not enough points for Module 4 (Spatial Refinement)."
         )
 
+    try:
+        enable_var_corr = algorithm.parameterAsBool(parameters, "ENABLE_DEPTH_VARIANCE_CORR", context)
+    except Exception:
+        enable_var_corr = False
+    if not enable_var_corr:
+        try:
+            enable_var_corr = algorithm.parameterAsBool(parameters, "ENABLE_DEPTH_VARIANCE_CORR_P4", context)
+        except Exception:
+            enable_var_corr = parameters.get("ENABLE_DEPTH_VARIANCE_CORR", parameters.get("ENABLE_DEPTH_VARIANCE_CORR_P4", False))
+
     raw_residuals = z_true.flatten() - z_pred3.flatten()
-    mean_bias = float(np.mean(raw_residuals))
-    append_log(f"   [Phase 04] Raw mean residual offset: {mean_bias:.4f}m (Zero-mean centered for temporal consistency)", log_path, feedback)
-    residuals = raw_residuals - mean_bias
+    mean_bias = float(np.mean(raw_residuals)) if len(raw_residuals) > 0 else 0.0
+    if np.isnan(mean_bias) or np.isinf(mean_bias):
+        mean_bias = 0.0
+
+    if enable_var_corr:
+        append_log(f"   [Phase 04] Depth Variance Correction ENABLED (Control Points Mean Shift: {mean_bias:+.4f}m)", log_path, feedback)
+        z_pred3 = z_pred3 + mean_bias
+        residuals = z_true.flatten() - z_pred3.flatten()
+        applied_shift = mean_bias
+        residual_mean_bias = 0.0  # Zero-mean is baked into the shifted depth map baseline
+    else:
+        append_log(f"   [Phase 04] Raw mean residual offset: {mean_bias:.4f}m (Zero-mean centered for temporal consistency)", log_path, feedback)
+        residuals = raw_residuals - mean_bias
+        applied_shift = 0.0
+        residual_mean_bias = mean_bias
 
     try:
         interp_idx = algorithm.parameterAsEnum(parameters, "RESIDUAL_INTERP_METHOD", context)
@@ -529,6 +566,13 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
 
     with rasterio.open(global_path) as g:
         p3_map = g.read(1)
+
+    if enable_var_corr and applied_shift != 0.0:
+        valid_water_p3 = (p3_map != -9999.0)
+        if mask_path and str(mask_path).strip() and mask_path != "None":
+            valid_water_p3 = valid_water_p3 & (mask_arr > 0)
+        p3_map[valid_water_p3] += applied_shift
+        append_log(f"   [Phase 04] Applied Depth Variance Correction ({applied_shift:+.4f}m shift) across all valid depth pixels.", log_path, feedback)
         
     water_indices = np.where((mask_arr > 0) & (p3_map != -9999.0))
     water_coords = np.column_stack((water_indices[0], water_indices[1]))
@@ -550,7 +594,7 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
     meta_res.update(count=1, dtype="float32", nodata=-9999.0)
 
     res_map_to_save = np.full((h, w), -9999.0, dtype="float32")
-    res_map_to_save[water_indices] = residual_grid[water_indices] + mean_bias
+    res_map_to_save[water_indices] = residual_grid[water_indices] + residual_mean_bias
 
     with rasterio.open(p_residual, "w", **meta_res) as dst:
         dst.write(res_map_to_save, 1)
@@ -581,7 +625,7 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
         stack_layers.append(p3_map[np.newaxis, :, :])
         stack_names.append("Phase03_Global_Depth")
     if 2 in stack_comps:
-        stack_layers.append((residual_grid + mean_bias)[np.newaxis, :, :])
+        stack_layers.append((residual_grid + residual_mean_bias)[np.newaxis, :, :])
         stack_names.append("Residual_Error_Grid")
 
     if not stack_layers:
@@ -597,11 +641,11 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
             valid_mask = valid_mask & (mask_arr > 0)
         
         if 1 in stack_comps and 2 in stack_comps:
-            final_map[valid_mask] = p3_map[valid_mask] + residual_grid[valid_mask] + mean_bias
+            final_map[valid_mask] = p3_map[valid_mask] + residual_grid[valid_mask] + residual_mean_bias
         elif 1 in stack_comps:
             final_map[valid_mask] = p3_map[valid_mask]
         elif 2 in stack_comps:
-            final_map[valid_mask] = residual_grid[valid_mask] + mean_bias
+            final_map[valid_mask] = residual_grid[valid_mask] + residual_mean_bias
             
         if med_size > 0 and scipy_is_available:
             from scipy.ndimage import distance_transform_edt
@@ -930,21 +974,26 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
 
     try:
         ens_idx = algorithm.parameterAsEnum(parameters, "ENSEMBLE_METHOD", context)
-        ens_map = {0: "Average", 1: "Median", 2: "Stacking", 3: "Uncertainty-Weighted Fusion"}
-        ensemble_method = ens_map.get(ens_idx, "Average")
+        ens_map = {0: "All Ensemble Methods (Auto-Select)", 1: "Average", 2: "Median", 3: "Stacking", 4: "Uncertainty-Weighted Fusion"}
+        ensemble_method = ens_map.get(ens_idx, "All Ensemble Methods (Auto-Select)")
     except Exception:
-        ensemble_method = "Average"
+        ensemble_method = "All Ensemble Methods (Auto-Select)"
 
     try:
         ensemble_size = algorithm.parameterAsInt(parameters, "ENSEMBLE_SIZE", context)
     except Exception:
         ensemble_size = 3
 
+    all_indices = [int(i) for i in sel_idx]
+    base_indices = [i for i in all_indices if i < 15]
+    ensemble_selected_indices = [i for i in all_indices if i >= 15]
 
+    if not base_indices and ensemble_selected_indices:
+        base_indices = [3, 12, 13, 14] # Extra Trees, XGBoost, LightGBM, CatBoost
 
     all_models_p4 = []
 
-    for idx in sel_idx:
+    for idx in base_indices:
         name, raw_model_inst, default_params = get_model_and_params(idx, opt_idx, random_state, n_jobs)
         if raw_model_inst is None:
             append_log(f"       ! Skipping {name}: Library is not installed.", log_path, feedback)
@@ -983,11 +1032,13 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
                         import scipy.stats as stats
                         opt_params = {}
                         for k, v in params.items():
-                            if isinstance(v, list) and len(v) == 2:
+                            if isinstance(v, list) and len(v) == 2 and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in v):
                                 if all(isinstance(x, int) for x in v) and v[0] < v[1]:
                                     opt_params[k] = stats.randint(v[0], v[1] + 1)
-                                else:
+                                elif v[0] < v[1]:
                                     opt_params[k] = stats.uniform(v[0], v[1] - v[0])
+                                else:
+                                    opt_params[k] = v
                             else:
                                 opt_params[k] = v
                         search = RandomizedSearchCV(
@@ -996,11 +1047,13 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
                     elif current_opt_idx == 1:
                         opt_params = {}
                         for k, v in params.items():
-                            if isinstance(v, list) and len(v) == 2:
+                            if isinstance(v, list) and len(v) == 2 and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in v):
                                 if all(isinstance(x, int) for x in v) and v[0] < v[1]:
-                                    opt_params[k] = list(np.linspace(v[0], v[1], 5, dtype=int))
-                                else:
+                                    opt_params[k] = list(np.linspace(v[0], v[1], min(5, v[1] - v[0] + 1), dtype=int))
+                                elif v[0] < v[1]:
                                     opt_params[k] = list(np.linspace(v[0], v[1], 5))
+                                else:
+                                    opt_params[k] = v
                             else:
                                 opt_params[k] = v
                         search = GridSearchCV(clone(raw_model_inst), opt_params, cv=cv_splitter, n_jobs=n_jobs)
@@ -1018,11 +1071,13 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
                             import scipy.stats as stats
                             opt_params = {}
                             for k, v in params.items():
-                                if isinstance(v, list) and len(v) == 2:
+                                if isinstance(v, list) and len(v) == 2 and all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in v):
                                     if all(isinstance(x, int) for x in v) and v[0] < v[1]:
                                         opt_params[k] = stats.randint(v[0], v[1] + 1)
-                                    else:
+                                    elif v[0] < v[1]:
                                         opt_params[k] = stats.uniform(v[0], v[1] - v[0])
+                                    else:
+                                        opt_params[k] = v
                                 else:
                                     opt_params[k] = v
                             search = (
@@ -1047,61 +1102,108 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
                     curr_model.fit(X_train, y_train)
 
             y_pred = curr_model.predict(X_val)
-            rmse = np.sqrt(mean_squared_error(y_val, y_pred))
-            r2 = r2_score(y_val, y_pred)
+            rmse = float(np.sqrt(mean_squared_error(y_val, y_pred)))
+            r2 = float(r2_score(y_val, y_pred))
             sum_abs_diff = np.sum(np.abs(y_val - y_pred))
             sum_abs_true = np.sum(np.abs(y_val))
-            wmape = (sum_abs_diff / sum_abs_true) * 100 if sum_abs_true != 0 else 0
+            wmape = float((sum_abs_diff / sum_abs_true) * 100 if sum_abs_true != 0 else 0.0)
+            bias = float(np.mean(y_pred - y_val))
+            mae = float(mean_absolute_error(y_val, y_pred))
 
-            append_log(f"       > {name}: RMSE={rmse:.3f}m", log_path, feedback)
+            append_log(f"       > {name}: R2={r2:.3f}, RMSE={rmse:.2f}m, wMAPE={wmape:.1f}%, Bias={bias:+.3f}m, MAE={mae:.2f}m", log_path, feedback)
             all_models_p4.append({
                 "Algorithm": name,
                 "Feature Scaling": "None",
                 "Model": curr_model,
                 "RMSE": rmse,
                 "R2": r2,
-                "wMAPE": wmape
+                "wMAPE": wmape,
+                "Bias": bias,
+                "MAE": mae,
             })
-
-            if rmse < best_rmse:
-                best_rmse = rmse
-                best_model = curr_model
-                best_algo_name = name
-                best_r2 = r2
-                best_wmape = wmape
 
         except Exception as e:
             append_log(f"Error in {name}: {str(e)}", log_path, feedback)
 
-
-    if enable_ensemble and len(all_models_p4) >= 2:
-        sorted_p4 = sorted(all_models_p4, key=lambda x: x["RMSE"])
-        top_p4 = sorted_p4[:ensemble_size]
-        estimators_p4 = [(m["Algorithm"], m["Model"]) for m in top_p4]
-        append_log(f"   [Ensemble] Blending top models: {[m['Algorithm'] for m in top_p4]} using {ensemble_method}", log_path, feedback)
-
-        ensemble_model = CustomEnsembleRegressor(estimators=estimators_p4, method=ensemble_method)
-        ensemble_model.fit(X_train, y_train)
-        
-        y_pred = ensemble_model.predict(X_val)
-        ens_rmse = np.sqrt(mean_squared_error(y_val, y_pred))
-        ens_r2 = r2_score(y_val, y_pred)
-        sum_abs_diff = np.sum(np.abs(y_val - y_pred))
-        sum_abs_true = np.sum(np.abs(y_val))
-        ens_wmape = (sum_abs_diff / sum_abs_true) * 100 if sum_abs_true != 0 else 0
-
-        if ens_rmse < best_rmse:
-            append_log(f"      > Ensemble ({ensemble_method}) wins! RMSE={ens_rmse:.3f}m (beats {best_algo_name} with RMSE={best_rmse:.3f}m)", log_path, feedback)
-            best_rmse = ens_rmse
-            best_model = ensemble_model
-            best_algo_name = f"Ensemble ({ensemble_method})"
-            best_r2 = ens_r2
-            best_wmape = ens_wmape
-        else:
-            append_log(f"      > Ensemble ({ensemble_method}) did not beat winner {best_algo_name} (Ensemble RMSE={ens_rmse:.3f}m vs Winner RMSE={best_rmse:.3f}m)", log_path, feedback)
-
-    if best_model is None:
+    if not all_models_p4:
         raise QgsProcessingException("All refinement models failed.")
+
+    has_ensemble_selected = len(ensemble_selected_indices) > 0 or enable_ensemble
+    if has_ensemble_selected and len(all_models_p4) >= 2:
+        df_base_p4 = calculate_sdb_composite_score(pd.DataFrame(all_models_p4), random_state=random_state, score_config=score_config)
+        top_p4 = df_base_p4.sort_values(by="SDB_Score", ascending=False).head(ensemble_size).to_dict("records")
+        estimators_p4 = [(m["Algorithm"], m["Model"]) for m in top_p4]
+        append_log(f"   [Ensemble] Blending top {len(estimators_p4)} base models ({[m['Algorithm'] for m in top_p4]})", log_path, feedback)
+
+        methods_to_test = []
+        if 19 in ensemble_selected_indices or (enable_ensemble and ensemble_method in ["All Ensemble Methods (Auto-Select)", "All"]):
+            methods_to_test = ["Average", "Median", "Stacking", "Uncertainty-Weighted Fusion"]
+        else:
+            if 15 in ensemble_selected_indices:
+                methods_to_test.append("Average")
+            if 16 in ensemble_selected_indices:
+                methods_to_test.append("Median")
+            if 17 in ensemble_selected_indices:
+                methods_to_test.append("Stacking")
+            if 18 in ensemble_selected_indices:
+                methods_to_test.append("Uncertainty-Weighted Fusion")
+            if not methods_to_test and enable_ensemble:
+                methods_to_test = [ensemble_method]
+
+        for m_name in methods_to_test:
+            try:
+                ensemble_model = CustomEnsembleRegressor(estimators=estimators_p4, method=m_name)
+                ensemble_model.fit(X_train, y_train)
+                
+                y_pred = ensemble_model.predict(X_val)
+                ens_rmse = float(np.sqrt(mean_squared_error(y_val, y_pred)))
+                ens_r2 = float(r2_score(y_val, y_pred))
+                sum_abs_diff = np.sum(np.abs(y_val - y_pred))
+                sum_abs_true = np.sum(np.abs(y_val))
+                ens_wmape = float((sum_abs_diff / sum_abs_true) * 100 if sum_abs_true != 0 else 0.0)
+                ens_bias = float(np.mean(y_pred - y_val))
+                ens_mae = float(mean_absolute_error(y_val, y_pred))
+
+                all_models_p4.append({
+                    "Algorithm": f"Ensemble ({m_name})",
+                    "Feature Scaling": "Composite",
+                    "Model": ensemble_model,
+                    "RMSE": ens_rmse,
+                    "R2": ens_r2,
+                    "wMAPE": ens_wmape,
+                    "Bias": ens_bias,
+                    "MAE": ens_mae,
+                })
+                append_log(f"       > Ensemble ({m_name}): R2={ens_r2:.3f}, RMSE={ens_rmse:.2f}m, wMAPE={ens_wmape:.1f}%, Bias={ens_bias:+.3f}m, MAE={ens_mae:.2f}m", log_path, feedback)
+            except Exception as e:
+                append_log(f"       ! Failed Ensemble ({m_name}): {e}", log_path, feedback)
+
+    df_p4 = pd.DataFrame(all_models_p4)
+    df_p4 = calculate_sdb_composite_score(df_p4, random_state=random_state, score_config=score_config, out_dir=out_dir, prefix="4_")
+    winner_p4 = df_p4.iloc[0]
+
+    try:
+        csv_cols = [c for c in ["Algorithm", "Stability", "Wins", "Mean_Score", "SDB_Score", "R2", "RMSE", "wMAPE", "Bias", "MAE", "Feature Scaling"] if c in df_p4.columns]
+        df_p4[csv_cols].to_csv(os.path.join(out_dir, "4_All_Algorithms_Benchmark.csv"), index=False)
+    except Exception:
+        df_p4.to_csv(os.path.join(out_dir, "4_All_Algorithms_Benchmark.csv"), index=False)
+
+    best_model = winner_p4["Model"]
+    best_algo_name = winner_p4["Algorithm"]
+    best_rmse = winner_p4["RMSE"]
+    best_r2 = winner_p4["R2"]
+    best_wmape = winner_p4["wMAPE"]
+
+    strat_title_p4 = score_config.get("strategy_name", "Winner Stability & SDB Composite Ranking") if score_config else "Winner Stability & SDB Composite Ranking"
+    append_log(f"\n   📊 [Phase 04 Auto-ML Leaderboard - Selection Strategy: {strat_title_p4}]:", log_path, feedback)
+    for rank, row in df_p4.iterrows():
+        prefix = "🥇" if rank == 0 else ("🥈" if rank == 1 else ("🥉" if rank == 2 else "  "))
+        append_log(
+            f"      {prefix} {row['Algorithm']:<32} | Stability: {row['Stability']:>5.1f}% ({row['Wins']:>5}) | Mean Score: {row['Mean_Score']:>5.2f} | Baseline Score: {row['SDB_Score']:>5.2f} | R²={row['R2']:>6.4f} | RMSE={row['RMSE']:>5.2f}m | wMAPE={row['wMAPE']:>5.2f}% | Bias={row['Bias']:>+6.3f}m",
+            log_path, feedback
+        )
+
+    append_log(f"\n   ⭐ Winner Selected: {best_algo_name} (Stability: {winner_p4['Stability']:.1f}% [{winner_p4['Wins']}], SDB Score: {winner_p4['SDB_Score']:.2f}, Mean Score: {winner_p4['Mean_Score']:.2f}/100)", log_path, feedback)
 
     try:
         from .trainers import export_feature_importance
@@ -1206,23 +1308,8 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
             p_uncert = None
 
     try:
-        import pandas as pd
-        rows_p4 = []
-        for m in all_models_p4:
-            rows_p4.append({
-                "Algorithm": m["Algorithm"],
-                "R2": m["R2"],
-                "RMSE": m["RMSE"],
-                "wMAPE": m["wMAPE"]
-            })
-        if enable_ensemble and len(all_models_p4) >= 2:
-            rows_p4.append({
-                "Algorithm": f"Ensemble ({ensemble_method})",
-                "R2": ens_r2,
-                "RMSE": ens_rmse,
-                "wMAPE": ens_wmape
-            })
-        pd.DataFrame(rows_p4).to_csv(
+        csv_cols = [c for c in ["Algorithm", "Stability", "Wins", "Mean_Score", "SDB_Score", "R2", "RMSE", "wMAPE", "Bias", "MAE", "Feature Scaling"] if c in df_p4.columns]
+        df_p4[csv_cols].to_csv(
             os.path.join(out_dir, "4_All_Algorithms_Benchmark.csv"), index=False
         )
     except Exception as e:
@@ -1254,6 +1341,33 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
             append_log("   [Cleanup] Phase 04 depth map cleanup completed.", log_path, feedback)
     except Exception as e:
         append_log(f"   [Warning] Phase 04 cleanup failed: {e}", log_path, feedback)
+
+    # Generate standardized ocean bathymetry .qml style alongside Phase 04 depth map
+    if p_final and os.path.exists(p_final):
+        try:
+            from Bathymetrix_AI.infrastructure.raster_io import write_qml_style
+            write_qml_style(p_final)
+        except Exception:
+            pass
+
+    try:
+        from Bathymetrix_AI.infrastructure.logging import log_module_completion
+        primary_files = {
+            "Phase 04 Refined Map": p_final,
+            "Residual Map": p_residual,
+            "Uncertainty Map": p_uncert,
+            "Algorithms Benchmark": os.path.join(out_dir, "4_All_Algorithms_Benchmark.csv"),
+            "Phase 04 Model": os.path.join(out_dir, "4_Phase04_Adaptive_Model.pkl")
+        }
+        log_module_completion(
+            module_title=f"Phase 04: Spatial Error Calibration (Winner: {best_algo_name})",
+            out_dir=out_dir,
+            primary_files=primary_files,
+            log_path=log_path,
+            feedback=feedback
+        )
+    except Exception:
+        pass
 
     return {
         "OUTPUT_FINAL": p_final,

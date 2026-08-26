@@ -1,11 +1,22 @@
 import os
 import glob
-from qgis.core import QgsProcessingException
-from qgis import processing
 
-from Bathymetrix_AI.infrastructure.logging import append_log
-from Bathymetrix_AI.core.spectral.aggregation import spatiospectral_aggregate, spatiospectral_mask_intersection
-from Bathymetrix_AI.infrastructure.raster_io import clean_depth_map, remove_positive_pixels, slope_filter_depth
+try:
+    from qgis.core import QgsProcessingException
+    from qgis import processing
+except ImportError:
+    QgsProcessingException = Exception
+    processing = None
+
+try:
+    from Bathymetrix_AI.infrastructure.logging import append_log
+    from Bathymetrix_AI.core.spectral.aggregation import spatiospectral_aggregate, spatiospectral_mask_intersection
+    from Bathymetrix_AI.infrastructure.raster_io import clean_depth_map, remove_positive_pixels, slope_filter_depth
+except (ImportError, ValueError):
+    from infrastructure.logging import append_log
+    from core.spectral.aggregation import spatiospectral_aggregate, spatiospectral_mask_intersection
+    from infrastructure.raster_io import clean_depth_map, remove_positive_pixels, slope_filter_depth
+
 
 class SpatioSpectralSDBRunner:
     def __init__(self, master_output_folder):
@@ -282,6 +293,7 @@ class SpatioSpectralSDBRunner:
             p4_params["OUTPUT_FOLDER"] = p4_dir
             if "SPATIAL_CV_P4" in masterflow_params:
                 p4_params["SPATIAL_CV"] = masterflow_params["SPATIAL_CV_P4"]
+            p4_params["ENABLE_DEPTH_VARIANCE_CORR"] = masterflow_params.get("ENABLE_DEPTH_VARIANCE_CORR_P4", False)
             
             p4 = processing.run("sdb_tools:sdb_phase4_adaptive", p4_params, is_child_algorithm=True, context=context, feedback=feedback)
             
@@ -369,7 +381,7 @@ class SpatioSpectralSDBRunner:
         try:
             from Bathymetrix_AI.core.pipeline import generate_html_dashboard
             generate_html_dashboard(
-                out_dir=p5_dir,
+                out_dir=self.master_output_folder,
                 p3_dir=self.master_output_folder,
                 p4_dir=p4_dir,
                 spatial_cv_p3=False,
@@ -381,24 +393,69 @@ class SpatioSpectralSDBRunner:
                 test_name="Validation Points" if input_test_layer else None,
                 final_raster_path=final_depth_for_3d,
                 is_spatiospectral=True,
-                p2_dir=os.path.join(self.master_output_folder, "Phase_02_Filtering")
+                p2_dir=os.path.join(self.master_output_folder, "Phase_02_Filtering"),
+                p5_dir=p5_dir
             )
         except Exception as e:
             append_log(f"  ⚠ WARNING: Dashboard generation failed: {str(e)}", log_path, feedback)
         
         append_log("✓ Phase 05 Finalization completed\n", log_path, feedback)
 
+        # Generate standardized ocean bathymetry .qml styles & load layers to canvas
+        try:
+            from Bathymetrix_AI.infrastructure.raster_io import write_qml_style
+            from Bathymetrix_AI.infrastructure.canvas import add_raster_to_canvas
+            if aggregated_depth_path and os.path.exists(aggregated_depth_path):
+                qml_agg = write_qml_style(aggregated_depth_path)
+                add_raster_to_canvas(
+                    aggregated_depth_path,
+                    f"Aggregated Depth ({self.agg_method})",
+                    context=context,
+                    style_path=qml_agg,
+                )
+            if p4_final_depth and os.path.exists(p4_final_depth):
+                qml_p4 = write_qml_style(p4_final_depth)
+                add_raster_to_canvas(
+                    p4_final_depth,
+                    f"Phase 04 Final Refined Depth ({self.agg_method})",
+                    context=context,
+                    style_path=qml_p4,
+                )
+        except Exception:
+            pass
+
+
         total_elapsed = time.time() - start_time
-        m, s = divmod(int(total_elapsed), 60)
-        h, m = divmod(m, 60)
-        
-        append_log("════════════════════════════════════════════════════════════", log_path, feedback)
-        append_log("✓ SDB SpatioSpectral Masterflow Completed".center(60), log_path, feedback)
-        append_log("════════════════════════════════════════════════════════════", log_path, feedback)
-        append_log(f"Scenes processed : {len(tif_files)} / {len(tif_files)}", log_path, feedback)
-        append_log(f"Total elapsed    : {h:02d}:{m:02d}:{s:02d}", log_path, feedback)
-        append_log("Status           : SUCCESS", log_path, feedback)
-        append_log("════════════════════════════════════════════════════════════\n", log_path, feedback)
+        tm, ts = divmod(int(total_elapsed), 60)
+        th, tm = divmod(tm, 60)
+
+        try:
+            from Bathymetrix_AI.infrastructure.logging import log_module_completion
+            dash_path = os.path.join(self.master_output_folder, "SDB_Validation_Dashboard.html")
+            if not os.path.exists(dash_path):
+                dash_path = os.path.join(p5_dir, "SDB_Validation_Dashboard.html")
+            primary_files = {
+                "Aggregated Depth Map": aggregated_depth_path,
+                "Refined Depth Map": p4_final_depth,
+                "HTML Dashboard": dash_path if os.path.exists(dash_path) else None,
+                "3D Seabed Plot": os.path.join(p5_dir, "5_Plot_3D_Seabed.png") if os.path.exists(os.path.join(p5_dir, "5_Plot_3D_Seabed.png")) else None,
+                "IHO S-44 Assessment CSV": os.path.join(p5_dir, "5_Stratified_Error_Analysis.csv") if os.path.exists(os.path.join(p5_dir, "5_Stratified_Error_Analysis.csv")) else None
+            }
+            log_module_completion(
+                module_title=f"SDB SpatioSpectral Masterflow ({len(tif_files)} Scenes - Elapsed: {th:02d}:{tm:02d}:{ts:02d})",
+                out_dir=self.master_output_folder,
+                primary_files=primary_files,
+                log_path=log_path,
+                feedback=feedback
+            )
+        except Exception:
+            append_log("════════════════════════════════════════════════════════════", log_path, feedback)
+            append_log("✓ SDB SpatioSpectral Masterflow Completed".center(60), log_path, feedback)
+            append_log("════════════════════════════════════════════════════════════", log_path, feedback)
+            append_log(f"Scenes processed : {len(tif_files)} / {len(tif_files)}", log_path, feedback)
+            append_log(f"Total elapsed    : {th:02d}:{tm:02d}:{ts:02d}", log_path, feedback)
+            append_log("Status           : SUCCESS", log_path, feedback)
+            append_log("════════════════════════════════════════════════════════════\n", log_path, feedback)
         
         return {
             "AGGREGATED_DEPTH": aggregated_depth_path,
