@@ -3,21 +3,36 @@ import math
 import numpy as np
 import rasterio
 from typing import Dict, List, Optional, Tuple, Any
-from qgis.core import (
-    QgsVectorLayer,
-    QgsGeometry,
-    QgsFeature,
-    QgsField,
-    QgsFields,
-    QgsVectorFileWriter,
-    QgsWkbTypes,
-    QgsPointXY,
-    QgsProject,
-    QgsProcessingFeedback,
-    QgsSpatialIndex,
-)
-from qgis.PyQt.QtCore import QVariant
-import processing
+try:
+    from qgis.core import (
+        QgsVectorLayer,
+        QgsGeometry,
+        QgsFeature,
+        QgsField,
+        QgsFields,
+        QgsVectorFileWriter,
+        QgsWkbTypes,
+        QgsPointXY,
+        QgsProject,
+        QgsProcessingFeedback,
+        QgsSpatialIndex,
+    )
+    from qgis.PyQt.QtCore import QVariant
+    import processing
+except ImportError:
+    QgsVectorLayer = None
+    QgsGeometry = None
+    QgsFeature = None
+    QgsField = None
+    QgsFields = None
+    QgsVectorFileWriter = None
+    QgsWkbTypes = None
+    QgsPointXY = None
+    QgsProject = None
+    QgsProcessingFeedback = object
+    QgsSpatialIndex = None
+    QVariant = None
+    processing = None
 
 class ShorelineDynamicsTracker:
     def __init__(self):

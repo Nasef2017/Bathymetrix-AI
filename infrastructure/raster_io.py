@@ -8,16 +8,26 @@ except ImportError:
 
 
 def remove_positive_pixels(in_path, out_path, nodata_val=-9999.0, feedback=None):
-    if feedback:
-        feedback.pushInfo(f">>> Removing positive values (>= 0) from: {in_path}")
     try:
         with rasterio.open(in_path) as src:
             data = src.read(1)
             meta = src.profile
             nodata_val_src = src.nodata if src.nodata is not None else nodata_val
 
-        mask = (data >= 0) & (data != nodata_val_src)
-        data[mask] = nodata_val_src
+        valid_mask = np.isfinite(data) & (data != nodata_val_src) & (np.abs(data) < 15000)
+        valid_vals = data[valid_mask]
+        
+        if len(valid_vals) > 0:
+            median_val = float(np.nanmedian(valid_vals))
+            # Only remove positive values if the dataset is using negative elevation convention (depth < 0)
+            if median_val < 0:
+                mask = (data > 0) & (data != nodata_val_src)
+                data[mask] = nodata_val_src
+                if feedback:
+                    feedback.pushInfo(f">>> Negative depth convention detected (median: {median_val:.2f}m). Removed land/positive pixels (> 0).")
+            else:
+                if feedback:
+                    feedback.pushInfo(f">>> Positive depth convention detected (median: {median_val:.2f}m). Preserved positive bathymetric depths.")
 
         meta.update(dtype="float32", nodata=nodata_val_src, count=1)
 
@@ -279,7 +289,7 @@ try:
         def __init__(self, style_path):
             super().__init__()
             self.style_path = str(style_path) if style_path else ""
-            StylePostProcessor._instances.append(self)
+            self.__class__._instances.append(self)
 
         def postProcessLayer(self, layer, context, feedback):
             import os
@@ -292,9 +302,9 @@ try:
             except Exception:
                 pass
 
-        @staticmethod
-        def create(style_path):
-            return StylePostProcessor(style_path)
+        @classmethod
+        def create(cls, style_path):
+            return cls(style_path)
 except Exception:
     StylePostProcessor = None
 
