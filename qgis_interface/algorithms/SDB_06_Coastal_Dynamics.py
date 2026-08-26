@@ -1,5 +1,8 @@
 import os
+import re
+import time
 import warnings
+import numpy as np
 from qgis.core import (
     QgsProcessingAlgorithm,
     QgsProcessingParameterFile,
@@ -344,33 +347,59 @@ class SDBCoastalDynamics(QgsProcessingAlgorithm):
 
         append_log("  [Scanning] Input Folders", log_file_path, feedback)
 
-        year_folders = [f for f in os.listdir(master_folder) if f.startswith("Year_") and os.path.isdir(os.path.join(master_folder, f))]
+        year_folders = [
+            f for f in os.listdir(master_folder)
+            if os.path.isdir(os.path.join(master_folder, f)) and (f.lower().startswith("year") or f.strip().isdigit())
+        ]
         if not year_folders:
             err = "✗ ERROR: No Year_XXXX folders found in the Master Folder."
             append_log(err, log_file_path, feedback)
             raise QgsProcessingException(err)
 
-        import rasterio
         def _check_raster_health(rpath: str) -> bool:
             if not rpath or not os.path.exists(rpath):
                 return False
+            # Method 1: GDAL
             try:
+                from osgeo import gdal
+                ds = gdal.Open(rpath, gdal.GA_ReadOnly)
+                if ds:
+                    band = ds.GetRasterBand(1)
+                    if band:
+                        arr = band.ReadAsArray()
+                        nodata = band.GetNoDataValue()
+                        ds = None
+                        if arr is not None and arr.size > 0:
+                            if nodata is not None:
+                                val = np.isfinite(arr) & (arr != nodata) & (np.abs(arr) > 0.0001) & (np.abs(arr) < 15000)
+                            else:
+                                val = np.isfinite(arr) & (np.abs(arr) > 0.0001) & (np.abs(arr) < 15000) & (arr != -9999.0)
+                            return bool(np.sum(val) > 10)
+            except Exception:
+                pass
+
+            # Method 2: rasterio
+            try:
+                import rasterio
                 with rasterio.open(rpath) as rsrc:
                     rarr = rsrc.read(1)
                     rnd = rsrc.nodata if rsrc.nodata is not None else -9999.0
-                    rval = np.isfinite(rarr) & (rarr != rnd) & (np.abs(rarr) > 0.001) & (np.abs(rarr) < 15000)
-                    return bool(np.sum(rval) > 50)
+                    rval = np.isfinite(rarr) & (rarr != rnd) & (np.abs(rarr) > 0.0001) & (np.abs(rarr) < 15000)
+                    return bool(np.sum(rval) > 10)
+            except Exception:
+                pass
+
+            try:
+                return os.path.getsize(rpath) > 10240
             except Exception:
                 return False
 
         yearly_sdb_results = {}
-        for yf in year_folders:
-            year_str = yf.split("_")[1] if "_" in yf else yf
-            try:
-                year = int(year_str)
-            except:
+        for yf in sorted(year_folders):
+            m_year = re.search(r"(\d{4})", yf)
+            if not m_year:
                 continue
-            
+            year = int(m_year.group(1))
             y_dir = os.path.join(master_folder, yf)
             
             sdb_depth_map = None
@@ -378,15 +407,23 @@ class SDBCoastalDynamics(QgsProcessingAlgorithm):
             uncertainty_map = None
             candidate_depth_maps = []
             
+            # Check direct standard paths first
+            for direct_name in [f"SDB {year}.tif", f"SDB_{year}.tif", f"SDB_{year}_Depth.tif", f"sdb {year}.tif", f"sdb_{year}.tif"]:
+                direct_path = os.path.join(y_dir, direct_name)
+                if os.path.exists(direct_path):
+                    candidate_depth_maps.append(direct_path)
+            
             for root, _, files in os.walk(y_dir):
                 for f in files:
                     lower_f = f.lower()
-                    if not lower_f.endswith(".tif"):
+                    if not lower_f.endswith(".tif") or "mask" in lower_f or "glint" in lower_f or "feature_stack" in lower_f:
                         continue
                     full_p = os.path.join(root, f)
-                    if lower_f == f"sdb {year}.tif" or lower_f == f"sdb_{year}.tif":
-                        candidate_depth_maps.insert(0, full_p)
-                    elif f"final_depth_cleaned_{year}" in lower_f or f"depth_cleaned_{year}" in lower_f or f"initial_global_depth_{year}" in lower_f:
+                    if full_p in candidate_depth_maps:
+                        continue
+                    if f"sdb {year}" in lower_f or f"sdb_{year}" in lower_f:
+                        candidate_depth_maps.append(full_p)
+                    elif f"final_depth_cleaned_{year}" in lower_f or f"depth_cleaned_{year}" in lower_f or f"initial_global_depth_{year}" in lower_f or f"depth_nopositives_{year}" in lower_f:
                         candidate_depth_maps.append(full_p)
                     elif "linear_regression_depth" in lower_f:
                         sdb_linear_map = full_p
@@ -397,7 +434,7 @@ class SDBCoastalDynamics(QgsProcessingAlgorithm):
                         if not uncertainty_map:
                             uncertainty_map = full_p
             
-            # Select the first healthy depth map with valid pixels
+            # Select the first healthy depth map
             for c_path in candidate_depth_maps:
                 if _check_raster_health(c_path):
                     sdb_depth_map = c_path
@@ -405,6 +442,9 @@ class SDBCoastalDynamics(QgsProcessingAlgorithm):
             
             if not sdb_depth_map and sdb_linear_map and _check_raster_health(sdb_linear_map):
                 sdb_depth_map = sdb_linear_map
+                
+            if not sdb_depth_map and candidate_depth_maps:
+                sdb_depth_map = candidate_depth_maps[0]
                 
             if sdb_depth_map:
                 yearly_sdb_results[year] = {
