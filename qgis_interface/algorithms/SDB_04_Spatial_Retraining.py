@@ -407,6 +407,7 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
         p_slope_thr.setFlags(p_slope_thr.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_slope_thr)
 
+
         p_max_d = QgsProcessingParameterNumber(
             self.MAX_DEPTH_THRESHOLD,
             "🧽 [Cleanup] Max Depth Threshold (e.g. -30.0)",

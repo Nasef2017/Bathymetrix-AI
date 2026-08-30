@@ -147,7 +147,7 @@ def generate_3d_seabed_png(raster_path, out_png_path, feedback=None):
                     1,
                     window=win,
                     out_shape=(grid_size, grid_size),
-                    resampling=Resampling.bilinear
+                    resampling=Resampling.nearest
                 )
                 
                 pixel_size_x = abs(src.res[0])
@@ -158,7 +158,7 @@ def generate_3d_seabed_png(raster_path, out_png_path, feedback=None):
                 data = src.read(
                     1,
                     out_shape=(grid_size, grid_size),
-                    resampling=Resampling.bilinear
+                    resampling=Resampling.nearest
                 )
                 bounds = src.bounds
                 x_extent = bounds.right - bounds.left
@@ -366,7 +366,7 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                         1,
                         window=win,
                         out_shape=(grid_size, grid_size),
-                        resampling=Resampling.bilinear
+                        resampling=Resampling.nearest
                     )
                     
                     pixel_size_x = abs(src.res[0])
@@ -377,7 +377,7 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                     data = src.read(
                         1,
                         out_shape=(grid_size, grid_size),
-                        resampling=Resampling.bilinear
+                        resampling=Resampling.nearest
                     )
                     bounds = src.bounds
                     x_extent = bounds.right - bounds.left
@@ -1940,6 +1940,153 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
         append_log(f"      → R2: {p3['BEST_R2']:.4f}", log_path, feedback)
         append_log("  ✓ Phase 03 completed\n", log_path, feedback)
 
+    feat_stack = p1["OUTPUT_FEATURES"]
+    ref_feat = p1.get("OUTPUT_MASK") if p1.get("OUTPUT_MASK") and os.path.exists(p1.get("OUTPUT_MASK")) else feat_stack
+
+    # ---------------------------------------------------------
+    # Phase 03 Post-Processing (Clean, Slope Filter, Remove Positives & OSW Clip)
+    # Must happen BEFORE Phase 04 so secondary retraining receives clean global depth!
+    # ---------------------------------------------------------
+    if p3.get("OUTPUT_DEPTH_MAP") and os.path.exists(p3["OUTPUT_DEPTH_MAP"]):
+        current_p3 = p3["OUTPUT_DEPTH_MAP"]
+
+        if p1.get("OUTPUT_OSW_POLY") and os.path.exists(p1["OUTPUT_OSW_POLY"]):
+            append_log("  → Clipping Phase 03 Map with OSW Polygon...", log_path, feedback)
+            p3_osw_clipped = os.path.join(p3_dir, "Phase03_Depth_OSW_Clipped.tif")
+            processing.run(
+                "gdal:cliprasterbymasklayer",
+                {
+                    "INPUT": current_p3,
+                    "MASK": p1["OUTPUT_OSW_POLY"],
+                    "SOURCE_CRS": crs_id,
+                    "TARGET_CRS": crs_id,
+                    "NODATA": -9999.0,
+                    "ALPHA_BAND": False,
+                    "CROP_TO_CUTLINE": False,
+                    "KEEP_RESOLUTION": True,
+                    "DATA_TYPE": 0,
+                    "OUTPUT": p3_osw_clipped,
+                },
+                context=context,
+                feedback=feedback,
+                is_child_algorithm=True,
+            )
+            if os.path.exists(p3_osw_clipped):
+                current_p3 = p3_osw_clipped
+
+        p3["OUTPUT_DEPTH_MAP"] = current_p3
+        write_qml_style(current_p3)
+
+        # ---------------------------------------------------------
+        # Post-process isolated Linear Regression Depth & Uncertainty Maps (Clean & OSW Clip)
+        # ---------------------------------------------------------
+        lr_dir = os.path.join(p3_dir, "Linear_Regression")
+        raw_lr_map = os.path.join(lr_dir, "Linear_Regression_Depth.tif")
+        raw_lr_uncert = os.path.join(lr_dir, "Linear_Regression_Uncertainty.tif")
+
+        if os.path.exists(raw_lr_map):
+            try:
+                lr_current = raw_lr_map
+                if p1.get("OUTPUT_OSW_POLY") and os.path.exists(p1["OUTPUT_OSW_POLY"]):
+                    lr_osw_clipped = os.path.join(lr_dir, "Linear_Regression_Depth_OSW_Clipped.tif")
+                    processing.run(
+                        "gdal:cliprasterbymasklayer",
+                        {
+                            "INPUT": lr_current,
+                            "MASK": p1["OUTPUT_OSW_POLY"],
+                            "SOURCE_CRS": crs_id,
+                            "TARGET_CRS": crs_id,
+                            "NODATA": -9999.0,
+                            "ALPHA_BAND": False,
+                            "CROP_TO_CUTLINE": False,
+                            "KEEP_RESOLUTION": True,
+                            "DATA_TYPE": 0,
+                            "OUTPUT": lr_osw_clipped,
+                        },
+                        context=context,
+                        feedback=feedback,
+                        is_child_algorithm=True,
+                    )
+                    if os.path.exists(lr_osw_clipped):
+                        import shutil
+                        shutil.copy2(lr_osw_clipped, raw_lr_map)
+                elif os.path.exists(lr_current):
+                    import shutil
+                    shutil.copy2(lr_current, raw_lr_map)
+                append_log("      → Linear Regression depth map cleaned and OSW clipped.", log_path, feedback)
+            except Exception as e:
+                append_log(f"  ⚠ WARNING: Failed to post-process Linear Regression depth map: {e}", log_path, feedback)
+
+        if os.path.exists(raw_lr_uncert):
+            try:
+                lr_u_clamped = os.path.join(lr_dir, "Linear_Regression_Uncertainty_Cleaned.tif")
+                clean_depth_map(raw_lr_uncert, ref_feat, max_depth, lr_u_clamped, context, feedback)
+                lr_u_current = lr_u_clamped
+
+                if p1.get("OUTPUT_OSW_POLY") and os.path.exists(p1["OUTPUT_OSW_POLY"]):
+                    lr_u_osw_clipped = os.path.join(lr_dir, "Linear_Regression_Uncertainty_OSW_Clipped.tif")
+                    processing.run(
+                        "gdal:cliprasterbymasklayer",
+                        {
+                            "INPUT": lr_u_current,
+                            "MASK": p1["OUTPUT_OSW_POLY"],
+                            "SOURCE_CRS": crs_id,
+                            "TARGET_CRS": crs_id,
+                            "NODATA": -9999.0,
+                            "ALPHA_BAND": False,
+                            "CROP_TO_CUTLINE": False,
+                            "KEEP_RESOLUTION": True,
+                            "DATA_TYPE": 0,
+                            "OUTPUT": lr_u_osw_clipped,
+                        },
+                        context=context,
+                        feedback=feedback,
+                        is_child_algorithm=True,
+                    )
+                    if os.path.exists(lr_u_osw_clipped):
+                        import shutil
+                        shutil.copy2(lr_u_osw_clipped, raw_lr_uncert)
+                elif os.path.exists(lr_u_current):
+                    import shutil
+                    shutil.copy2(lr_u_current, raw_lr_uncert)
+                append_log("   [Analytics] Linear Regression uncertainty map successfully cleaned and OSW clipped.", log_path, feedback)
+            except Exception as e:
+                append_log(f"   [Warning] Failed to post-process Linear Regression uncertainty map: {e}", log_path, feedback)
+        # ---------------------------------------------------------
+
+        p3_uncert = p3.get("OUTPUT_UNCERT_MAP")
+        p3_uncert_clamped = None
+        if p3_uncert and os.path.exists(p3_uncert):
+            p3_uncert_clamped = os.path.join(p3_dir, "Phase3_Uncertainty_Cleaned.tif")
+            clean_depth_map(
+                p3_uncert, ref_feat, max_depth, p3_uncert_clamped, context, feedback
+            )
+
+            if p1.get("OUTPUT_OSW_POLY") and os.path.exists(p1["OUTPUT_OSW_POLY"]):
+                p3_uncert_osw = os.path.join(p3_dir, "Phase03_Uncertainty_OSW_Clipped.tif")
+                processing.run(
+                    "gdal:cliprasterbymasklayer",
+                    {
+                        "INPUT": p3_uncert_clamped,
+                        "MASK": p1["OUTPUT_OSW_POLY"],
+                        "SOURCE_CRS": crs_id,
+                        "TARGET_CRS": crs_id,
+                        "NODATA": -9999.0,
+                        "ALPHA_BAND": False,
+                        "CROP_TO_CUTLINE": False,
+                        "KEEP_RESOLUTION": True,
+                        "DATA_TYPE": 0,
+                        "OUTPUT": p3_uncert_osw,
+                    },
+                    context=context,
+                    feedback=feedback,
+                    is_child_algorithm=True,
+                )
+                if os.path.exists(p3_uncert_osw):
+                    p3_uncert_clamped = p3_uncert_osw
+
+            p3["OUTPUT_UNCERT_MAP"] = p3_uncert_clamped
+
     path_refined = None
     
     enable_adaptive = algorithm.parameterAsBool(parameters, algorithm.ENABLE_ADAPTIVE, context)
@@ -2016,6 +2163,10 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
             "SCORE_SELECTION_STRATEGY": parameters.get(getattr(algorithm, "SCORE_SELECTION_STRATEGY", "SCORE_SELECTION_STRATEGY"), 0),
             "SCORE_METRICS": parameters.get(getattr(algorithm, "SCORE_METRICS", "SCORE_METRICS"), [0, 1, 2, 3]),
             "SCORE_CUSTOM_CONFIG": parameters.get(getattr(algorithm, "SCORE_CUSTOM_CONFIG", "SCORE_CUSTOM_CONFIG"), ""),
+            "ENABLE_SLOPE_FILTER": apply_slope_filter,
+            "SLOPE_THRESHOLD": slope_threshold_val,
+            "REMOVE_POSITIVES": remove_positives_flag,
+            "MAX_DEPTH_THRESHOLD": max_depth,
         }
         if p1.get("OUTPUT_MASK"):
             p4_params["INPUT_MASK"] = p1["OUTPUT_MASK"]
@@ -2039,210 +2190,9 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
         else:
             append_log("      → No Control Points found. SKIPPED.\n", log_path, feedback)
 
-    feat_stack = p1["OUTPUT_FEATURES"]
-
-    if p3.get("OUTPUT_DEPTH_MAP") and os.path.exists(p3["OUTPUT_DEPTH_MAP"]):
-        p3_clamped = os.path.join(p3_dir, "Phase3_Depth_Cleaned.tif")
-        clean_depth_map(
-            p3["OUTPUT_DEPTH_MAP"], feat_stack, max_depth, p3_clamped, context, feedback
-        )
-
-        current_p3 = p3_clamped
-
-        if apply_slope_filter:
-            p3_slope = os.path.join(p3_dir, "Phase03_Depth_Final_SlopeFiltered.tif")
-            current_p3 = slope_filter_depth(
-                current_p3,
-                slope_threshold=slope_threshold_val,
-                out_path=p3_slope,
-                context=context,
-                feedback=feedback,
-            )
-
-        if remove_positives_flag:
-            p3_no_pos = os.path.join(p3_dir, "Phase03_Depth_Final_NoPositives.tif")
-            remove_positive_pixels(current_p3, p3_no_pos, feedback)
-            current_p3 = p3_no_pos
-
-        if p1.get("OUTPUT_OSW_POLY") and os.path.exists(p1["OUTPUT_OSW_POLY"]):
-            append_log("  → Clipping Phase 03 Map with OSW Polygon...", log_path, feedback)
-            p3_osw_clipped = os.path.join(p3_dir, "Phase03_Depth_OSW_Clipped.tif")
-            processing.run(
-                "gdal:cliprasterbymasklayer",
-                {
-                    "INPUT": current_p3,
-                    "MASK": p1["OUTPUT_OSW_POLY"],
-                    "SOURCE_CRS": crs_id,
-                    "TARGET_CRS": crs_id,
-                    "NODATA": -9999.0,
-                    "ALPHA_BAND": False,
-                    "CROP_TO_CUTLINE": False,
-                    "KEEP_RESOLUTION": True,
-                    "DATA_TYPE": 0,
-                    "OUTPUT": p3_osw_clipped,
-                },
-                context=context,
-                feedback=feedback,
-                is_child_algorithm=True,
-            )
-            if os.path.exists(p3_osw_clipped):
-                current_p3 = p3_osw_clipped
-
-        p3["OUTPUT_DEPTH_MAP"] = current_p3
-        write_qml_style(current_p3)
-
-        # ---------------------------------------------------------
-        # [NEW] Post-process isolated Linear Regression Depth & Uncertainty Maps (Clean & OSW Clip)
-        # ---------------------------------------------------------
-        lr_dir = os.path.join(p3_dir, "Linear_Regression")
-        raw_lr_map = os.path.join(lr_dir, "Linear_Regression_Depth.tif")
-        raw_lr_uncert = os.path.join(lr_dir, "Linear_Regression_Uncertainty.tif")
-
-        if os.path.exists(raw_lr_map):
-            try:
-                lr_clamped = os.path.join(lr_dir, "Linear_Regression_Cleaned.tif")
-                clean_depth_map(raw_lr_map, feat_stack, max_depth, lr_clamped, context, feedback)
-                
-                lr_current = lr_clamped
-
-                if apply_slope_filter:
-                    lr_slope = os.path.join(lr_dir, "Linear_Regression_SlopeFiltered.tif")
-                    lr_current = slope_filter_depth(
-                        lr_current,
-                        slope_threshold=slope_threshold_val,
-                        out_path=lr_slope,
-                        context=context,
-                        feedback=feedback,
-                    )
-
-                if remove_positives_flag:
-                    lr_no_pos = os.path.join(lr_dir, "Linear_Regression_NoPositives.tif")
-                    remove_positive_pixels(lr_current, lr_no_pos, feedback)
-                    lr_current = lr_no_pos
-                    
-                if p1.get("OUTPUT_OSW_POLY") and os.path.exists(p1["OUTPUT_OSW_POLY"]):
-                    lr_osw_clipped = os.path.join(lr_dir, "Linear_Regression_Depth_OSW_Clipped.tif")
-                    processing.run(
-                        "gdal:cliprasterbymasklayer",
-                        {
-                            "INPUT": lr_current,
-                            "MASK": p1["OUTPUT_OSW_POLY"],
-                            "SOURCE_CRS": crs_id,
-                            "TARGET_CRS": crs_id,
-                            "NODATA": -9999.0,
-                            "ALPHA_BAND": False,
-                            "CROP_TO_CUTLINE": False,
-                            "KEEP_RESOLUTION": True,
-                            "DATA_TYPE": 0,
-                            "OUTPUT": lr_osw_clipped,
-                        },
-                        context=context,
-                        feedback=feedback,
-                        is_child_algorithm=True,
-                    )
-                    if os.path.exists(lr_osw_clipped):
-                        import shutil
-                        shutil.copy2(lr_osw_clipped, raw_lr_map)
-                elif os.path.exists(lr_current):
-                    import shutil
-                    shutil.copy2(lr_current, raw_lr_map)
-                append_log("      → Linear Regression depth map cleaned and OSW clipped.", log_path, feedback)
-            except Exception as e:
-                append_log(f"  ⚠ WARNING: Failed to post-process Linear Regression depth map: {e}", log_path, feedback)
-
-        if os.path.exists(raw_lr_uncert):
-            try:
-                lr_u_clamped = os.path.join(lr_dir, "Linear_Regression_Uncertainty_Cleaned.tif")
-                clean_depth_map(raw_lr_uncert, feat_stack, max_depth, lr_u_clamped, context, feedback)
-                lr_u_current = lr_u_clamped
-
-                if p1.get("OUTPUT_OSW_POLY") and os.path.exists(p1["OUTPUT_OSW_POLY"]):
-                    lr_u_osw_clipped = os.path.join(lr_dir, "Linear_Regression_Uncertainty_OSW_Clipped.tif")
-                    processing.run(
-                        "gdal:cliprasterbymasklayer",
-                        {
-                            "INPUT": lr_u_current,
-                            "MASK": p1["OUTPUT_OSW_POLY"],
-                            "SOURCE_CRS": crs_id,
-                            "TARGET_CRS": crs_id,
-                            "NODATA": -9999.0,
-                            "ALPHA_BAND": False,
-                            "CROP_TO_CUTLINE": False,
-                            "KEEP_RESOLUTION": True,
-                            "DATA_TYPE": 0,
-                            "OUTPUT": lr_u_osw_clipped,
-                        },
-                        context=context,
-                        feedback=feedback,
-                        is_child_algorithm=True,
-                    )
-                    if os.path.exists(lr_u_osw_clipped):
-                        import shutil
-                        shutil.copy2(lr_u_osw_clipped, raw_lr_uncert)
-                elif os.path.exists(lr_u_current):
-                    import shutil
-                    shutil.copy2(lr_u_current, raw_lr_uncert)
-                append_log("   [Analytics] Linear Regression uncertainty map successfully cleaned and OSW clipped.", log_path, feedback)
-            except Exception as e:
-                append_log(f"   [Warning] Failed to post-process Linear Regression uncertainty map: {e}", log_path, feedback)
-        # ---------------------------------------------------------
-
-        p3_uncert = p3.get("OUTPUT_UNCERT_MAP")
-        p3_uncert_clamped = None
-        if p3_uncert and os.path.exists(p3_uncert):
-            p3_uncert_clamped = os.path.join(p3_dir, "Phase3_Uncertainty_Cleaned.tif")
-            clean_depth_map(
-                p3_uncert, feat_stack, max_depth, p3_uncert_clamped, context, feedback
-            )
-
-            if p1.get("OUTPUT_OSW_POLY") and os.path.exists(p1["OUTPUT_OSW_POLY"]):
-                p3_uncert_osw = os.path.join(p3_dir, "Phase03_Uncertainty_OSW_Clipped.tif")
-                processing.run(
-                    "gdal:cliprasterbymasklayer",
-                    {
-                        "INPUT": p3_uncert_clamped,
-                        "MASK": p1["OUTPUT_OSW_POLY"],
-                        "SOURCE_CRS": crs_id,
-                        "TARGET_CRS": crs_id,
-                        "NODATA": -9999.0,
-                        "ALPHA_BAND": False,
-                        "CROP_TO_CUTLINE": False,
-                        "KEEP_RESOLUTION": True,
-                        "DATA_TYPE": 0,
-                        "OUTPUT": p3_uncert_osw,
-                    },
-                    context=context,
-                    feedback=feedback,
-                    is_child_algorithm=True,
-                )
-                if os.path.exists(p3_uncert_osw):
-                    p3_uncert_clamped = p3_uncert_osw
-
-            p3["OUTPUT_UNCERT_MAP"] = p3_uncert_clamped
-
     p4_uncert_clamped = None
     if path_refined and os.path.exists(path_refined):
-        p4_clamped = os.path.join(p4_dir, "Final_Depth_Cleaned.tif")
-        clean_depth_map(
-            path_refined, feat_stack, max_depth, p4_clamped, context, feedback
-        )
-
-        if apply_slope_filter:
-            slope_filtered = os.path.join(p4_dir, "Final_Depth_SlopeFiltered.tif")
-            path_refined = slope_filter_depth(
-                p4_clamped,
-                slope_threshold=slope_threshold_val,
-                out_path=slope_filtered,
-                context=context,
-                feedback=feedback,
-            )
-        else:
-            path_refined = p4_clamped
-
-        if remove_positives_flag:
-            p4_no_pos = os.path.join(p4_dir, "Phase04_Final_Depth_NoPositives.tif")
-            remove_positive_pixels(path_refined, p4_no_pos, feedback)
-            path_refined = p4_no_pos
+        pass
 
         if p1.get("OUTPUT_OSW_POLY") and os.path.exists(p1["OUTPUT_OSW_POLY"]):
             append_log("  → Clipping Phase 04 Map with OSW Polygon...", log_path, feedback)
@@ -2275,7 +2225,7 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
         if p4_uncert and os.path.exists(p4_uncert):
             p4_uncert_clamped = os.path.join(p4_dir, "Final_Uncertainty_95.tif")
             clean_depth_map(
-                p4_uncert, feat_stack, max_depth, p4_uncert_clamped, context, feedback
+                p4_uncert, ref_feat, max_depth, p4_uncert_clamped, context, feedback
             )
 
             if p1.get("OUTPUT_OSW_POLY") and os.path.exists(p1["OUTPUT_OSW_POLY"]):
@@ -2785,7 +2735,7 @@ def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt
     </head>
     <body>
         <div class="header">
-            <h1>BATHYMETRIX-AI V7.4: TECHNICAL VALIDATION REPORT</h1>
+            <h1>BATHYMETRIX-AI V7.5: TECHNICAL VALIDATION REPORT</h1>
             <p>SDB MasterFlow | High-Precision Satellite-Derived Bathymetry Calibration & Validation</p>
         </div>
 
@@ -2860,7 +2810,7 @@ def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt
         {f"<h2>🔄 Phase 04: Depth-Dependent Residual Calibration Leaderboard</h2><table border='1' cellspacing='0' cellpadding='6' bordercolor='#cbd5e1' style='width: 100%; border-collapse: collapse; margin-top: 8pt; margin-bottom: 12pt;'><thead><tr bgcolor='#f1f5f9'><th style='white-space: nowrap;'>Algorithm</th><th style='white-space: nowrap;'>Winner Stability</th><th style='white-space: nowrap;'>SDB Score (0-100)</th><th style='white-space: nowrap;'>R² Accuracy</th><th style='white-space: nowrap;'>RMSE (Vertical Error)</th><th style='white-space: nowrap;'>wMAPE (%)</th><th style='white-space: nowrap;'>Bias (m)</th></tr></thead><tbody>{p4_rows_html}</tbody></table>" if has_p4 else ""}
 
         <div class="footer">
-            Report generated automatically by Bathymetrix-AI V7.4. All rights reserved. &copy; Mohamed Aly Nasef (2026).
+            Report generated automatically by Bathymetrix-AI V7.5. All rights reserved. &copy; Mohamed Aly Nasef (2026).
         </div>
         <div style="page-break-before: always;"></div>
 
@@ -2887,11 +2837,11 @@ def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt
             </tbody>
         </table>
 
-        {f'<div class="footer">Report generated automatically by Bathymetrix-AI V7.4. All rights reserved. &copy; Mohamed Aly Nasef (2026).</div>' if plots_section_html else ""}
+        {f'<div class="footer">Report generated automatically by Bathymetrix-AI V7.5. All rights reserved. &copy; Mohamed Aly Nasef (2026).</div>' if plots_section_html else ""}
         {plots_section_html}
 
         <div class="footer">
-            Report generated automatically by Bathymetrix-AI V7.4. All rights reserved. &copy; Mohamed Aly Nasef (2026).
+            Report generated automatically by Bathymetrix-AI V7.5. All rights reserved. &copy; Mohamed Aly Nasef (2026).
         </div>
     </body>
     </html>

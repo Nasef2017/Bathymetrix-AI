@@ -945,6 +945,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
             )
         )
 
+
     def processAlgorithm(self, parameters, context, feedback):
         from ...core.pipeline import run_master_pipeline
 

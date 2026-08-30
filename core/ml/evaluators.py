@@ -769,7 +769,8 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
                 from Bathymetrix_AI.infrastructure.raster_io import clean_depth_map, slope_filter_depth, remove_positive_pixels
                 append_log("   [Cleanup] Applying post-prediction cleanup filters to Phase 04 depth map...", log_path, feedback)
                 p_cleaned = os.path.join(out_dir, "4_Phase04_Depth_Cleaned.tif")
-                clean_depth_map(p_depth, global_path, max_depth, p_cleaned, context, feedback)
+                ref_mask = mask_path if mask_path and os.path.exists(mask_path) else global_path
+                clean_depth_map(p_depth, ref_mask, max_depth, p_cleaned, context, feedback)
                 cur_map = p_cleaned
                 if enable_slope:
                     p_slope = os.path.join(out_dir, "4_Phase04_Depth_SlopeFiltered.tif")
@@ -1331,7 +1332,8 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
             from Bathymetrix_AI.infrastructure.raster_io import clean_depth_map, slope_filter_depth, remove_positive_pixels
             append_log("   [Cleanup] Applying post-prediction cleanup filters to Phase 04 depth map...", log_path, feedback)
             p_cleaned = os.path.join(out_dir, "4_Phase04_Depth_Cleaned.tif")
-            clean_depth_map(p_final, global_path, max_depth, p_cleaned, context, feedback)
+            ref_mask = mask_path if mask_path and os.path.exists(mask_path) else global_path
+            clean_depth_map(p_final, ref_mask, max_depth, p_cleaned, context, feedback)
             cur_map = p_cleaned
             if enable_slope:
                 p_slope = os.path.join(out_dir, "4_Phase04_Depth_SlopeFiltered.tif")

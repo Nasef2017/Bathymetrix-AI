@@ -205,8 +205,22 @@ class SpatiotemporalSDBRunner:
                 p1 = {"OUTPUT_FEATURES": p1_feat, "OUTPUT_MASK": None, "OUTPUT_OSW_POLY": None}
             
             # 5. Phase 2
+            has_points = False
+            if icesat_path:
+                try:
+                    from qgis.core import QgsVectorLayer
+                    tmp_layer = QgsVectorLayer(icesat_path, "tmp", "ogr")
+                    if tmp_layer.isValid() and tmp_layer.featureCount() > 0:
+                        has_points = True
+                except Exception:
+                    has_points = False
+                    
             enable_p2 = algorithm.parameterAsBool(masterflow_params, "ENABLE_RANSAC", context) if (algorithm and hasattr(algorithm, "parameterAsBool")) else masterflow_params.get("ENABLE_RANSAC", True)
-            if enable_p2:
+            
+            p2_vec = None
+            if not has_points:
+                append_log(f"  ⚠ WARNING: No valid training points found for year {year}. Skipping Phase 02 and Training Extraction.", log_path, feedback)
+            elif enable_p2:
                 append_log("  [Phase 02] Filtering", log_path, feedback)
                 p2_params = run_params.copy()
                 p2_params["INPUT_STACK"] = p1_feat
@@ -216,32 +230,42 @@ class SpatiotemporalSDBRunner:
                 p2_params["GREEN_BAND"] = run_params.get("FILTER_DENOMINATOR_BAND", run_params.get("GREEN_BAND"))
                 p2_params["RESIDUAL_THRESHOLD"] = run_params.get("RANSAC_THRESHOLD", 3.0)
                 p2_params["OUTPUT_FOLDER"] = p2_dir
-                p2 = processing.run("sdb_tools:sdb_02_filtering", p2_params, is_child_algorithm=True, context=context, feedback=feedback)
-                p2_vec = p2["OUTPUT_CLEAN_VEC"]
-                append_log("  ✓ Phase 02 completed\n", log_path, feedback)
+                try:
+                    p2 = processing.run("sdb_tools:sdb_02_filtering", p2_params, is_child_algorithm=True, context=context, feedback=feedback)
+                    p2_vec = p2["OUTPUT_CLEAN_VEC"]
+                    append_log("  ✓ Phase 02 completed\n", log_path, feedback)
+                except Exception as e:
+                    append_log(f"  ⚠ WARNING: Phase 02 Filtering failed: {e}", log_path, feedback)
             else:
                 append_log("  [Phase 02] Filtering", log_path, feedback)
                 append_log("      → Skipped by User.\n", log_path, feedback)
                 p2_vec = icesat_path
             
             # 6. Extract Samples for Global Matrix
-            append_log("  [Sample Extraction]", log_path, feedback)
-            append_log("      → Extracting Global Matrix Samples...", log_path, feedback)
-            depth_fld = run_params["FIELD_DEPTH"]
-            col_mode = run_params["COLLISION_HANDLING"]
-            weight_fld = None
-            
-            X_yr, y_yr, w_yr, coords_yr = extract_samples(p1_feat, p2_vec, depth_fld, weight_fld, col_mode)
+            if has_points and p2_vec:
+                append_log("  [Sample Extraction]", log_path, feedback)
+                append_log("      → Extracting Global Matrix Samples...", log_path, feedback)
+                depth_fld = run_params["FIELD_DEPTH"]
+                col_mode = run_params["COLLISION_HANDLING"]
+                weight_fld = None
+                
+                try:
+                    X_yr, y_yr, w_yr, coords_yr = extract_samples(p1_feat, p2_vec, depth_fld, weight_fld, col_mode)
+                except Exception as e:
+                    append_log(f"  ⚠ WARNING: Extraction failed: {e}", log_path, feedback)
+                    X_yr, y_yr, w_yr, coords_yr = np.array([]), np.array([]), np.array([]), np.array([])
+            else:
+                X_yr, y_yr, w_yr, coords_yr = np.array([]), np.array([]), np.array([]), np.array([])
             
             if len(y_yr) < 10:
-                append_log(f"  ⚠ WARNING: Critically low training points (<10) for year {year}. Skipping.", log_path, feedback)
+                append_log(f"  ⚠ WARNING: Insufficient or no training points ({len(y_yr)}) for year {year}. Skipping this year entirely from modeling and prediction.\n", log_path, feedback)
                 continue
                 
             # Add Year feature
             year_col = np.full((X_yr.shape[0], 1), int(year), dtype=X_yr.dtype)
-            X_yr = np.hstack((X_yr, year_col))
+            X_yr_extended = np.hstack((X_yr, year_col))
             
-            global_X.append(X_yr)
+            global_X.append(X_yr_extended)
             global_y.append(y_yr)
             global_w.append(w_yr)
             global_coords.append(coords_yr)
@@ -254,11 +278,11 @@ class SpatiotemporalSDBRunner:
                         f_names.append("Year")
                         global_feat_names = f_names
                 except Exception:
-                    global_feat_names = [f"Band_{i+1}" for i in range(X_yr.shape[1]-1)] + ["Year"]
+                    global_feat_names = [f"Band_{i+1}" for i in range(X_yr_extended.shape[1]-1)] + ["Year"]
             
             year_outputs[year] = {
                 "P1_FEATURES": p1_feat,
-                "P1_MASK": p1["OUTPUT_MASK"],
+                "P1_MASK": p1.get("OUTPUT_MASK"),
                 "P2_VEC": p2_vec,
                 "INFO": year_info,
                 "X_yr": X_yr,
@@ -304,7 +328,7 @@ class SpatiotemporalSDBRunner:
         run_params["INPUT_STACK"] = list(year_outputs.values())[0]["P1_FEATURES"]
         run_params["INPUT_POINTS"] = masterflow_params.get("INPUT_TRAIN")
         run_params["INPUT_MASK"] = list(year_outputs.values())[0].get("P1_MASK")
-        run_params["SPATIAL_CV"] = algorithm.parameterAsBool(masterflow_params, "SPATIAL_CV_P3", context)
+        run_params["SPATIAL_CV"] = algorithm.parameterAsBool(masterflow_params, "SPATIAL_CV_P3", context) if (algorithm and hasattr(algorithm, "parameterAsBool")) else masterflow_params.get("SPATIAL_CV_P3", masterflow_params.get("SPATIAL_CV", False))
         
         # Call Phase 3 directly!
         p3 = run_phase03_initial_modeling(algorithm, run_params, context, feedback, pre_extracted_data=pre_extracted_data)
@@ -363,44 +387,47 @@ class SpatiotemporalSDBRunner:
                     X_yr = outputs["X_yr"]
                     y_yr = outputs["y_yr"]
                     
-                    # Add year feature to X_yr to match global model input
-                    year_col = np.full((X_yr.shape[0], 1), int(year), dtype=X_yr.dtype)
-                    X_yr_full = np.hstack((X_yr, year_col))
-                    
-                    if selected_indices is not None and len(selected_indices) > 0:
-                        X_yr_selected = X_yr_full[:, selected_indices]
+                    if len(y_yr) < 10:
+                        append_log(f"      → Not enough local training points ({len(y_yr)}) for Depth Variance Correction. Skipping...", log_path, feedback)
                     else:
-                        X_yr_selected = X_yr_full
+                        # Add year feature to X_yr to match global model input
+                        year_col = np.full((X_yr.shape[0], 1), int(year), dtype=X_yr.dtype)
+                        X_yr_full = np.hstack((X_yr, year_col))
                         
-                    # Predict using global model on this year's points
-                    y_yr_pred = global_model.predict(X_yr_selected)
-                    
-                    # Calculate residuals
-                    raw_residuals = y_yr - y_yr_pred
-                    mean_bias = float(np.mean(raw_residuals))
-                    append_log(f"      → Mean residual offset: {mean_bias:.4f}m", log_path, feedback)
-                    
-                    residuals = raw_residuals - mean_bias
-                    
-                    # Train year-specific Huber Regressor
-                    huber_mod = HuberRegressor(epsilon=1.35)
-                    huber_mod.fit(y_yr_pred.reshape(-1, 1), residuals)
-                    
-                    # Save the year-specific Huber model to disk
-                    huber_pkl_path = os.path.join(p3_dir, f"3_Huber_Variance_Model_{year}.pkl")
-                    joblib.dump(huber_mod, huber_pkl_path)
-                    
-                    # Apply to map
-                    with rasterio.open(p3_map, "r+") as dst:
-                        depth_arr = dst.read(1)
-                        valid_mask = (depth_arr != -9999.0)
-                        if np.any(valid_mask):
-                            valid_depths = depth_arr[valid_mask]
-                            residual_grid = huber_mod.predict(valid_depths.reshape(-1, 1))
-                            corrected_depths = valid_depths + residual_grid + mean_bias
-                            depth_arr[valid_mask] = corrected_depths
-                            dst.write(depth_arr, 1)
-                    append_log(f"  ✓ Depth Variance Correction applied", log_path, feedback)
+                        if selected_indices is not None and len(selected_indices) > 0:
+                            X_yr_selected = X_yr_full[:, selected_indices]
+                        else:
+                            X_yr_selected = X_yr_full
+                            
+                        # Predict using global model on this year's points
+                        y_yr_pred = global_model.predict(X_yr_selected)
+                        
+                        # Calculate residuals
+                        raw_residuals = y_yr - y_yr_pred
+                        mean_bias = float(np.mean(raw_residuals))
+                        append_log(f"      → Mean residual offset: {mean_bias:.4f}m", log_path, feedback)
+                        
+                        residuals = raw_residuals - mean_bias
+                        
+                        # Train year-specific Huber Regressor
+                        huber_mod = HuberRegressor(epsilon=1.35)
+                        huber_mod.fit(y_yr_pred.reshape(-1, 1), residuals)
+                        
+                        # Save the year-specific Huber model to disk
+                        huber_pkl_path = os.path.join(p3_dir, f"3_Huber_Variance_Model_{year}.pkl")
+                        joblib.dump(huber_mod, huber_pkl_path)
+                        
+                        # Apply to map
+                        with rasterio.open(p3_map, "r+") as dst:
+                            depth_arr = dst.read(1)
+                            valid_mask = (depth_arr != -9999.0)
+                            if np.any(valid_mask):
+                                valid_depths = depth_arr[valid_mask]
+                                residual_grid = huber_mod.predict(valid_depths.reshape(-1, 1))
+                                corrected_depths = valid_depths + residual_grid + mean_bias
+                                depth_arr[valid_mask] = corrected_depths
+                                dst.write(depth_arr, 1)
+                        append_log(f"  ✓ Depth Variance Correction applied", log_path, feedback)
                 except Exception as e:
                     append_log(f"  ⚠ WARNING: Failed to apply Depth Variance Correction: {e}", log_path, feedback)
             
@@ -415,26 +442,33 @@ class SpatiotemporalSDBRunner:
                     append_log(f"  ⚠ WARNING: Failed to generate local uncertainty map: {e}", log_path, feedback)
                     p3_uncert_map = None
             
-            # --- PHASE 03 CLEANUP ---
-            from Bathymetrix_AI.infrastructure.raster_io import remove_positive_pixels, clean_depth_map, slope_filter_depth
-            remove_positives_flag = algorithm.parameterAsBool(masterflow_params, "REMOVE_POSITIVES", context)
-            apply_slope_filter = algorithm.parameterAsBool(masterflow_params, "ENABLE_SLOPE_FILTER", context)
-            max_depth = algorithm.parameterAsDouble(masterflow_params, "MAX_DEPTH", context)
-            slope_threshold_val = algorithm.parameterAsDouble(masterflow_params, "SLOPE_THRESHOLD", context)
-            
-            p3_clamped = os.path.join(p3_dir, f"Phase03_Depth_Cleaned_{year}.tif")
-            clean_depth_map(p3_map, outputs["P1_FEATURES"], max_depth, p3_clamped, context, feedback)
-            p3_map = p3_clamped
-            
-            if apply_slope_filter:
-                p3_slope = os.path.join(p3_dir, f"Phase03_Depth_SlopeCleaned_{year}.tif")
-                slope_filter_depth(p3_map, slope_threshold_val, p3_slope, context, feedback)
-                p3_map = p3_slope
-                
-            if remove_positives_flag:
-                p3_no_pos = os.path.join(p3_dir, f"Phase03_Depth_NoPositives_{year}.tif")
-                remove_positive_pixels(p3_map, p3_no_pos, feedback)
-                p3_map = p3_no_pos
+            # --- PHASE 03 CLEANUP (Now handled internally in trainers.py) ---
+            pass
+
+            if master_osw_polygon and os.path.exists(master_osw_polygon):
+                append_log(f"  → Clipping Phase 03 Map for {year} with Master OSW Polygon...", log_path, feedback)
+                p3_osw_clipped = os.path.join(p3_dir, f"Phase03_Depth_OSW_Clipped_{year}.tif")
+                try:
+                    processing.run(
+                        "gdal:cliprasterbymasklayer",
+                        {
+                            "INPUT": p3_map,
+                            "MASK": master_osw_polygon,
+                            "NODATA": -9999.0,
+                            "ALPHA_BAND": False,
+                            "CROP_TO_CUTLINE": False,
+                            "KEEP_RESOLUTION": True,
+                            "DATA_TYPE": 0,
+                            "OUTPUT": p3_osw_clipped,
+                        },
+                        context=context,
+                        feedback=feedback,
+                        is_child_algorithm=True,
+                    )
+                    if os.path.exists(p3_osw_clipped):
+                        p3_map = p3_osw_clipped
+                except Exception as e:
+                    append_log(f"  ⚠ WARNING: Failed to clip Phase 03 for {year} with OSW Polygon: {e}", log_path, feedback)
             # -----------------------------------------------
 
             run_params = masterflow_params.copy()
@@ -518,20 +552,33 @@ class SpatiotemporalSDBRunner:
                 p4 = processing.run("sdb_tools:sdb_phase4_adaptive", run_params, is_child_algorithm=True, context=context, feedback=feedback)
                 p4_map = p4["OUTPUT_FINAL"]
                 
-                # --- PHASE 04 CLEANUP ---
-                p4_clamped = os.path.join(p4_dir, f"Phase04_Final_Depth_Cleaned_{year}.tif")
-                clean_depth_map(p4_map, outputs["P1_FEATURES"], max_depth, p4_clamped, context, feedback)
-                p4_map = p4_clamped
-                
-                if apply_slope_filter:
-                    p4_slope = os.path.join(p4_dir, f"Phase04_Final_Depth_SlopeCleaned_{year}.tif")
-                    slope_filter_depth(p4_map, slope_threshold_val, p4_slope, context, feedback)
-                    p4_map = p4_slope
-                    
-                if remove_positives_flag:
-                    p4_no_pos = os.path.join(p4_dir, f"Phase04_Final_Depth_NoPositives_{year}.tif")
-                    remove_positive_pixels(p4_map, p4_no_pos, feedback)
-                    p4_map = p4_no_pos
+                # --- PHASE 04 CLEANUP (Now handled internally in evaluators.py) ---
+                pass
+
+                if master_osw_polygon and os.path.exists(master_osw_polygon):
+                    append_log(f"  → Clipping Phase 04 Map for {year} with Master OSW Polygon...", log_path, feedback)
+                    p4_osw_clipped = os.path.join(p4_dir, f"Phase04_Final_Depth_OSW_Clipped_{year}.tif")
+                    try:
+                        processing.run(
+                            "gdal:cliprasterbymasklayer",
+                            {
+                                "INPUT": p4_map,
+                                "MASK": master_osw_polygon,
+                                "NODATA": -9999.0,
+                                "ALPHA_BAND": False,
+                                "CROP_TO_CUTLINE": False,
+                                "KEEP_RESOLUTION": True,
+                                "DATA_TYPE": 0,
+                                "OUTPUT": p4_osw_clipped,
+                            },
+                            context=context,
+                            feedback=feedback,
+                            is_child_algorithm=True,
+                        )
+                        if os.path.exists(p4_osw_clipped):
+                            p4_map = p4_osw_clipped
+                    except Exception as e:
+                        append_log(f"  ⚠ WARNING: Failed to clip Phase 04 for {year} with OSW Polygon: {e}", log_path, feedback)
                 # -----------------------------------------------
             else:
                 p4_map = p3_map  # Pass through cleaned Phase 03 map directly
@@ -607,10 +654,14 @@ class SpatiotemporalSDBRunner:
                 
                 append_log(f"  ✓ Saved final map: {os.path.basename(final_sdb_path)}", log_path, feedback)
                 
-                details = QgsProcessingContext.LayerDetails(f"SDB {year}", QgsProject.instance(), "SDB")
-                if dst_qml and os.path.exists(dst_qml):
-                    details.setPostProcessor(StylePostProcessor(dst_qml))
-                context.addLayerToLoadOnCompletion(final_sdb_path, details)
+                if context and hasattr(context, "addLayerToLoadOnCompletion") and hasattr(QgsProcessingContext, "LayerDetails"):
+                    try:
+                        details = QgsProcessingContext.LayerDetails(f"SDB {year}", QgsProject.instance(), "SDB")
+                        if dst_qml and os.path.exists(dst_qml):
+                            details.setPostProcessor(StylePostProcessor(dst_qml))
+                        context.addLayerToLoadOnCompletion(final_sdb_path, details)
+                    except Exception:
+                        pass
             
             scene_elapsed = time.time() - year_start
             m, s = divmod(int(scene_elapsed), 60)

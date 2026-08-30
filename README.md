@@ -31,50 +31,22 @@ The toolkit also provides advanced Masterflows and standalone modules for more c
 
 ---
 
-### 🆕 What's New in Version 7.4 (Changelog)
+### 🌟 Key Capabilities & Innovations
 
-* 🎯 **Advanced Model Selection & Winner Stability (Monte Carlo Sensitivity):**
-  * Introduced **7 specialized selection strategies** to govern algorithm choice during Phase 03/04:
-    * `0. Winner Stability (Monte Carlo Sensitivity)`: Tests candidate models across $N$ simulation rounds with stochastic weight variations ($\pm 20\%$ default) to select the most noise-resilient regressor.
-    * `1. SDB Composite Score`: Deterministic multi-metric weighting.
-    * `2. Highest R²`, `3. Lowest RMSE`, `4. Lowest wMAPE`, `5. Lowest |Bias|`, and `6. Lowest MAE`.
-  * **Auto-Balanced Weighting & Custom Syntax**: Selecting metric checkboxes automatically rebalances weights to sum to $1.0$, with support for custom syntax configuration (e.g. `R2: 70, RMSE: 30, Rounds: 50, Variation: +/-25%`).
-* 🌊 **Automated Hydrodynamic Tidal Datum Engine (NASA GSFC GOT4.10c):**
-  * Integrated automated remote retrieval, extraction, and constituent grid caching for the **NASA GSFC GOT4.10c** global ocean tide model.
-  * Provides seamless offline hydrodynamic transformations between geodetic and tidal reference datums ($WGS84 \leftrightarrow MSL \leftrightarrow LAT \leftrightarrow CD$).
-* 🔗 **Interactive Clickable Log Navigation & Unified Symbology:**
-  * Standardized all execution summaries and completion banners with clickable `file:///` URLs, enabling instant access to output directories, generated GeoTIFF rasters, and HTML dashboards directly from the QGIS log panel.
-
----
-
-### 📦 Previous Release Notes (Version 7.2)
-
-* 📊 **Physics-Driven Feature Engineering (Bias Error Elimination):**
-  * Introduced separate manual selection for **`[All Raw Bands]`** (Raw Reflectance / DN) vs. **`[All Log Bands]`** ($\ln(10000 \cdot R + 1)$).
-  * **Radiative Transfer Linearization**: According to Beer-Lambert's law of optical attenuation ($L(\lambda) = L_\infty + C_b \cdot e^{-2K z}$), water depth scales logarithmically with subsurface reflectance. Training ML regressors on raw exponential signals induces severe non-linear compression and systematic depth bias in intermediate/deeper waters ($5\text{--}15\text{ m}$). Applying Log-transform linearizes the feature space, reducing mean depth bias to **$+0.0157\text{ m}$ (near-zero bias)** and preventing volumetric distortion in sediment calculations.
-  * **Zero-Bias Defaults**: `[All Raw Bands]` is excluded from default feature stacks to protect against bias drift, while remaining available for specialized shallow-water micro-topography ($0\text{--}5\text{ m}$).
-* 🌊 **Multi-Otsu / GMM 3D Spectral Clustering Recommended:**
-  * Updated `Multi-Otsu / GMM Spectral Clustering [Recommended]` as the primary default OSW filter across all Masterflows and Preprocessing tools, isolating shallow water from optically deep water in 3D color space.
-* 🎯 **Dual Target ROI Modes in Coastal Dynamics (Module 05/06):**
-  * Added `🎯 [1.2] Target ROI Processing Mode` dropdown:
-    * **`Clip Full Analysis to ROI (Crop Rasters & Vectors)`**: For strictly localized coastal engineering studies, cropping all rasters (MSI, StatCD) and shoreline migration vectors to the polygon boundary.
-    * **`Calculate Sub-Region Quantities Only (Preserve Full Rasters)` [Default]**: Preserves the complete, unclipped spatial extent across the entire satellite scene for all output maps, while extracting exact accretion ($+m^3$), erosion ($-m^3$), and net sediment balance ($m^3$) exclusively inside the Target ROI polygon for QC/budgeting.
-* 🎨 **Thread-Safe Layer Loading & QGIS Post-Processing Symbology:**
-  * Replaced unsafe background thread GUI calls with `context.addLayerToLoadOnCompletion` and `StylePostProcessor(QgsProcessingLayerPostProcessorInterface)` to prevent access violation crashes while guaranteeing that thematic symbology (Red/Green Shorelines, MSI Spectral Ramps, Volumetric Diverging Ramps) loads automatically and vibrantly into QGIS.
-
----
-
-### 📦 Previous Release Notes (Version 7.1)
-
-* 🌟 **Advanced Multi-Method OSW Engine:** Replaced rigid single-percentile cutoff with an adaptive multi-method Optically Shallow Water (OSW) filtering engine featuring:
-  * **`0. Automated Knee-Point Extinction [Recommended]`**: Automatic, physics-based inflection detection calculating the true optical extinction threshold on water absorption curves without manual guesswork.
-  * **`1. Turbidity-Invariant Log-Ratio Extinction`**: Integrates the NDTI (Normalized Difference Turbidity Index) with Stumpf log-ratio stabilization to protect coastal waters from estuarine mud plumes and suspended sediment.
-  * **`2. Multi-Otsu / GMM Spectral Clustering`**: 3D unsupervised color-space clustering separating deep ocean, transitional depths, and shallow lagoons in complex coral reef and heterogeneous benthic environments.
-  * **`3. Automatic (NIR Percentile Fallback)`**: Legacy manual tuning option (e.g., 5% to 15%).
-  * **`4. Manual Polygon ROI` & `5. Custom OSW Polygon`**: Full manual control via deep-water calibration samples or direct vector boundaries.
-* 🏝️ **Connected-Component Topological Cleaning:** Integrated morphological island and connected-component sieving to eliminate small isolated wave/glint artifacts in the open ocean while preserving nearshore reefs and islands.
-* 🔄 **Full Pipeline Synchronization:** Seamlessly unified the updated OSW engine across **Module 01 (Preprocessing)**, **SDB Single Masterflow**, **SDB SpatioSpectral Masterflow**, and **SDB SpatioTemporal Masterflow**.
-* 📖 **Best Practice Workflow Guidance:** Added comprehensive documentation guiding users to test and benchmark preprocessing and OSW methods on their specific satellite scene before running full Masterflows.
+* 🛡️ **Physics-Driven Feature Engineering (Zero-Bias Attenuation):**
+  * Linearizes optical exponential attenuation according to the Beer-Lambert law ($L(\lambda) = L_\infty + C_b \cdot e^{-2K z}$) via Log-transformed spectral bands ($\ln(10000 \cdot R + 1)$), reducing depth systematic bias error to near-zero ($+0.0157\text{ m}$) and preventing volumetric distortion in sediment calculations.
+* 🌊 **Advanced Multi-Method Optically Shallow Water (OSW) Engine:**
+  * Features physics-based automated extinction detection (**Automated Knee-Point Extinction [Recommended]**, **Turbidity-Invariant Log-Ratio Extinction**, **Multi-Otsu / GMM 3D Spectral Clustering**, and **Connected-Component Topological Cleaning**) to strictly isolate shallow coastal zones from deep ocean and plume interference.
+* 🎯 **Robust Model Selection & Winner Stability Simulation:**
+  * Evaluates 15+ machine learning algorithms across **7 specialized selection strategies**, including **Monte Carlo Winner Stability** (testing candidate models across $N$ stochastic noise iterations) and auto-balanced multi-metric weighting.
+* ⏱️ **Robust SpatioTemporal AI Modeling:**
+  * Incorporates time/year directly into a Global Spatiotemporal AI model, with intelligent data validation that gracefully skips point-deficient years without workflow interruption while training and predicting across all valid temporal scenes.
+* 🌐 **Automated Hydrodynamic Tidal Datum Engine:**
+  * Integrated **NASA GSFC GOT4.10c** global ocean tide model for automated constituent caching and seamless vertical datum transformations ($WGS84 \leftrightarrow MSL \leftrightarrow LAT \leftrightarrow CD$).
+* 🔄 **Adaptive Spatial Refinement & IHO S-44 Assessment:**
+  * Models local residual error patterns (Zero-Mean Centered Spatial Residuals & Robust KNN), generating uncertainty maps and evaluating compliance against **IHO S-44 Order 1a/2 Total Vertical Uncertainty (TVU)** standards with interactive HTML dashboards.
+* 🏖️ **Comprehensive Coastal Dynamics & Volumetric Tracking:**
+  * Multi-year morphological analysis including Net Bathymetric Change, Morphological Stability Index (MSI), Statistical Level of Detection (StatCD), shoreline migration, and Target ROI volumetric sand tracking ($m^3$).
 
 ---
 
@@ -286,9 +258,6 @@ pip install numpy pandas rasterio matplotlib seaborn scikit-learn>=1.5.0 scipy j
 
 **Author:** Mohamed Aly Nasef  
 **Email:** Eng.m.nasef2017@gmail.com, Nasefm.aly@alexu.edu.eg  
-
-
-Nasef M.Aly. (2026). Nasef2017/Bathymetrix-AI: Bathymetrix_AI V7.4 (Version v7.4) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.22110192
 
 
 🤖 **AI Acknowledgment**  

@@ -21,10 +21,10 @@ def remove_positive_pixels(in_path, out_path, nodata_val=-9999.0, feedback=None)
             median_val = float(np.nanmedian(valid_vals))
             # Only remove positive values if the dataset is using negative elevation convention (depth < 0)
             if median_val < 0:
-                mask = (data > 0) & (data != nodata_val_src)
+                mask = (data >= 0) & (data != nodata_val_src)
                 data[mask] = nodata_val_src
                 if feedback:
-                    feedback.pushInfo(f">>> Negative depth convention detected (median: {median_val:.2f}m). Removed land/positive pixels (> 0).")
+                    feedback.pushInfo(f">>> Negative depth convention detected (median: {median_val:.2f}m). Removed land/positive pixels (>= 0).")
             else:
                 if feedback:
                     feedback.pushInfo(f">>> Positive depth convention detected (median: {median_val:.2f}m). Preserved positive bathymetric depths.")
@@ -78,7 +78,14 @@ def clean_depth_map(
         # Exclude nodata pixels
         is_nodata = (depth_data == nodata_depth) | (depth_data < -9000) | np.isnan(depth_data)
         valid_depth = ~is_nodata
-        valid_feat = (feat_data > -9000) & (~np.isnan(feat_data))
+        
+        # Check if feature_stack_raster is a binary mask (e.g. 0/1 values for Land/Water or Deep/OSW)
+        finite_feat = feat_data[np.isfinite(feat_data)]
+        unique_feat = np.unique(finite_feat) if len(finite_feat) > 0 else np.array([])
+        if len(unique_feat) <= 3 and np.all(np.isin(unique_feat, [0, 1, 0.0, 1.0, -9999.0])):
+            valid_feat = (feat_data > 0)
+        else:
+            valid_feat = (feat_data > -9000) & (~np.isnan(feat_data))
         
         # Depth filter that respects both negative & positive depths
         valid_range = (depth_data >= deep_limit_neg) & (depth_data <= deep_limit_pos)
@@ -147,6 +154,20 @@ def slope_filter_depth(
             thresh = float(slope_threshold)
             filtered_depth = np.where(valid_mask & (slope_deg <= thresh), data, -9999.0)
 
+            # --- Safe Despeckle: Remove isolated orphaned pixels (Artifacts) ---
+            # We use 8-connectivity (structure=np.ones((3,3))) to ensure diagonal coastlines 
+            # are NEVER broken. Only truly isolated floating spikes < 10 pixels are deleted.
+            final_valid_mask = (filtered_depth != -9999.0)
+            if np.any(final_valid_mask):
+                # 8-connectivity structure
+                s = np.ones((3, 3), dtype=int)
+                labeled_array, num_features = ndi.label(final_valid_mask, structure=s)
+                if num_features > 0:
+                    component_sizes = np.bincount(labeled_array.ravel())
+                    too_small = component_sizes < 10  # islands smaller than 10 pixels
+                    too_small_mask = too_small[labeled_array]
+                    filtered_depth[too_small_mask] = -9999.0
+
             meta.update(dtype="float32", nodata=-9999.0, count=1)
             with rasterio.open(out_path, "w", **meta) as dst:
                 dst.write(filtered_depth.astype(np.float32), 1)
@@ -174,14 +195,13 @@ def get_raster_min_max(raster_path):
             if not np.any(valid):
                 return -30.0, 0.0
             v_data = data[valid]
-            p2 = float(np.nanpercentile(v_data, 1.0))
-            p98 = float(np.nanpercentile(v_data, 99.0))
-            if p2 >= p98:
-                p2 = float(np.min(v_data))
-                p98 = float(np.max(v_data))
-            if p2 >= p98:
-                p2, p98 = p2 - 5.0, p2 + 1.0
-            return p2, p98
+            p_min = float(np.min(v_data))
+            p_max = float(np.max(v_data))
+            
+            if p_min == p_max:
+                p_min, p_max = p_min - 5.0, p_max + 1.0
+            
+            return p_min, p_max
     except Exception:
         return -30.0, 0.0
 

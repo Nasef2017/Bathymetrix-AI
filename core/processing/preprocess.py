@@ -1025,38 +1025,17 @@ def apply_deepwater_mask(
         pass
         
     if dw_method != 5:
-        # Dynamic Elbow / Sieve Component Filtering
+        # Keep only the largest connected component to remove all small islands
         try:
-            from rasterio.features import sieve
             from scipy import ndimage
-
             labeled_array, num_features = ndimage.label(osw_mask)
-            if num_features > 3:
+            if num_features > 1:
                 component_sizes = ndimage.sum_labels(osw_mask, labeled_array, range(1, num_features + 1))
-                component_sizes = np.sort(component_sizes)[::-1]
-
-                log_sizes = np.log10(component_sizes + 1e-5)
-                n_pts = len(log_sizes)
-                x_norm = np.linspace(0, 1, n_pts)
-                y_range = log_sizes[0] - log_sizes[-1]
-                if y_range > 0:
-                    y_norm = (log_sizes - log_sizes[-1]) / y_range
-                    p1 = np.array([x_norm[0], y_norm[0]])
-                    p2 = np.array([x_norm[-1], y_norm[-1]])
-                    vec_line = p2 - p1
-                    line_norm = np.linalg.norm(vec_line)
-
-                    if line_norm > 0:
-                        pts = np.column_stack((x_norm, y_norm))
-                        distances = np.abs(np.cross(vec_line, p1 - pts)) / line_norm
-                        elbow_idx = np.argmax(distances)
-                        cutoff_size = int(component_sizes[elbow_idx])
-
-                        if cutoff_size > 1:
-                            feedback.pushInfo(f"      📊 [Elbow Filter] Dynamic Threshold: {cutoff_size} pixels ({num_features} components analyzed)")
-                            osw_mask = sieve(osw_mask.astype(np.uint8), size=cutoff_size, connectivity=8).astype(bool)
+                largest_component_label = np.argmax(component_sizes) + 1
+                osw_mask = (labeled_array == largest_component_label)
+                feedback.pushInfo(f"      🏝️ [Island Filter] Kept largest OSW component and removed {num_features - 1} smaller islands.")
         except Exception as err:
-            feedback.pushWarning(f"⚠️ Elbow filter fallback warning: {str(err)}")
+            feedback.pushWarning(f"⚠️ Island filter fallback warning: {str(err)}")
             pass
         
     osw_mask_path = os.path.join(out_dir, "06_Final_OSW_Mask.tif")

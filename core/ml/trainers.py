@@ -1569,6 +1569,12 @@ def predict_map(model, stack_path, mask_path, out_path, med_size, output_format=
         batch_idx = water_idx[start:end]
         
         X_chunk = d_flat[batch_idx]
+        
+        # Identify pixels where any feature is missing (-9999 or NaN)
+        # We do this BEFORE adding extra_features (which are global) 
+        # and BEFORE filling NaNs with 0.0
+        invalid_mask = np.any(np.isnan(X_chunk) | (X_chunk == -9999.0) | (X_chunk < -9000), axis=1)
+
         if extra_features is not None:
             extra_cols = np.tile(extra_features, (X_chunk.shape[0], 1))
             X_chunk = np.hstack((X_chunk, extra_cols))
@@ -1578,6 +1584,10 @@ def predict_map(model, stack_path, mask_path, out_path, med_size, output_format=
             
         np.nan_to_num(X_chunk, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
         chunk_preds = model.predict(X_chunk)
+        
+        # Overwrite predictions for invalid feature pixels to NoData
+        chunk_preds[invalid_mask] = -9999.0
+        
         out_img[batch_idx] = chunk_preds
 
     out_img = out_img.reshape(h, w)
@@ -2035,7 +2045,8 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback, pre_e
                         if (enable_slope_lr or remove_pos_lr) and os.path.exists(lr_map_path):
                             from Bathymetrix_AI.infrastructure.raster_io import clean_depth_map, slope_filter_depth, remove_positive_pixels
                             lr_cleaned = os.path.join(lr_dir, "Linear_Regression_Cleaned.tif")
-                            clean_depth_map(lr_map_path, stack_path, max_depth_lr, lr_cleaned, context, feedback)
+                            ref_mask = mask_path if mask_path and os.path.exists(mask_path) else stack_path
+                            clean_depth_map(lr_map_path, ref_mask, max_depth_lr, lr_cleaned, context, feedback)
                             cur_lr = lr_cleaned
                             if enable_slope_lr:
                                 lr_slope = os.path.join(lr_dir, "Linear_Regression_SlopeFiltered.tif")
@@ -2116,7 +2127,8 @@ def run_phase03_initial_modeling(algorithm, parameters, context, feedback, pre_e
                 from Bathymetrix_AI.infrastructure.raster_io import clean_depth_map, slope_filter_depth, remove_positive_pixels
                 append_log("   [Cleanup] Applying post-prediction cleanup filters to Phase 03 depth map...", log_path, feedback)
                 p_cleaned = os.path.join(out_dir, "3_Initial_Global_Depth_Cleaned.tif")
-                clean_depth_map(p_map, stack_path, max_depth, p_cleaned, context, feedback)
+                ref_mask = mask_path if mask_path and os.path.exists(mask_path) else stack_path
+                clean_depth_map(p_map, ref_mask, max_depth, p_cleaned, context, feedback)
                 cur_map = p_cleaned
                 if enable_slope:
                     p_slope = os.path.join(out_dir, "3_Initial_Global_Depth_SlopeFiltered.tif")

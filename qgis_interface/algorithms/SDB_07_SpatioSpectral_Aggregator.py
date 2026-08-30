@@ -365,6 +365,7 @@ class PostSpatioSpectralAggregator(QgsProcessingAlgorithm):
             )
         )
 
+
     def name(self):
         return "sdb_post_spatiospectral_aggregator"
 
@@ -430,6 +431,7 @@ class PostSpatioSpectralAggregator(QgsProcessingAlgorithm):
 
         p3_depth_maps = []
         p1_masks = []
+        p1_osw_polys = []
 
         feedback.pushInfo(f"Found {len(scene_folders)} scenes in workspace.")
 
@@ -450,13 +452,24 @@ class PostSpatioSpectralAggregator(QgsProcessingAlgorithm):
 
             p3_depth_maps.append(depth_map)
 
-            # Find Mask
+            # Find Mask & OSW Polygon
             p1_dir = os.path.join(scene_path, "Phase_01_Preprocessing")
             mask_files = glob.glob(os.path.join(p1_dir, "*Mask*.tif"))
             if mask_files:
                 p1_masks.append(mask_files[0])
             else:
                 feedback.pushInfo(f"Missing mask for {scene_folder}.")
+
+            osw_poly_candidates = (
+                glob.glob(os.path.join(p1_dir, "*OSW*.gpkg"))
+                + glob.glob(os.path.join(p1_dir, "*Boundary*.gpkg"))
+                + glob.glob(os.path.join(p1_dir, "*Mask*.gpkg"))
+                + [os.path.join(p1_dir, "07_OSW_Boundary_Polygon.gpkg")]
+            )
+            for cand in osw_poly_candidates:
+                if os.path.exists(cand) and cand not in p1_osw_polys:
+                    p1_osw_polys.append(cand)
+                    break
 
         if not p3_depth_maps:
             raise QgsProcessingException("No valid Phase 03 depth maps found in the workspace.")
@@ -546,6 +559,127 @@ class PostSpatioSpectralAggregator(QgsProcessingAlgorithm):
                 spatiospectral_mask_intersection(p1_masks, aggregated_mask_path, feedback=feedback)
 
         feedback.pushInfo(f"Aggregation complete. Output saved to: {aggregated_depth_path}")
+
+        # Extract CRS for GDAL clipping
+        crs_id = None
+        try:
+            from qgis.core import QgsRasterLayer
+            rl = QgsRasterLayer(aggregated_depth_path, "agg_depth")
+            if rl.isValid() and rl.crs().isValid():
+                crs_id = rl.crs().authid()
+        except Exception:
+            pass
+
+        # Post-Aggregation Cleanup: Clamp max depth, slope filter, remove positives & OSW Clip
+        aggregated_osw_poly = os.path.join(out_folder, "Aggregated_OSW_Boundary_Polygon.gpkg")
+        if p1_osw_polys:
+            feedback.pushInfo("Generating aggregated OSW boundary polygon from scene vectors...")
+            try:
+                if len(p1_osw_polys) == 1:
+                    import shutil
+                    shutil.copy2(p1_osw_polys[0], aggregated_osw_poly)
+                else:
+                    merge_res = processing.run(
+                        "native:mergevectorlayers",
+                        {"LAYERS": p1_osw_polys, "OUTPUT": aggregated_osw_poly},
+                        context=context,
+                        feedback=feedback,
+                        is_child_algorithm=True,
+                    )
+                    if os.path.exists(merge_res["OUTPUT"]):
+                        aggregated_osw_poly = merge_res["OUTPUT"]
+            except Exception as e:
+                feedback.pushInfo(f"Warning: Failed to aggregate OSW polygons: {e}")
+
+        # Fallback: If no vector polygon exists in scene folders, create it on-the-fly from the aggregated mask!
+        if (not os.path.exists(aggregated_osw_poly) or os.path.getsize(aggregated_osw_poly) == 0) and os.path.exists(aggregated_mask_path):
+            feedback.pushInfo("Generating Aggregated OSW Boundary Polygon from Aggregated Intersection Mask...")
+            try:
+                poly_res = processing.run(
+                    "gdal:polygonize",
+                    {
+                        "INPUT": aggregated_mask_path,
+                        "BAND": 1,
+                        "FIELD": "DN",
+                        "EIGHT_CONNECTEDNESS": False,
+                        "OUTPUT": "TEMPORARY_OUTPUT",
+                    },
+                    context=context,
+                    feedback=feedback,
+                    is_child_algorithm=True,
+                )
+                processing.run(
+                    "native:extractbyexpression",
+                    {
+                        "INPUT": poly_res["OUTPUT"],
+                        "EXPRESSION": '"DN" = 1',
+                        "OUTPUT": aggregated_osw_poly,
+                    },
+                    context=context,
+                    feedback=feedback,
+                    is_child_algorithm=True,
+                )
+            except Exception as e:
+                feedback.pushInfo(f"Warning: Failed to polygonize aggregated mask: {e}")
+
+        if os.path.exists(aggregated_depth_path):
+            feedback.pushInfo("Applying Post-Aggregation Cleanup (Clamping, Slope Filter, Positive Removal)...")
+            max_depth = self.parameterAsDouble(parameters, self.MAX_DEPTH_THRESHOLD, context)
+            agg_clamped = os.path.join(out_folder, f"Aggregated_Depth_{safe_agg_method_name}_Cleaned.tif")
+            ref_feat = aggregated_mask_path if os.path.exists(aggregated_mask_path) else aggregated_depth_path
+            clean_depth_map(aggregated_depth_path, ref_feat, max_depth, agg_clamped, context, feedback)
+            current_agg = agg_clamped
+
+            if self.parameterAsBool(parameters, self.ENABLE_SLOPE_FILTER, context):
+                slope_threshold = self.parameterAsDouble(parameters, self.SLOPE_THRESHOLD, context)
+
+                agg_slope = os.path.join(out_folder, f"Aggregated_Depth_{safe_agg_method_name}_SlopeFiltered.tif")
+                current_agg = slope_filter_depth(
+                    current_agg,
+                    slope_threshold=slope_threshold,
+                    out_path=agg_slope,
+                    context=context,
+                    feedback=feedback,
+                )
+
+            if self.parameterAsBool(parameters, self.REMOVE_POSITIVES, context):
+                agg_no_pos = os.path.join(out_folder, f"Aggregated_Depth_{safe_agg_method_name}_NoPositives.tif")
+                remove_positive_pixels(current_agg, agg_no_pos, feedback)
+                current_agg = agg_no_pos
+
+            if os.path.exists(aggregated_osw_poly) and os.path.getsize(aggregated_osw_poly) > 0:
+                feedback.pushInfo("Clipping Aggregated Depth Map with OSW Polygon...")
+                agg_osw_clipped = os.path.join(out_folder, f"Aggregated_Depth_{safe_agg_method_name}_OSW_Clipped.tif")
+                try:
+                    clip_params = {
+                        "INPUT": current_agg,
+                        "MASK": aggregated_osw_poly,
+                        "NODATA": -9999.0,
+                        "ALPHA_BAND": False,
+                        "CROP_TO_CUTLINE": False,
+                        "KEEP_RESOLUTION": True,
+                        "DATA_TYPE": 0,
+                        "OUTPUT": agg_osw_clipped,
+                    }
+                    if crs_id:
+                        clip_params["SOURCE_CRS"] = crs_id
+                        clip_params["TARGET_CRS"] = crs_id
+                    processing.run(
+                        "gdal:cliprasterbymasklayer",
+                        clip_params,
+                        context=context,
+                        feedback=feedback,
+                        is_child_algorithm=True,
+                    )
+                    if os.path.exists(agg_osw_clipped):
+                        current_agg = agg_osw_clipped
+                        import shutil
+                        shutil.copy2(agg_osw_clipped, aggregated_depth_path)
+                except Exception as e:
+                    feedback.pushInfo(f"Warning: Failed to clip Aggregated Depth with OSW Polygon: {e}")
+
+            aggregated_depth_path = current_agg
+
         write_qml_style(aggregated_depth_path)
 
         # 5. Optional Phase 04: Adaptive Refinement (Matching SpatioSpectral Flow)
@@ -592,8 +726,6 @@ class PostSpatioSpectralAggregator(QgsProcessingAlgorithm):
                 "OUTPUT_FOLDER": p4_dir,
             }
 
-
-
             p4 = processing.run(
                 "sdb_tools:sdb_phase4_adaptive",
                 p4_params,
@@ -615,6 +747,7 @@ class PostSpatioSpectralAggregator(QgsProcessingAlgorithm):
                     slope_threshold = self.parameterAsDouble(
                         parameters, self.SLOPE_THRESHOLD, context
                     )
+
                     p4_slope = os.path.join(p4_dir, "4_Phase04_Depth_SlopeFiltered.tif")
                     current_p4 = slope_filter_depth(
                         current_p4,
@@ -631,9 +764,44 @@ class PostSpatioSpectralAggregator(QgsProcessingAlgorithm):
                 else:
                     p4_final_depth = current_p4
 
+                if os.path.exists(aggregated_osw_poly) and os.path.getsize(aggregated_osw_poly) > 0:
+                    feedback.pushInfo("Clipping Phase 04 Map with Aggregated OSW Polygon...")
+                    p4_osw_clipped = os.path.join(p4_dir, "Phase04_Final_Depth_OSW_Clipped.tif")
+                    try:
+                        clip_params = {
+                            "INPUT": p4_final_depth,
+                            "MASK": aggregated_osw_poly,
+                            "NODATA": -9999.0,
+                            "ALPHA_BAND": False,
+                            "CROP_TO_CUTLINE": False,
+                            "KEEP_RESOLUTION": True,
+                            "DATA_TYPE": 0,
+                            "OUTPUT": p4_osw_clipped,
+                        }
+                        if crs_id:
+                            clip_params["SOURCE_CRS"] = crs_id
+                            clip_params["TARGET_CRS"] = crs_id
+                        processing.run(
+                            "gdal:cliprasterbymasklayer",
+                            clip_params,
+                            context=context,
+                            feedback=feedback,
+                            is_child_algorithm=True,
+                        )
+                        if os.path.exists(p4_osw_clipped):
+                            p4_final_depth = p4_osw_clipped
+                            if raw_p4_depth and os.path.exists(raw_p4_depth) and raw_p4_depth != p4_osw_clipped:
+                                import shutil
+                                shutil.copy2(p4_osw_clipped, raw_p4_depth)
+                    except Exception as e:
+                        feedback.pushInfo(f"Warning: Failed to clip Phase 04 with OSW Polygon: {e}")
+
                 write_qml_style(p4_final_depth)
             else:
                 p4_final_depth = raw_p4_depth
+
+            if p4_final_depth and os.path.exists(p4_final_depth):
+                write_qml_style(p4_final_depth)
 
             feedback.pushInfo(f"Phase 04 complete. Output saved to: {p4_final_depth}")
 

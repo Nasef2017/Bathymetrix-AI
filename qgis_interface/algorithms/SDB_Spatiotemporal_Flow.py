@@ -761,6 +761,7 @@ class SDBSpatiotemporalFlow(SDBMasterOrchestrator):
             )
         )
 
+
     def processAlgorithm(self, parameters, context, feedback):
         image_root = self.parameterAsString(parameters, self.INPUT_IMAGE_ROOT, context)
         global_train_layer = self.parameterAsVectorLayer(parameters, self.INPUT_TRAIN, context)
