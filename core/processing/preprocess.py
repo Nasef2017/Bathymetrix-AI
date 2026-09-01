@@ -538,8 +538,10 @@ def generate_features(
             ndwi = (g_val - n_val) / (g_val + n_val)
 
         # Custom Band Math calculation (Index 8 in FEATURE_OPTIONS)
-        custom_band = np.zeros_like(b_val)
-        if do_calc and formula and 8 in selected_indices:
+        custom_band = None
+        has_custom_band = False
+        clean_formula = formula.strip() if (formula and isinstance(formula, str)) else ""
+        if do_calc and clean_formula and 8 in selected_indices:
             try:
                 band_dict = {}
                 for i in range(1, nbands + 1):
@@ -549,16 +551,20 @@ def generate_features(
                     band_dict[f"Log_B{i}"] = np.log(np.clip(raw_b_i * SCALE, 1e-4, None))
                 band_dict["np"] = np
                 band_dict["log"] = np.log
-                fb.pushInfo(f"      Calculating Custom Formula: {formula}")
-                res = _safe_eval(formula, band_dict)
+                fb.pushInfo(f"      Calculating Custom Formula: {clean_formula}")
+                res = _safe_eval(clean_formula, band_dict)
                 if isinstance(res, np.ndarray):
-                    custom_band = res
+                    custom_band = res.astype("float32")
                     custom_band[~mask_valid] = 0
                     custom_band[np.isinf(custom_band)] = 0
+                    has_custom_band = True
                 else:
-                    custom_band[:] = res
+                    custom_band = np.full_like(b_val, float(res), dtype="float32")
+                    custom_band[~mask_valid] = 0
+                    has_custom_band = True
             except Exception as e:
-                fb.pushWarning(f"Calc Error: {e}")
+                fb.pushWarning(f"Custom Band Math Error ({clean_formula}): {e}. Skipping custom band.")
+                has_custom_band = False
 
         calculated_feats_map = {
             2: rbg,
@@ -567,8 +573,9 @@ def generate_features(
             5: rgn,
             6: rrn,
             7: ndwi,
-            8: custom_band,
         }
+        if has_custom_band and custom_band is not None:
+            calculated_feats_map[8] = custom_band
 
         final_stack = []
         final_descriptions = []
@@ -1131,12 +1138,18 @@ def run_phase01_preprocessing(algorithm, parameters, context, feedback):
 
     final_mask_path = None
 
-    if water_poly_layer is not None:
+    if not enable_auto_mask:
+        feedback.pushInfo(
+            "      → [1/3] Masking is completely Disabled. Proceeding with the entire image."
+        )
+        final_mask_path = None
+
+    elif water_poly_layer is not None:
         feedback.pushInfo("      → [1/3] Using provided Vector Polygon for Water Masking...")
         run_polygon_mask(curr_img, p_mask, input_layer, water_poly_layer, feedback)
         final_mask_path = p_mask
 
-    elif enable_auto_mask:
+    else:
         masking_choice = algorithm.parameterAsInt(
             parameters, algorithm.MASKING_METHOD, context
         )
@@ -1169,12 +1182,6 @@ def run_phase01_preprocessing(algorithm, parameters, context, feedback):
             run_smart_hybrid_masking(curr_img, p_mask, b_idx, g_idx, r_idx, n_idx, s_idx, k_size, feedback)
         final_mask_path = p_mask
 
-    else:
-        feedback.pushInfo(
-            "      → [1/3] Masking is completely Disabled. Proceeding with the entire image."
-        )
-        final_mask_path = None
-
     if algorithm.parameterAsBool(parameters, algorithm.APPLY_SUNGLINT, context):
         nir_band_idx = algorithm.parameterAsInt(
             parameters, algorithm.NIR_BAND, context
@@ -1199,7 +1206,11 @@ def run_phase01_preprocessing(algorithm, parameters, context, feedback):
     selected_feats = algorithm.parameterAsEnums(
         parameters, algorithm.FEATURE_SELECTION, context
     )
-    do_calc = algorithm.parameterAsBool(parameters, algorithm.ENABLE_BAND_CALC, context)
+    do_calc = (
+        algorithm.parameterAsBool(parameters, algorithm.ENABLE_BAND_CALC, context)
+        if (algorithm and hasattr(algorithm, "ENABLE_BAND_CALC") and hasattr(algorithm, "parameterDefinition") and algorithm.parameterDefinition(algorithm.ENABLE_BAND_CALC))
+        else parameters.get("ENABLE_BAND_CALC", True)
+    )
     calc_formula = algorithm.parameterAsString(
         parameters, algorithm.BAND_MATH_FORMULA, context
     )

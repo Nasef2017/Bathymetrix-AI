@@ -64,6 +64,7 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
     ENABLE_ENSEMBLE = "ENABLE_ENSEMBLE"
     ENSEMBLE_METHOD = "ENSEMBLE_METHOD"
     ENSEMBLE_SIZE = "ENSEMBLE_SIZE"
+    ENABLE_SPATIAL_RESIDUAL_CORR = "ENABLE_SPATIAL_RESIDUAL_CORR"
     RESIDUAL_INTERP_METHOD = "RESIDUAL_INTERP_METHOD"
     KNN_NEIGHBORS = "KNN_NEIGHBORS"
     SPATIAL_CV = "SPATIAL_CV"
@@ -197,6 +198,20 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.ENABLE_DEPTH_VARIANCE_CORR,
+                "🎛️ Enable Depth Variance Correction (Datum Mean Shift)",
+                defaultValue=False,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.ENABLE_SPATIAL_RESIDUAL_CORR,
+                "📍 Enable Spatial Residual Correction (KNN / Kriging Error Grid)",
+                defaultValue=True,
+            )
+        )
+        self.addParameter(
             QgsProcessingParameterEnum(
                 self.RESIDUAL_INTERP_METHOD,
                 "📍 Spatial Residual Interpolation Method",
@@ -221,14 +236,6 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
         )
         p_sp.setFlags(p_sp.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_sp)
-
-        p_var_corr = QgsProcessingParameterBoolean(
-            self.ENABLE_DEPTH_VARIANCE_CORR,
-            "🎛️ Enable Depth Variance Correction (Control Points Mean Shift)",
-            defaultValue=False,
-        )
-        p_var_corr.setFlags(p_var_corr.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
-        self.addParameter(p_var_corr)
 
         p_ens_size = QgsProcessingParameterNumber(
             self.ENSEMBLE_SIZE,
@@ -433,7 +440,7 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
             "⚖️ [Score Equation] Included Evaluation Metrics (Auto-Balanced)",
             options=self.SCORE_METRIC_OPTIONS,
             allowMultiple=True,
-            defaultValue=[0, 1, 2, 3],
+            defaultValue=[0, 1, 2, 3, 4],
         )
         p_metrics.setFlags(p_metrics.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_metrics)
@@ -451,13 +458,13 @@ class SDBPhase4Adaptive(QgsProcessingAlgorithm):
         return "sdb_phase4_adaptive"
 
     def displayName(self):
-        return "4. SDB Module 04: Depth-Dependent Residual Calibration"
+        return "3.4 Phase 04: Adaptive Spatial Refinement"
 
     def group(self):
-        return "SDB Research Tools"
+        return "3. Step-by-Step Modular Pipeline"
 
     def groupId(self):
-        return "sdb_tools"
+        return "modular_pipeline"
 
     def createInstance(self):
         return SDBPhase4Adaptive()

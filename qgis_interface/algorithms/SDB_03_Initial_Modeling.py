@@ -199,13 +199,13 @@ class SDBModule03(QgsProcessingAlgorithm):
         )
         p_ens_size.setFlags(p_ens_size.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_ens_size)
-        p_sp = QgsProcessingParameterBoolean(
-            self.SPATIAL_CV,
-            "🌍 Enable Spatial Block Cross-Validation",
-            defaultValue=False,
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.SPATIAL_CV,
+                "🌍 Enable Spatial Block Cross-Validation",
+                defaultValue=True,
+            )
         )
-        p_sp.setFlags(p_sp.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
-        self.addParameter(p_sp)
         self.addParameter(
             QgsProcessingParameterEnum(
                 self.FEATURE_CORR_METHOD,
@@ -383,7 +383,7 @@ class SDBModule03(QgsProcessingAlgorithm):
             "⚖️ [Score Equation] Included Evaluation Metrics (Auto-Balanced)",
             options=self.SCORE_METRIC_OPTIONS,
             allowMultiple=True,
-            defaultValue=[0, 1, 2, 3],
+            defaultValue=[0, 1, 2, 3, 4],
         )
         p_metrics.setFlags(p_metrics.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_metrics)
@@ -409,13 +409,13 @@ class SDBModule03(QgsProcessingAlgorithm):
         return "sdb_03_initial_modeling"
 
     def displayName(self):
-        return "3. SDB Module 03: Global Auto-ML"
+        return "3.3 Phase 03: Global Auto-ML SDB Modeling"
 
     def group(self):
-        return "SDB Research Tools"
+        return "3. Step-by-Step Modular Pipeline"
 
     def groupId(self):
-        return "sdb_tools"
+        return "modular_pipeline"
 
     def createInstance(self):
         return SDBModule03()

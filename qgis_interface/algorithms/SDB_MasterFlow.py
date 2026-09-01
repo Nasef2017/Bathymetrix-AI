@@ -64,6 +64,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
     INPUT_TRAIN = "INPUT_TRAIN"
     FIELD_DEPTH = "FIELD_DEPTH"
     FIELD_WEIGHT = "FIELD_WEIGHT"
+    ENABLE_MAX_DEPTH_FILTER = "ENABLE_MAX_DEPTH_FILTER"
     MAX_DEPTH_THRESHOLD = "MAX_DEPTH_THRESHOLD"
 
     ENABLE_RANSAC = "ENABLE_RANSAC"
@@ -74,6 +75,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
     RANSAC_MAX_TRIALS = "RANSAC_MAX_TRIALS"
 
     # [3] Global Modeling (Auto-ML)
+    ENABLE_MODELING = "ENABLE_MODELING"
     SELECTED_ALGOS = "SELECTED_ALGOS"
     OPTIMIZER_METHOD = "OPTIMIZER_METHOD"
     COLLISION_HANDLING = "COLLISION_HANDLING"
@@ -146,6 +148,7 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
     FEATURE_CORR_METHOD_P4 = "FEATURE_CORR_METHOD_P4"
     FEATURE_CORR_THRESHOLD_P4 = "FEATURE_CORR_THRESHOLD_P4"
     ENABLE_DEPTH_VARIANCE_CORR_P4 = "ENABLE_DEPTH_VARIANCE_CORR_P4"
+    ENABLE_SPATIAL_RESIDUAL_CORR_P4 = "ENABLE_SPATIAL_RESIDUAL_CORR_P4"
 
     # [5] Validation & Output Cleanup
     ENABLE_VALIDATION = "ENABLE_VALIDATION"
@@ -224,13 +227,13 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         return "sdb_master_orchestrator"
 
     def displayName(self):
-        return "2. SDB Single Masterflow"
+        return "1.1 SDB Single-Scene Masterflow"
 
     def group(self):
-        return ""
+        return "1. End-to-End Masterflows"
 
     def groupId(self):
-        return ""
+        return "masterflows"
 
     def createInstance(self):
         return SDBMasterOrchestrator()
@@ -278,9 +281,9 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
     # =======================================================================
     def initAlgorithm(self, config=None):
 
-        # -------------------------------------------------------------------
+        # ===================================================================
         # [0] General Settings
-        # -------------------------------------------------------------------
+        # ===================================================================
         self.addParameter(
             QgsProcessingParameterRasterLayer(
                 self.INPUT_RASTER, "📁 [0] Input Satellite Image"
@@ -291,22 +294,14 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
                 self.OUTPUT_FOLDER, "📁 [0] Main Output Folder"
             )
         )
-        self.addParameter(
-            QgsProcessingParameterNumber(
-                self.NUM_THREADS,
-                "⚙️ [0] Processing Threads",
-                type=QgsProcessingParameterNumber.Integer,
-                defaultValue=4,
-            )
-        )
 
-        # -------------------------------------------------------------------
+        # ===================================================================
         # [1] Phase 01: Advanced Pre-processing
-        # -------------------------------------------------------------------
+        # ===================================================================
         self.addParameter(
             QgsProcessingParameterBoolean(
                 self.ENABLE_PREPROCESSING,
-                "⚙️ [1] Enable Phase 01 Pre-processing",
+                "━━━━━━━━━ ⚙️ [1] Phase 01: Pre-processing & Feature Extraction ━━━━━━━━━",
                 defaultValue=True,
             )
         )
@@ -368,34 +363,6 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         )
 
         self.addParameter(
-            QgsProcessingParameterNumber(
-                self.SUNGLINT_PERCENTILE,
-                "☀️ [1.2] Sunglint Deep Water %",
-                type=QgsProcessingParameterNumber.Double,
-                defaultValue=1.0,
-            )
-        )
-
-        # -------------------------------------------------------------------
-        # [1] Phase 01: Advanced Pre-processing (Masking & Features)
-        # -------------------------------------------------------------------
-        self.addParameter(
-            QgsProcessingParameterVectorLayer(
-                self.WATER_MASK_POLY,
-                "🗺️ [1.3] Ready-made Water Mask Polygon",
-                types=[QgsProcessing.TypeVectorPolygon],
-                optional=True,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterNumber(
-                self.SHRINK_EDGE_DIST,
-                "🗺️ [1.3] Water Edge Shrink (Map Units, e.g. -10)",
-                type=QgsProcessingParameterNumber.Double,
-                defaultValue=0.0,
-            )
-        )
-        self.addParameter(
             QgsProcessingParameterBoolean(
                 self.ENABLE_MASKING,
                 "🏖️ [1.3] Enable Automated Water Masking",
@@ -411,28 +378,11 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
-            QgsProcessingParameterNumber(
-                self.MANUAL_THRESHOLD,
-                "🏖️ [1.3] Manual Threshold",
-                type=QgsProcessingParameterNumber.Double,
-                defaultValue=0.0,
+            QgsProcessingParameterVectorLayer(
+                self.WATER_MASK_POLY,
+                "🗺️ [1.3] Ready-made Water Mask Polygon",
+                types=[QgsProcessing.TypeVectorPolygon],
                 optional=True,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterNumber(
-                self.OTSU_ADJUSTMENT,
-                "🏖️ [1.3] Otsu Threshold Adjustment",
-                type=QgsProcessingParameterNumber.Double,
-                defaultValue=0.0,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterNumber(
-                self.MASK_KERNEL_SIZE,
-                "🏖️ [1.3] Mask Cleanup Kernel Size",
-                type=QgsProcessingParameterNumber.Integer,
-                defaultValue=3,
             )
         )
 
@@ -447,24 +397,14 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
-            QgsProcessingParameterBoolean(
-                self.ENABLE_BAND_CALC,
-                "🧮 [1.4] Enable Custom Band Math",
-                defaultValue=False,
-            )
-        )
-        self.addParameter(
             QgsProcessingParameterString(
                 self.BAND_MATH_FORMULA,
-                "🧮 [1.4] Band Math Formula",
+                "🧮 [1.4] Custom Band Math Formula (e.g. (B2-B3)/(B2+B3) or Log_B2/Log_B3)",
                 defaultValue="",
                 optional=True,
             )
         )
 
-        # -------------------------------------------------------------------
-        # [1] Phase 01: Advanced Pre-processing (OSW Filter)
-        # -------------------------------------------------------------------
         self.addParameter(
             QgsProcessingParameterBoolean(
                 self.APPLY_DEEPWATER,
@@ -488,44 +428,20 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
                 optional=True,
             )
         )
-        self.addParameter(
-            QgsProcessingParameterNumber(
-                self.NIR_PERCENTILE_OSW,
-                "🌊 [1.5] NIR Percentile for Deep Water (e.g. 10%)",
-                type=QgsProcessingParameterNumber.Double,
-                defaultValue=10.0,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterNumber(
-                self.OSW_MEDIAN_SIZE,
-                "🌊 [1.5] OSW Mask Median Filter Size",
-                type=QgsProcessingParameterNumber.Integer,
-                defaultValue=3,
-            )
-        )
-        p_fill = QgsProcessingParameterBoolean(
-            self.FILL_INTERNAL_HOLES,
-            "🌊 [1.5] Fill All Internal Holes in OSW Mask",
-            defaultValue=True,
-        )
-        p_fill.setFlags(p_fill.flags() | QgsProcessingParameterDefinition.FlagHidden)
-        self.addParameter(p_fill)
 
-        p_extract = QgsProcessingParameterBoolean(
-            self.EXTRACT_POLYGON,
-            "🌊 [1.5] Extract OSW Mask as Polygon",
-            defaultValue=True,
-        )
-        p_extract.setFlags(p_extract.flags() | QgsProcessingParameterDefinition.FlagHidden)
-        self.addParameter(p_extract)
-
-        # -------------------------------------------------------------------
+        # ===================================================================
         # [2] Phase 02: Robust Filtering
-        # -------------------------------------------------------------------
+        # ===================================================================
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.ENABLE_RANSAC,
+                "━━━━━━━━━ 🛡️ [2] Enable Phase 02 Data Filtering ━━━━━━━━━",
+                defaultValue=True,
+            )
+        )
         self.addParameter(
             QgsProcessingParameterVectorLayer(
-                self.INPUT_TRAIN, "📍 [2.1] Main Training Points"
+                self.INPUT_TRAIN, "📍 [2.1] Main Training Points (ICESat-2 / In-situ)"
             )
         )
         self.addParameter(
@@ -540,29 +456,14 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterField(
                 self.FIELD_WEIGHT,
-                "⚖️ [2.1] Weight Field",
+                "⚖️ [2.1] Weight Field [optional]",
                 defaultValue="confidence",
                 parentLayerParameterName=self.INPUT_TRAIN,
                 type=QgsProcessingParameterField.Numeric,
                 optional=True,
             )
         )
-        self.addParameter(
-            QgsProcessingParameterNumber(
-                self.MAX_DEPTH_THRESHOLD,
-                "🛑 [2.1] Maximum Depth Threshold (e.g. -30)",
-                type=QgsProcessingParameterNumber.Double,
-                defaultValue=-30.0,
-            )
-        )
 
-        self.addParameter(
-            QgsProcessingParameterBoolean(
-                self.ENABLE_RANSAC,
-                "🧹 [2.2] Enable Data Filtering (Noise Removal)",
-                defaultValue=True,
-            )
-        )
         self.addParameter(
             QgsProcessingParameterEnum(
                 self.FILTER_MODE,
@@ -587,88 +488,38 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
                 defaultValue=3,
             )
         )
-        self.addParameter(
-            QgsProcessingParameterNumber(
-                self.RANSAC_THRESHOLD,
-                "🧹 [2.2] Threshold / Sigma Multiplier",
-                type=QgsProcessingParameterNumber.Double,
-                defaultValue=3.0,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterNumber(
-                self.RANSAC_MAX_TRIALS,
-                "🧹 [2.2] RANSAC Trials",
-                type=QgsProcessingParameterNumber.Integer,
-                defaultValue=100,
-            )
-        )
 
-        # -------------------------------------------------------------------
+        # ===================================================================
         # [3] Phase 03: Global Auto-ML & Feature Analysis
-        # -------------------------------------------------------------------
+        # ===================================================================
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.ENABLE_MODELING,
+                "━━━━━━━━━ 🤖 [3] Phase 03: Global Auto-ML SDB Modeling ━━━━━━━━━",
+                defaultValue=True,
+            )
+        )
         self.addParameter(
             QgsProcessingParameterEnum(
                 self.SELECTED_ALGOS,
-                "🤖 [3] Algorithms to Benchmark",
+                "🤖 [3.1] Algorithms to Benchmark",
                 options=self.MODEL_LIST_NAMES,
                 allowMultiple=True,
-                defaultValue=[3, 12, 13, 14, 15, 17], # Extra Trees, XGBoost, LightGBM, CatBoost, Ensemble Average, Ensemble Stacking
+                defaultValue=[3, 12, 13, 14, 15, 17],
             )
         )
         self.addParameter(
             QgsProcessingParameterEnum(
                 self.OPTIMIZER_METHOD,
-                "🤖 [3] Optimizer Method",
+                "🤖 [3.2] Optimizer Method",
                 options=self.OPTIMIZER_LIST_NAMES,
                 defaultValue=0,
             )
         )
         self.addParameter(
             QgsProcessingParameterEnum(
-                self.COLLISION_HANDLING,
-                "🤖 [3] Collision Handling",
-                options=self.COLLISION_LIST_NAMES,
-                defaultValue=0,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterNumber(
-                self.N_ITERATIONS,
-                "🤖 [3] Optimization Iterations",
-                type=QgsProcessingParameterNumber.Integer,
-                defaultValue=20,
-            )
-        )
-        p_ens_size = QgsProcessingParameterNumber(
-            self.ENSEMBLE_SIZE,
-            "📊 Ensemble Size (Top N Models to blend)",
-            type=QgsProcessingParameterNumber.Integer,
-            defaultValue=3,
-            minValue=2,
-            maxValue=5,
-        )
-        p_ens_size.setFlags(p_ens_size.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
-        self.addParameter(p_ens_size)
-        p_sp_p3 = QgsProcessingParameterBoolean(
-            self.SPATIAL_CV_P3,
-            "🌍 [Phase 03] Enable Spatial Block Cross-Validation",
-            defaultValue=False,
-        )
-        p_sp_p3.setFlags(p_sp_p3.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
-        self.addParameter(p_sp_p3)
-        self.addParameter(
-            QgsProcessingParameterNumber(
-                self.MEDIAN_SIZE,
-                "🤖 [3] Output Median Filter Size",
-                type=QgsProcessingParameterNumber.Integer,
-                defaultValue=5,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterEnum(
                 self.FEATURE_CORR_METHOD,
-                "🤖 [3] Feature Correlation Method",
+                "🤖 [3.3] Feature Correlation Method",
                 options=["Disabled", "Pearson (Linear)", "Spearman (Rank)", "Automatic-RANSAC", "Automatic-Random Forest"],
                 defaultValue=3,
             )
@@ -676,19 +527,260 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterEnum(
                 self.FEATURE_CORR_THRESHOLD,
-                "🤖 [3] Feature Correlation Threshold",
+                "🤖 [3.3] Feature Correlation Threshold",
                 options=self.FEATURE_CORR_THRESHOLDS,
                 defaultValue=2,
             )
         )
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.SPATIAL_CV_P3,
+                "🌍 [3.4] Enable Spatial Block Cross-Validation",
+                defaultValue=True,
+            )
+        )
 
-        p_var_corr = QgsProcessingParameterBoolean(
-            self.ENABLE_DEPTH_VARIANCE_CORR,
-            "🤖 [Phase 03] Enable Depth Variance Correction",
+        # ===================================================================
+        # [4] Phase 04: Adaptive Refinement
+        # ===================================================================
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.ENABLE_ADAPTIVE,
+                "━━━━━━━━━ 🎯 [4] Phase 04: Adaptive Refinement ━━━━━━━━━",
+                defaultValue=False,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterVectorLayer(
+                self.INPUT_ADAPTIVE_TRAIN, "🎯 [4] Adaptive Points", optional=True
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterField(
+                self.FIELD_ADAPTIVE_DEPTH,
+                "🎯 [4] Adaptive Depth Field",
+                defaultValue="ortho_h",
+                parentLayerParameterName=self.INPUT_ADAPTIVE_TRAIN,
+                type=QgsProcessingParameterField.Numeric,
+                optional=True,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.ENABLE_DEPTH_VARIANCE_CORR_P4,
+                "🎛️ [4] Enable Depth Variance Correction (Datum Mean Shift)",
+                defaultValue=False,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.ENABLE_SPATIAL_RESIDUAL_CORR_P4,
+                "📍 [4] Enable Spatial Residual Correction (KNN / Kriging Grid)",
+                defaultValue=True,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.RESIDUAL_INTERP_METHOD,
+                "📍 [4] Spatial Residual Interpolation Method",
+                options=["Standard KNN", "Robust KNN (Huber Weights)", "Gaussian Process / Kriging"],
+                defaultValue=0,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterEnum(
+                self.STACK_COMPONENTS_P4,
+                "🎯 [4] Features for Retraining",
+                options=["Feature Stack (Phase 01)", "Phase 03 Depth Map", "Residual Error Grid"],
+                allowMultiple=True,
+                defaultValue=[1, 2],
+            )
+        )
+
+        # ===================================================================
+        # [5] Phase 05: Validation & Reporting
+        # ===================================================================
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.ENABLE_VALIDATION, "━━━━━━━━━ 📉 [5] Phase 05: Validation & Reporting ━━━━━━━━━", defaultValue=False
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterVectorLayer(
+                self.INPUT_TEST, "📉 [5] Validation Points", optional=True
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterField(
+                self.FIELD_TEST_DEPTH,
+                "📉 [5] Validation Depth Field",
+                defaultValue="ortho_h",
+                parentLayerParameterName=self.INPUT_TEST,
+                type=QgsProcessingParameterField.Numeric,
+                optional=True,
+            )
+        )
+
+        # ===================================================================
+        # ➕ ADVANCED PARAMETERS (Organized cleanly by phase)
+        # ===================================================================
+
+        # --- [System] ---
+        p_threads = QgsProcessingParameterNumber(
+            self.NUM_THREADS,
+            "⚙️ [System] Processing Threads (Multi-processing)",
+            type=QgsProcessingParameterNumber.Integer,
+            defaultValue=4,
+        )
+        p_threads.setFlags(p_threads.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_threads)
+
+        # --- [Phase 01] ---
+        p_sg_pct = QgsProcessingParameterNumber(
+            self.SUNGLINT_PERCENTILE,
+            "☀️ [Phase 01] Sunglint Deep Water %",
+            type=QgsProcessingParameterNumber.Double,
+            defaultValue=1.0,
+        )
+        p_sg_pct.setFlags(p_sg_pct.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_sg_pct)
+
+        p_shrink = QgsProcessingParameterNumber(
+            self.SHRINK_EDGE_DIST,
+            "🗺️ [Phase 01] Water Edge Shrink (Map Units, e.g. -10)",
+            type=QgsProcessingParameterNumber.Double,
+            defaultValue=0.0,
+        )
+        p_shrink.setFlags(p_shrink.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_shrink)
+
+        p_man_th = QgsProcessingParameterNumber(
+            self.MANUAL_THRESHOLD,
+            "🏖️ [Phase 01] Manual Water Mask Threshold",
+            type=QgsProcessingParameterNumber.Double,
+            defaultValue=0.0,
+            optional=True,
+        )
+        p_man_th.setFlags(p_man_th.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_man_th)
+
+        p_otsu = QgsProcessingParameterNumber(
+            self.OTSU_ADJUSTMENT,
+            "🏖️ [Phase 01] Otsu Threshold Adjustment",
+            type=QgsProcessingParameterNumber.Double,
+            defaultValue=0.0,
+        )
+        p_otsu.setFlags(p_otsu.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_otsu)
+
+        p_mask_k = QgsProcessingParameterNumber(
+            self.MASK_KERNEL_SIZE,
+            "🏖️ [Phase 01] Mask Cleanup Kernel Size",
+            type=QgsProcessingParameterNumber.Integer,
+            defaultValue=3,
+        )
+        p_mask_k.setFlags(p_mask_k.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_mask_k)
+
+        p_nir_pct = QgsProcessingParameterNumber(
+            self.NIR_PERCENTILE_OSW,
+            "🌊 [Phase 01] NIR Percentile for Deep Water (e.g. 10%)",
+            type=QgsProcessingParameterNumber.Double,
+            defaultValue=10.0,
+        )
+        p_nir_pct.setFlags(p_nir_pct.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_nir_pct)
+
+        p_osw_med = QgsProcessingParameterNumber(
+            self.OSW_MEDIAN_SIZE,
+            "🌊 [Phase 01] OSW Mask Median Filter Size",
+            type=QgsProcessingParameterNumber.Integer,
+            defaultValue=3,
+        )
+        p_osw_med.setFlags(p_osw_med.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_osw_med)
+
+        p_fill = QgsProcessingParameterBoolean(
+            self.FILL_INTERNAL_HOLES,
+            "🌊 [Phase 01] Fill All Internal Holes in OSW Mask",
+            defaultValue=True,
+        )
+        p_fill.setFlags(p_fill.flags() | QgsProcessingParameterDefinition.FlagHidden)
+        self.addParameter(p_fill)
+
+        p_extract = QgsProcessingParameterBoolean(
+            self.EXTRACT_POLYGON,
+            "🌊 [Phase 01] Extract OSW Mask as Polygon",
+            defaultValue=True,
+        )
+        p_extract.setFlags(p_extract.flags() | QgsProcessingParameterDefinition.FlagHidden)
+        self.addParameter(p_extract)
+
+        # --- [Phase 02] ---
+        p_r_th = QgsProcessingParameterNumber(
+            self.RANSAC_THRESHOLD,
+            "🧹 [Phase 02] RANSAC Threshold / Sigma Multiplier",
+            type=QgsProcessingParameterNumber.Double,
+            defaultValue=3.0,
+        )
+        p_r_th.setFlags(p_r_th.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_r_th)
+
+        p_r_tr = QgsProcessingParameterNumber(
+            self.RANSAC_MAX_TRIALS,
+            "🧹 [Phase 02] RANSAC Maximum Trials",
+            type=QgsProcessingParameterNumber.Integer,
+            defaultValue=100,
+        )
+        p_r_tr.setFlags(p_r_tr.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_r_tr)
+
+        p_en_max_d = QgsProcessingParameterBoolean(
+            self.ENABLE_MAX_DEPTH_FILTER,
+            "🛑 [Phase 02] Enable Maximum Depth Cutoff Filter",
             defaultValue=False,
         )
-        p_var_corr.setFlags(p_var_corr.flags() | QgsProcessingParameterDefinition.FlagAdvanced | QgsProcessingParameterDefinition.FlagHidden)
-        self.addParameter(p_var_corr)
+        p_en_max_d.setFlags(p_en_max_d.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_en_max_d)
+
+        p_max_d = QgsProcessingParameterNumber(
+            self.MAX_DEPTH_THRESHOLD,
+            "🛑 [Phase 02] Maximum Depth Cutoff Threshold (e.g. -30.0)",
+            type=QgsProcessingParameterNumber.Double,
+            defaultValue=-30.0,
+        )
+        p_max_d.setFlags(p_max_d.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_max_d)
+
+        # --- [Phase 03] ---
+        p_col = QgsProcessingParameterEnum(
+            self.COLLISION_HANDLING,
+            "🤖 [Phase 03] In-Situ Points Collision Handling",
+            options=self.COLLISION_LIST_NAMES,
+            defaultValue=0,
+        )
+        p_col.setFlags(p_col.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_col)
+
+        p_n_iter = QgsProcessingParameterNumber(
+            self.N_ITERATIONS,
+            "🤖 [Phase 03] Hyperparameter Optimization Iterations",
+            type=QgsProcessingParameterNumber.Integer,
+            defaultValue=20,
+        )
+        p_n_iter.setFlags(p_n_iter.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_n_iter)
+
+        p_ens_size = QgsProcessingParameterNumber(
+            self.ENSEMBLE_SIZE,
+            "📊 [Phase 03] Ensemble Size (Top N Models to blend)",
+            type=QgsProcessingParameterNumber.Integer,
+            defaultValue=3,
+            minValue=2,
+            maxValue=5,
+        )
+        p_ens_size.setFlags(p_ens_size.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_ens_size)
 
         p_cv = QgsProcessingParameterNumber(
             self.CV_FOLDS, "🎛️ [Phase 03] ML Cross-Validation Folds", type=QgsProcessingParameterNumber.Integer, defaultValue=5
@@ -708,13 +800,94 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         p_split.setFlags(p_split.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_split)
 
+        p_var_corr = QgsProcessingParameterBoolean(
+            self.ENABLE_DEPTH_VARIANCE_CORR,
+            "🤖 [Phase 03] Enable Depth Variance Correction",
+            defaultValue=False,
+        )
+        p_var_corr.setFlags(p_var_corr.flags() | QgsProcessingParameterDefinition.FlagAdvanced | QgsProcessingParameterDefinition.FlagHidden)
+        self.addParameter(p_var_corr)
+
+        # --- [Phase 04] ---
+        p_knn = QgsProcessingParameterNumber(
+            self.KNN_NEIGHBORS,
+            "📍 [Phase 04] KNN Nearest Neighbors (K) for Residuals",
+            type=QgsProcessingParameterNumber.Integer,
+            defaultValue=15,
+            minValue=1,
+            maxValue=100,
+        )
+        p_knn.setFlags(p_knn.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_knn)
+
         p_gpr = QgsProcessingParameterNumber(
             self.MAX_GPR_SAMPLES, "📍 [Phase 04] Max GPR Training Samples", type=QgsProcessingParameterNumber.Integer, defaultValue=1500
         )
         p_gpr.setFlags(p_gpr.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_gpr)
 
-        # Hyperparameters and ML Settings
+        p_sp_p4 = QgsProcessingParameterBoolean(
+            self.SPATIAL_CV_P4,
+            "🌍 [Phase 04] Enable Spatial Block Cross-Validation",
+            defaultValue=False,
+        )
+        p_sp_p4.setFlags(p_sp_p4.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_sp_p4)
+
+        p_corr_m_p4 = QgsProcessingParameterEnum(
+            self.FEATURE_CORR_METHOD_P4,
+            "🤖 [Phase 04] Feature Correlation Method",
+            options=["Disabled", "Pearson (Linear)", "Spearman (Rank)", "Automatic-RANSAC", "Automatic-Random Forest"],
+            defaultValue=3,
+        )
+        p_corr_m_p4.setFlags(p_corr_m_p4.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_corr_m_p4)
+
+        p_corr_th_p4 = QgsProcessingParameterEnum(
+            self.FEATURE_CORR_THRESHOLD_P4,
+            "🤖 [Phase 04] Feature Correlation Threshold",
+            options=self.FEATURE_CORR_THRESHOLDS_P4,
+            defaultValue=0,
+        )
+        p_corr_th_p4.setFlags(p_corr_th_p4.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_corr_th_p4)
+
+        # --- [Post-Processing Cleanup & Filtering] ---
+        p_med = QgsProcessingParameterNumber(
+            self.MEDIAN_SIZE,
+            "🧽 [Phase 03 & 04] Output Depth Median Filter Size",
+            type=QgsProcessingParameterNumber.Integer,
+            defaultValue=5,
+        )
+        p_med.setFlags(p_med.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_med)
+
+        p_rem_pos = QgsProcessingParameterBoolean(
+            self.REMOVE_POSITIVES,
+            "🧽 [Post-Processing] Remove Positive Depths (>= 0)",
+            defaultValue=True,
+        )
+        p_rem_pos.setFlags(p_rem_pos.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_rem_pos)
+
+        p_slope_f = QgsProcessingParameterBoolean(
+            self.ENABLE_SLOPE_FILTER,
+            "🧽 [Post-Processing] Apply Physical Slope Filter",
+            defaultValue=True,
+        )
+        p_slope_f.setFlags(p_slope_f.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_slope_f)
+
+        p_slope_th = QgsProcessingParameterNumber(
+            self.SLOPE_THRESHOLD,
+            "🧽 [Post-Processing] Slope Filter Threshold (Degrees)",
+            type=QgsProcessingParameterNumber.Double,
+            defaultValue=35.0,
+        )
+        p_slope_th.setFlags(p_slope_th.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_slope_th)
+
+        # --- [General System & Ranking] ---
         p_rs = QgsProcessingParameterNumber(
             self.RANDOM_STATE, "⚙️ [General] Random State for ML Split", type=QgsProcessingParameterNumber.Integer, defaultValue=42
         )
@@ -727,6 +900,35 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         p_fmt.setFlags(p_fmt.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_fmt)
 
+        p_strat = QgsProcessingParameterEnum(
+            self.SCORE_SELECTION_STRATEGY,
+            "🎯 [Auto-ML Ranking] Model Selection Strategy / Criterion",
+            options=self.SCORE_STRATEGY_OPTIONS,
+            defaultValue=0,
+        )
+        p_strat.setFlags(p_strat.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_strat)
+
+        p_metrics = QgsProcessingParameterEnum(
+            self.SCORE_METRICS,
+            "⚖️ [Score Equation] Included Evaluation Metrics (Auto-Balanced)",
+            options=self.SCORE_METRIC_OPTIONS,
+            allowMultiple=True,
+            defaultValue=[0, 1, 2, 3, 4],
+        )
+        p_metrics.setFlags(p_metrics.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_metrics)
+
+        p_custom_cfg = QgsProcessingParameterString(
+            self.SCORE_CUSTOM_CONFIG,
+            "🎛️ [Custom Score Matrix] Optional Weights (e.g. 'R2: 50, MAE: 50') & Simulation Settings",
+            defaultValue="R2: 35, RMSE: 30, wMAPE: 20, Bias: 15, Rounds: 20, Variation: +/-35%",
+            optional=True,
+        )
+        p_custom_cfg.setFlags(p_custom_cfg.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_custom_cfg)
+
+        # --- Hyperparameters Search Grids ---
         p_rf = QgsProcessingParameterString(self.PARAM_RF, "🎛️ [General ML] Random Forest Hyperparameters", defaultValue="'n_estimators':[100, 500], 'max_depth':[10, 30]")
         p_rf.setFlags(p_rf.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_rf)
@@ -782,168 +984,6 @@ class SDBMasterOrchestrator(QgsProcessingAlgorithm):
         p_cat = QgsProcessingParameterString(self.PARAM_CATBOOST, "🎛️ [General ML] CatBoost Hyperparameters", defaultValue="'iterations':[100, 200], 'depth':[4, 6], 'learning_rate':[0.05, 0.1]", optional=True)
         p_cat.setFlags(p_cat.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_cat)
-
-        # --- SDB Composite Score & Model Selection Strategy ---
-        p_strat = QgsProcessingParameterEnum(
-            self.SCORE_SELECTION_STRATEGY,
-            "🎯 [Auto-ML Ranking] Model Selection Strategy / Criterion",
-            options=self.SCORE_STRATEGY_OPTIONS,
-            defaultValue=0,
-        )
-        p_strat.setFlags(p_strat.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
-        self.addParameter(p_strat)
-
-        p_metrics = QgsProcessingParameterEnum(
-            self.SCORE_METRICS,
-            "⚖️ [Score Equation] Included Evaluation Metrics (Auto-Balanced)",
-            options=self.SCORE_METRIC_OPTIONS,
-            allowMultiple=True,
-            defaultValue=[0, 1, 2, 3],
-        )
-        p_metrics.setFlags(p_metrics.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
-        self.addParameter(p_metrics)
-
-        p_custom_cfg = QgsProcessingParameterString(
-            self.SCORE_CUSTOM_CONFIG,
-            "🎛️ [Custom Score Matrix] Optional Weights (e.g. 'R2: 50, MAE: 50') & Simulation Settings",
-            defaultValue="R2: 35, RMSE: 30, wMAPE: 20, Bias: 15, Rounds: 20, Variation: +/-35%",
-            optional=True,
-        )
-        p_custom_cfg.setFlags(p_custom_cfg.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
-        self.addParameter(p_custom_cfg)
-
-        # -------------------------------------------------------------------
-        # [4] Phase 04: Adaptive Refinement
-        # -------------------------------------------------------------------
-        self.addParameter(
-            QgsProcessingParameterBoolean(
-                self.ENABLE_ADAPTIVE,
-                "🎯 [4] Enable Phase 04 Adaptive Refinement",
-                defaultValue=False,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterEnum(
-                self.STACK_COMPONENTS_P4,
-                "🎯 [4] Features for Retraining",
-                options=["Feature Stack (Phase 01)", "Phase 03 Depth Map", "Residual Error Grid"],
-                allowMultiple=True,
-                defaultValue=[1, 2],
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterEnum(
-                self.FEATURE_CORR_METHOD_P4,
-                "🤖 [4] Feature Correlation Method",
-                options=["Disabled", "Pearson (Linear)", "Spearman (Rank)", "Automatic-RANSAC", "Automatic-Random Forest"],
-                defaultValue=3,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterEnum(
-                self.FEATURE_CORR_THRESHOLD_P4,
-                "🤖 [4] Feature Correlation Threshold",
-                options=self.FEATURE_CORR_THRESHOLDS_P4,
-                defaultValue=0,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterEnum(
-                self.RESIDUAL_INTERP_METHOD,
-                "📍 [4] Spatial Residual Interpolation Method",
-                options=["Standard KNN", "Robust KNN (Huber Weights)", "Gaussian Process / Kriging"],
-                defaultValue=0,
-            )
-        )
-        p_knn = QgsProcessingParameterNumber(
-            self.KNN_NEIGHBORS,
-            "📍 [Phase 04] KNN Nearest Neighbors (K) for Residuals",
-            type=QgsProcessingParameterNumber.Integer,
-            defaultValue=15,
-            minValue=1,
-            maxValue=100,
-        )
-        p_knn.setFlags(p_knn.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
-        self.addParameter(p_knn)
-
-
-        p_sp_p4 = QgsProcessingParameterBoolean(
-            self.SPATIAL_CV_P4,
-            "🌍 [Phase 04] Enable Spatial Block Cross-Validation",
-            defaultValue=False,
-        )
-        p_sp_p4.setFlags(p_sp_p4.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
-        self.addParameter(p_sp_p4)
-
-        p_var_corr_p4 = QgsProcessingParameterBoolean(
-            self.ENABLE_DEPTH_VARIANCE_CORR_P4,
-            "🎛️ [Phase 04] Enable Depth Variance Correction",
-            defaultValue=False,
-        )
-        p_var_corr_p4.setFlags(p_var_corr_p4.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
-        self.addParameter(p_var_corr_p4)
-        self.addParameter(
-            QgsProcessingParameterVectorLayer(
-                self.INPUT_ADAPTIVE_TRAIN, "🎯 [4] Adaptive Points", optional=True
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterField(
-                self.FIELD_ADAPTIVE_DEPTH,
-                "🎯 [4] Adaptive Depth Field",
-                defaultValue="ortho_h",
-                parentLayerParameterName=self.INPUT_ADAPTIVE_TRAIN,
-                type=QgsProcessingParameterField.Numeric,
-                optional=True,
-            )
-        )
-
-        # -------------------------------------------------------------------
-        # [5] Phase 05: Validation & Reporting
-        # -------------------------------------------------------------------
-        self.addParameter(
-            QgsProcessingParameterBoolean(
-                self.ENABLE_VALIDATION, "📉 [5] Enable Phase 05 Validation & Reporting", defaultValue=False
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterVectorLayer(
-                self.INPUT_TEST, "📉 [5] Validation Points", optional=True
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterField(
-                self.FIELD_TEST_DEPTH,
-                "📉 [5] Validation Depth Field",
-                defaultValue="ortho_h",
-                parentLayerParameterName=self.INPUT_TEST,
-                type=QgsProcessingParameterField.Numeric,
-                optional=True,
-            )
-        )
-
-        self.addParameter(
-            QgsProcessingParameterBoolean(
-                self.REMOVE_POSITIVES,
-                "🧽 [Cleanup] Remove Positive Depths (>= 0)",
-                defaultValue=True,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterBoolean(
-                self.ENABLE_SLOPE_FILTER,
-                "🧽 [Cleanup] Apply Slope Filter (Remove sharp jumps)",
-                defaultValue=True,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterNumber(
-                self.SLOPE_THRESHOLD,
-                "🧽 [Cleanup] Slope Filter Threshold (Degrees)",
-                type=QgsProcessingParameterNumber.Double,
-                defaultValue=35.0,
-            )
-        )
 
 
     def processAlgorithm(self, parameters, context, feedback):

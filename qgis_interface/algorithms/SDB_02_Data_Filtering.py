@@ -104,13 +104,13 @@ class SDBModule02(QgsProcessingAlgorithm):
         return "sdb_02_filtering"
 
     def displayName(self):
-        return "2. SDB Module 02: Filtering (Multi-Mode)"
+        return "3.2 Phase 02: In-Situ Filtering & RANSAC"
 
     def group(self):
-        return "SDB Research Tools"
+        return "3. Step-by-Step Modular Pipeline"
 
     def groupId(self):
-        return "sdb_tools"
+        return "modular_pipeline"
 
     def createInstance(self):
         return SDBModule02()

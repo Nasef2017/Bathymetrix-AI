@@ -54,13 +54,13 @@ class SlideRuleFinalTool(QgsProcessingAlgorithm):
         return 'sliderule_icesat2_downloader'
 
     def displayName(self):
-        return self.tr('1. ICESat-2 Data Downloader')
+        return self.tr('2.1 ICESat-2 Data Downloader (SlideRule)')
 
     def group(self):
-        return self.tr('')
+        return self.tr('2. Data Acquisition & Datum')
 
     def groupId(self):
-        return ''
+        return 'data_prep'
 
     def shortHelpString(self):
         return """

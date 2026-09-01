@@ -69,13 +69,13 @@ class SDBCoastalDynamics(QgsProcessingAlgorithm):
         return "sdb_06_coastal_dynamics"
 
     def displayName(self):
-        return "5. Coastal Dynamics Analysis"
+        return "4.2 Coastal Dynamics & Sediment Transport"
 
     def group(self):
-        return ""
+        return "4. Post-Processing & Dynamics"
 
     def groupId(self):
-        return ""
+        return "post_dynamics"
 
     def createInstance(self):
         return SDBCoastalDynamics()
@@ -285,6 +285,10 @@ class SDBCoastalDynamics(QgsProcessingAlgorithm):
             from Bathymetrix_AI.infrastructure.logging import append_log
 
         master_folder = self.parameterAsString(parameters, self.INPUT_MASTER_FOLDER, context)
+        if master_folder and os.path.isfile(master_folder):
+            master_folder = os.path.dirname(master_folder)
+            if os.path.basename(master_folder).lower().startswith("year") or os.path.basename(master_folder).isdigit():
+                master_folder = os.path.dirname(master_folder)
         user_out_folder = self.parameterAsString(parameters, self.USER_OUTPUT_FOLDER, context)
         target_roi_shp = self.parameterAsVectorLayer(parameters, self.SHORELINE_ROI, context)
         roi_mode_idx = self.parameterAsEnum(parameters, self.TARGET_ROI_MODE, context)

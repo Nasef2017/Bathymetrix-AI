@@ -2,7 +2,7 @@
 name=Bathymetrix-AI
 qgisMinimumVersion=3.22
 qgisMaximumVersion=4.99
-version=7.6
+version=7.7
 author=Mohamed Aly Nasef
 email=Eng.m.nasef2017@gmail.com
 description=A professional QGIS research toolkit for Satellite-Derived Bathymetry (SDB), integrating multispectral imagery with ICESat-2 LiDAR via Auto-ML, SpatioSpectral aggregation, SpatioTemporal modeling, Adaptive Refinement, and Coastal Dynamics.
@@ -24,7 +24,7 @@ about=<h3>Bathymetrix-AI: Advanced SDB Toolkit & Coastal Dynamics</h3>
         </li>
         <li><b>Phase 02: Robust Filtering:</b> Improves the quality of the training data by identifying and removing noisy observations, outliers, and environmental artifacts:
             <ul>
-                <li><i>Noise Removal:</i> Supports Linear RANSAC, Least-Squares (LS) Variance Fit, and Huber Variance Fit.</li>
+                <li><i>Noise Removal:</i> Supports Linear RANSAC, Least-Squares (LS) Variance Fit, and Huber Variance Fit with seamless user bypass.</li>
                 <li><i>Dynamic Diagnostic Plotting:</i> Uses robust percentile-based visualization to produce clearer variance and trend plots while reducing the effect of extreme noise.</li>
             </ul>
         </li>
@@ -42,9 +42,10 @@ about=<h3>Bathymetrix-AI: Advanced SDB Toolkit & Coastal Dynamics</h3>
         </li>
         <li><b>Phase 04: Adaptive Refinement:</b> Corrects local errors that may remain after global machine-learning prediction:
             <ul>
+                <li><i>Decoupled Refinement Architecture:</i> Independent controls for Depth Variance Correction (Datum Mean Shift) and Spatial Residual Error Modeling (KNN / Kriging Grid).</li>
                 <li><i>Spatial Residual Correction:</i> Analyzes the differences between predicted and observed depths and models their spatial behavior.</li>
                 <li><i>Zero-Mean Centered Spatial Residuals:</i> Uses robust residual processing and spatial weighting to reduce local depth bias.</li>
-                <li><i>Spatial Residual Modeling:</i> Supports robust KNN and other supported spatial correction approaches.</li>
+                <li><i>Spatial Residual Modeling:</i> Supports robust KNN, Standard KNN, and Gaussian Process / Kriging.</li>
                 <li><i>Spatial Cross-Validation:</i> Provides independent spatial validation for residual modeling.</li>
                 <li><i>Adaptive Re-training & Pixel Fusion:</i> Combines model information with spatial error information to generate a refined bathymetric surface.</li>
                 <li><i>IHO Standards Assessment:</i> Evaluates results against IHO S-44 Order 1a/2 Total Vertical Uncertainty (TVU) standards.</li>
@@ -99,4 +100,4 @@ tracker=https://github.com/Nasef2017/Bathymetrix-AI/issues
 icon=icon.png
 tags=sdb,bathymetry,machine learning,icesat-2,ransac,spatial correction,remote sensing,hydrography,satellite imagery,python,coastal dynamics,volumetric change,quantile regression,spatiotemporal,spatiospectral,iho-s44
 category=Raster
-changelog=v7.6: (1) Interactive 3D Seabed Modeling & Dashboard Integration: Added high-definition 3D Seabed Topography and Bathymetry visualization with dynamic deep-to-shallow camera alignment, balanced vertical exaggeration, baseline depth contours, and interactive .
+changelog=v7.7: (1) Unified Visual Interface Dividers: Implemented elegant Unicode visual dividers across all Masterflows and single flows for intuitive, professional workflow navigation.

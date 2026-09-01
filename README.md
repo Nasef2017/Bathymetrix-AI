@@ -7,16 +7,16 @@
 </td>
 <td>
 
-**Bathymetrix-AI: Advanced SDB Toolkit**
+**Bathymetrix-AI v7.7: Advanced SDB Toolkit & Coastal Dynamics**
 
 </td>
 </tr>
 </table>
 
 
-> **Note:** Bathymetrix-AI supports any satellite imagery provided that the imagery is atmospherically corrected (Surface Reflectance) and the raster values are stored as Float.
+> **Note:** Bathymetrix-AI v7.7 supports any satellite imagery provided that the imagery is atmospherically corrected (Surface Reflectance) and the raster values are stored as Float.
 
-**Bathymetrix-AI** is a professional QGIS research toolkit for high-precision Satellite-Derived Bathymetry (SDB).
+**Bathymetrix-AI (v7.7)** is a professional QGIS research toolkit for high-precision Satellite-Derived Bathymetry (SDB).
 
 The toolkit integrates multispectral satellite imagery with ICESat-2 (ATL24) LiDAR bathymetry through a modular and adaptive Machine Learning framework. It is designed to automate the main SDB processing steps while maintaining control over data quality, model selection, spatial refinement, uncertainty, and scientific validation.
 
@@ -39,12 +39,14 @@ The toolkit also provides advanced Masterflows and standalone modules for more c
   * Features physics-based automated extinction detection (**Automated Knee-Point Extinction [Recommended]**, **Turbidity-Invariant Log-Ratio Extinction**, **Multi-Otsu / GMM 3D Spectral Clustering**, and **Connected-Component Topological Cleaning**) to strictly isolate shallow coastal zones from deep ocean and plume interference.
 * 🎯 **Robust Model Selection & Winner Stability Simulation:**
   * Evaluates 15+ machine learning algorithms across **7 specialized selection strategies**, including **Monte Carlo Winner Stability** (testing candidate models across $N$ stochastic noise iterations) and auto-balanced multi-metric weighting.
+* 🔄 **Decoupled Adaptive Spatial Refinement & IHO S-44 Assessment:**
+  * Features independent, decoupled controls for **Depth Variance Correction (Datum Mean Shift)** and **Spatial Residual Error Modeling (Standard/Robust KNN, Gaussian Process / Kriging)**, generating uncertainty maps and evaluating compliance against **IHO S-44 Order 1a/2 Total Vertical Uncertainty (TVU)** standards with interactive HTML dashboards.
+* 🏔️ **Interactive 3D Seabed Modeling & Scaled Metric Dimension Bars:**
+  * Generates high-definition 3D Seabed Topography and Bathymetry models with dynamic deep-to-shallow camera alignment, balanced vertical exaggeration, baseline depth contours, and calibrated metric dimension scale bars (km / m axes) directly inside validation reports and dashboards.
 * ⏱️ **Robust SpatioTemporal AI Modeling:**
   * Incorporates time/year directly into a Global Spatiotemporal AI model, with intelligent data validation that gracefully skips point-deficient years without workflow interruption while training and predicting across all valid temporal scenes.
 * 🌐 **Automated Hydrodynamic Tidal Datum Engine:**
   * Integrated **NASA GSFC GOT4.10c** global ocean tide model for automated constituent caching and seamless vertical datum transformations ($WGS84 \leftrightarrow MSL \leftrightarrow LAT \leftrightarrow CD$).
-* 🔄 **Adaptive Spatial Refinement & IHO S-44 Assessment:**
-  * Models local residual error patterns (Zero-Mean Centered Spatial Residuals & Robust KNN), generating uncertainty maps and evaluating compliance against **IHO S-44 Order 1a/2 Total Vertical Uncertainty (TVU)** standards with interactive HTML dashboards.
 * 🏖️ **Comprehensive Coastal Dynamics & Volumetric Tracking:**
   * Multi-year morphological analysis including Net Bathymetric Change, Morphological Stability Index (MSI), Statistical Level of Detection (StatCD), shoreline migration, and Target ROI volumetric sand tracking ($m^3$).
 
@@ -64,7 +66,7 @@ Each phase has a specific role, from preparing the satellite data and cleaning t
 #### Phase 01: Advanced Pre-processing
 The first phase prepares the satellite imagery for bathymetric modeling by isolating the aquatic domain, reducing radiometric interference, and generating depth-sensitive spectral features.
 - **Sun-Glint Removal:** Reduces surface reflection effects to improve the visibility of the seabed signal using the Hedley approach (Hedley et al., 2005). The implementation also handles infinite and NaN values to improve processing stability.
-- **Water Segmentation:** Identifies the aquatic domain using NDWI, MNDWI, and NWI together with adaptive thresholding.
+- **Water Segmentation:** Identifies the aquatic domain using NDWI, MNDWI, and NWI together with adaptive thresholding, supporting both automated masking and seamless Ready-made Water Mask polygon ingestion.
 - **Deep Water OSW Filtering:** Removes deep-water areas that are unsuitable for optically derived bathymetry using the new multi-method engine (Automated Knee-Point Extinction, Turbidity-Invariant Log-Ratio Extinction, Multi-Otsu/GMM 3D Spectral Clustering, and Connected-Component Topological cleaning).
 - **OSW Boundary Extraction:** Automatically generates the Optically Shallow Water boundary as a GeoPackage vector while preserving the CRS of the source imagery.
 - **Log-Ratio Features & Indices:** Transforms spectral information into bathymetry-sensitive features based on light attenuation principles. This includes physics-based Log-Ratio features such as Blue/Green, together with additional spectral indices.
@@ -72,10 +74,7 @@ The first phase prepares the satellite imagery for bathymetric modeling by isola
 #### Phase 02: Robust Filtering
 This phase focuses on improving the quality of the training dataset before machine-learning modeling.
 The workflow identifies unreliable observations, outliers, and environmental noise in the depth measurements.
-- **Noise Removal:** Iteratively identifies high-confidence depth observations using methods such as:
-  - Linear RANSAC
-  - LS Variance Fit
-  - Huber Variance Fit
+- **Noise Removal & Bypass:** Iteratively identifies high-confidence depth observations using Linear RANSAC, LS Variance Fit, or Huber Variance Fit. When disabled by the user, the input training dataset passes directly and untouched into Phase 03.
 - **Dynamic Diagnostic Plotting:** Generates readable diagnostic plots using robust percentile-based visualization so that extreme noise does not dominate the displayed variance and trend patterns.
 
 *The objective of Phase 02 is simple: Better training data → More reliable AI modeling.*
@@ -94,21 +93,19 @@ Instead of relying on a single predefined algorithm, Bathymetrix-AI automaticall
 
 *The output of Phase 03 is the initial global bathymetric prediction.*
 
-#### Phase 04: Adaptive Refinement
-Global machine-learning models can perform well overall while still missing small-scale spatial patterns. Phase 04 is designed to address these remaining local errors.
-The workflow analyzes the difference between predicted and observed depths and uses the spatial structure of the residuals to improve the final bathymetric surface.
-- **Zero-Mean Centered Spatial Residuals:** Uses robust residual processing and spatial weighting approaches to reduce local depth bias.
-- **Spatial Residual Modeling:** Supports spatial correction approaches including robust KNN and other supported residual-modeling methods.
-- **Spatial Cross-Validation:** Provides independent spatial validation for the residual model.
-- **Adaptive Re-training & Pixel Fusion:** Combines the available model information with spatial error information to produce a refined bathymetric map.
-- **IHO Standards Assessment:** The workflow can evaluate the resulting accuracy against applicable IHO Order 1a/2 Total Vertical Uncertainty (TVU) criteria.
+#### Phase 04: Adaptive Refinement (Decoupled Architecture)
+Global machine-learning models can perform well overall while still missing small-scale spatial patterns. Phase 04 is designed to address these remaining local errors with completely independent, decoupled controls.
+- **Depth Variance Correction (Datum Mean Shift):** Calibrates and corrects global systematic datum offsets against adaptive control points.
+- **Spatial Residual Modeling:** Analyzes local prediction errors and generates 2D spatial residual correction grids using Standard KNN, Robust KNN (Huber Weights), or Gaussian Process / Kriging.
+- **Adaptive Re-training & Pixel Fusion:** Combines model information, Phase 03 depth maps, and spatial error grids to generate a refined bathymetric surface.
+- **IHO Standards Assessment:** Evaluates results against applicable IHO Order 1a/2 Total Vertical Uncertainty (TVU) standards.
 
 *The main purpose of Phase 04 is: Global prediction → Local error analysis → Spatial refinement → Improved final SDB.*
 
 #### Phase 05: Validation & Reporting
 The final phase evaluates the complete SDB result using independent validation information when available.
 - **Independent Accuracy Assessment:** The final model can be tested against unseen validation points to provide an independent assessment of predictive performance. Typical metrics include **R²** (Coefficient of Determination), **RMSE** (Root Mean Square Error), and **wMAPE** (Weighted Mean Absolute Percentage Error). The workflow can also evaluate compliance with relevant IHO Order 1a/2 TVU criteria.
-- **Interactive Validation Dashboard:** The system generates a structured HTML dashboard containing model leaderboards, validation metrics, diagnostic plots, and summary information.
+- **Interactive Validation Dashboard:** The system generates a structured HTML dashboard containing model leaderboards, validation metrics, diagnostic plots, 3D seabed visualizations with dimension bars, and summary information.
 
 *The final objective is not only to generate a depth map, but also to provide a measurable and traceable assessment of its quality.*
 

@@ -51,9 +51,13 @@ def clean_depth_map(
     import rasterio
     import numpy as np
 
-    abs_max = abs(float(max_depth)) if max_depth is not None and max_depth != 0 else 50.0
-    deep_limit_neg = -abs_max * 1.5
-    deep_limit_pos = abs_max * 1.5
+    if max_depth is not None and abs(float(max_depth)) < 9000.0 and float(max_depth) != 0:
+        abs_max = abs(float(max_depth))
+        deep_limit_neg = -abs_max * 1.5
+        deep_limit_pos = abs_max * 1.5
+    else:
+        deep_limit_neg = -999999.0
+        deep_limit_pos = 999999.0
 
     with rasterio.open(depth_raster) as src_depth, rasterio.open(feature_stack_raster) as src_feat:
         depth_data = src_depth.read(1)
@@ -191,12 +195,30 @@ def get_raster_min_max(raster_path):
         with rasterio.open(raster_path) as src:
             data = src.read(1)
             nodata = src.nodata if src.nodata is not None else -9999.0
-            valid = (data != nodata) & (data > -9000) & (~np.isnan(data))
+            valid = (data != nodata) & (data > -9000) & (data < 15000) & (~np.isnan(data))
             if not np.any(valid):
                 return -30.0, 0.0
             v_data = data[valid]
-            p_min = float(np.min(v_data))
-            p_max = float(np.max(v_data))
+            
+            median_val = float(np.median(v_data))
+            if median_val < 0:
+                # Negative depth convention (e.g. -35m to 0m)
+                neg_vals = v_data[v_data <= 0]
+                if len(neg_vals) > 0:
+                    p_min = float(np.percentile(neg_vals, 0.5))
+                    p_max = float(np.percentile(neg_vals, 99.5))
+                    if p_max > 0:
+                        p_max = 0.0
+                else:
+                    p_min, p_max = float(np.min(v_data)), float(np.max(v_data))
+            else:
+                # Positive depth convention (e.g. 0m to 35m)
+                pos_vals = v_data[v_data >= 0]
+                if len(pos_vals) > 0:
+                    p_min = float(np.percentile(pos_vals, 0.5))
+                    p_max = float(np.percentile(pos_vals, 99.5))
+                else:
+                    p_min, p_max = float(np.min(v_data)), float(np.max(v_data))
             
             if p_min == p_max:
                 p_min, p_max = p_min - 5.0, p_max + 1.0

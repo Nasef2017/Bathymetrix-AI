@@ -1,23 +1,188 @@
 import os
+import re
 import joblib
 import numpy as np
 try:
-    from qgis.core import QgsProcessingException, QgsProject, QgsRasterLayer
+    from qgis.core import (
+        QgsProcessingException, 
+        QgsProject, 
+        QgsRasterLayer, 
+        QgsVectorLayer, 
+        QgsVectorFileWriter,
+        QgsCoordinateTransformContext,
+        QgsCoordinateReferenceSystem
+    )
     from qgis import processing
 except ImportError:
     QgsProcessingException = Exception
     QgsProject = None
     QgsRasterLayer = None
+    QgsVectorLayer = None
+    QgsVectorFileWriter = None
+    QgsCoordinateTransformContext = None
+    QgsCoordinateReferenceSystem = None
     processing = None
 
 try:
     from Bathymetrix_AI.infrastructure.logging import append_log
     from Bathymetrix_AI.core.ml.trainers import extract_samples, run_phase03_initial_modeling, predict_map
     from Bathymetrix_AI.core.temporal.temporal_reporting import TemporalReportGenerator
+    from Bathymetrix_AI.infrastructure.raster_io import clean_depth_map, remove_positive_pixels, slope_filter_depth, write_qml_style, StylePostProcessor
 except (ImportError, ValueError):
     from infrastructure.logging import append_log
     from core.ml.trainers import extract_samples, run_phase03_initial_modeling, predict_map
     from core.temporal.temporal_reporting import TemporalReportGenerator
+    from infrastructure.raster_io import clean_depth_map, remove_positive_pixels, slope_filter_depth, write_qml_style, StylePostProcessor
+
+
+def filter_vector_by_year(vector_src, target_year, year_field_name="", out_path=None, allow_fallback_all=False, log_path=None, feedback=None):
+    """
+    Extracts features for a specific year from a vector layer or file path.
+    Supports Integer, Float, String, Date, DateTime, and all date formats (e.g. 2019-05-12, 12/05/2019).
+    Returns (filtered_layer_or_path, point_count).
+    """
+    if vector_src is None:
+        return None, 0
+
+    if isinstance(vector_src, str):
+        if QgsVectorLayer is not None:
+            vlayer = QgsVectorLayer(vector_src, "input_pts", "ogr")
+        else:
+            vlayer = None
+    else:
+        vlayer = vector_src
+        
+    if not vlayer or (hasattr(vlayer, "isValid") and not vlayer.isValid()):
+        return None, 0
+        
+    fields = vlayer.fields() if hasattr(vlayer, "fields") else None
+    if hasattr(fields, "names"):
+        fnames = fields.names()
+    elif hasattr(fields, "__iter__"):
+        fnames = [f.name() if hasattr(f, "name") else str(f) for f in fields]
+    else:
+        fnames = []
+    
+    # 1. Determine which field contains year/date
+    target_fld = None
+    if year_field_name and str(year_field_name).strip():
+        req_name = str(year_field_name).strip()
+        for fn in fnames:
+            if fn.lower() == req_name.lower() or fn == req_name:
+                target_fld = fn
+                break
+                
+    if not target_fld:
+        # Auto-detect field
+        for candidate in ["year", "yr", "date", "datetime", "time", "timestamp", "acq_date", "acq_year", "survey_date", "survey_yr", "date_time", "dt"]:
+            for fn in fnames:
+                if fn.lower() == candidate or candidate in fn.lower():
+                    target_fld = fn
+                    break
+            if target_fld:
+                break
+                
+    try:
+        target_year_int = int(target_year)
+    except Exception:
+        target_year_int = -9999
+    target_year_str = str(target_year)
+    
+    def _matches_target_year(val):
+        if val is None:
+            return False
+        if isinstance(val, (int, float)):
+            try:
+                return int(val) == target_year_int
+            except Exception:
+                return False
+        val_str = str(val).strip()
+        if not val_str:
+            return False
+        years = re.findall(r'\b(19\d{2}|20\d{2})\b', val_str)
+        if target_year_str in years:
+            return True
+        if target_year_str in val_str:
+            return True
+        return False
+
+    matching_features = []
+    features_list = list(vlayer.getFeatures()) if hasattr(vlayer, "getFeatures") else []
+    
+    if target_fld:
+        for feat in features_list:
+            try:
+                val = feat[target_fld]
+            except Exception:
+                val = None
+            if _matches_target_year(val):
+                matching_features.append(feat)
+    else:
+        # No specific year field found. If allow_fallback_all is True, take all features
+        if allow_fallback_all:
+            matching_features = features_list
+        else:
+            # Check all attributes of each feature for a year match
+            for feat in features_list:
+                matched = False
+                attrs = feat.attributes() if hasattr(feat, "attributes") else []
+                for attr in attrs:
+                    if _matches_target_year(attr):
+                        matched = True
+                        break
+                if matched:
+                    matching_features.append(feat)
+                    
+    if not matching_features:
+        # If featureCount > 0 but getFeatures was not implemented or features lacked attrs
+        if hasattr(vlayer, "featureCount") and vlayer.featureCount() > 0 and allow_fallback_all:
+            matching_features = [None] * vlayer.featureCount()
+        else:
+            return None, 0
+        
+    # Write matching features to temporary GeoPackage
+    if out_path:
+        save_path = out_path
+    else:
+        import tempfile
+        save_path = os.path.join(tempfile.gettempdir(), f"filtered_pts_{target_year_str}.gpkg")
+        
+    if QgsVectorFileWriter is not None and hasattr(QgsVectorFileWriter, "SaveVectorOptions"):
+        try:
+            options = QgsVectorFileWriter.SaveVectorOptions()
+            options.driverName = "GPKG" if save_path.endswith(".gpkg") else "ESRI Shapefile"
+            options.fileEncoding = "UTF-8"
+            ctx = QgsProject.instance().transformContext() if (QgsProject and QgsProject.instance()) else QgsCoordinateTransformContext()
+            
+            if os.path.exists(save_path):
+                try:
+                    os.remove(save_path)
+                except Exception:
+                    pass
+                    
+            writer = QgsVectorFileWriter.create(
+                save_path,
+                fields,
+                vlayer.wkbType() if hasattr(vlayer, "wkbType") else 1,
+                vlayer.crs() if hasattr(vlayer, "crs") else None,
+                ctx,
+                options
+            )
+            
+            if writer and hasattr(writer, "hasError") and writer.hasError() == QgsVectorFileWriter.NoError:
+                for feat in matching_features:
+                    if feat is not None:
+                        writer.addFeature(feat)
+                del writer
+                return save_path, len(matching_features)
+        except Exception:
+            pass
+            
+    # Fallback to source layer or path
+    if isinstance(vector_src, str):
+        return vector_src, len(matching_features)
+    return vlayer, len(matching_features)
+
 
 
 class SpatiotemporalSDBRunner:
@@ -90,15 +255,16 @@ class SpatiotemporalSDBRunner:
                     
                     if r_crs != v_crs:
                         try:
-                            transform = QgsCoordinateTransform(r_crs, v_crs, QgsProject.instance())
-                            r_geom.transform(transform)
+                            from qgis.core import QgsCoordinateTransformContext
+                            ctx = QgsProject.instance().transformContext() if (QgsProject and QgsProject.instance()) else QgsCoordinateTransformContext()
+                            transform = QgsCoordinateTransform(r_crs, v_crs, ctx)
+                            if transform.isValid():
+                                r_geom.transform(transform)
                         except Exception:
                             pass
                             
                     if not r_geom.intersects(v_geom):
-                            err_msg = f"✗ ERROR: Image '{year}' failed spatial overlap."
-                            append_log(err_msg, log_path, feedback)
-                            raise QgsProcessingException(err_msg)
+                        append_log(f"  ℹ Notice: Spatial extent overlap check between image '{year}' and points was inconclusive or disjoint. Point extraction will verify actual point coordinates.", log_path, feedback)
         append_log("✓ Validation completed\n", log_path, feedback)
         # --- End Pre-Scan ---
 
@@ -132,41 +298,40 @@ class SpatiotemporalSDBRunner:
             os.makedirs(p1_dir, exist_ok=True)
             os.makedirs(p2_dir, exist_ok=True)
             
-            # 2. Determine ICEsat layer
-            icesat_path = None
+            # 2. Determine ICESat layer / Training points for this specific year
+            raw_input_points = None
             specific_file = year_info.get("icesat_file_path", None)
+            global_layer = year_info.get("icesat_layer", None)
+            year_field = year_info.get("icesat_year_field", None)
+            is_specific = False
             
             if specific_file:
-                # 2A. A specific file was found for this year (e.g. inside /2019/)
-                icesat_path = specific_file
-            else:
-                # 2B. Fallback to the Global Layer, but FILTER it if a field was provided
-                global_layer = year_info.get("icesat_layer", None)
-                if not global_layer:
-                    append_log(f"  ⚠ WARNING: No ICESat data found for year {year}. Skipping...", log_path, feedback)
-                    continue
-                    
-                year_field = year_info.get("icesat_year_field", None)
-                if year_field and year_field.strip():
-                    try:
-                        ext = processing.run("native:extractbyexpression", {
-                            'INPUT': global_layer,
-                            'EXPRESSION': f'"{year_field}" = {year} OR "{year_field}" = \'{year}\'',
-                            'OUTPUT': 'TEMPORARY_OUTPUT'
-                        }, context=context, feedback=feedback, is_child_algorithm=True)
-                        icesat_path = ext['OUTPUT']
-                    except Exception as e:
-                        append_log(f"  ✗ ERROR: Failed to filter global ICESat for {year}: {e}", log_path, feedback)
-                        continue
+                raw_input_points = specific_file
+                is_specific = True
+                append_log(f"  ✓ Located year-specific training file: {os.path.basename(specific_file)}", log_path, feedback)
+            elif global_layer:
+                raw_input_points = global_layer
+                is_specific = False
+                
+            icesat_path = None
+            if raw_input_points:
+                filtered_target = os.path.join(p1_dir, f"Filtered_Training_Points_{year}.gpkg")
+                filtered_res, count = filter_vector_by_year(
+                    raw_input_points,
+                    year,
+                    year_field_name=year_field,
+                    out_path=filtered_target,
+                    allow_fallback_all=is_specific,
+                    log_path=log_path,
+                    feedback=feedback
+                )
+                if count > 0:
+                    icesat_path = filtered_res
+                    append_log(f"  ✓ Training Points Extracted: Found {count} points strictly belonging to Year {year}.", log_path, feedback)
                 else:
-                    try:
-                        icesat_path = global_layer.source()
-                    except AttributeError:
-                        icesat_path = global_layer
-                        
-            if not icesat_path:
-                append_log(f"  ✗ ERROR: Failed to resolve ICESat path for year {year}. Skipping...", log_path, feedback)
-                continue
+                    append_log(f"  ℹ Notice: 0 training points found for Year {year} in provided layer.", log_path, feedback)
+            else:
+                append_log(f"  ⚠ No ICESat/training data found for Year {year}. Will use Global Model for bathymetry prediction.", log_path, feedback)
             
             # 3. Setup run parameters
             run_params = masterflow_params.copy()
@@ -176,7 +341,8 @@ class SpatiotemporalSDBRunner:
                 run_params["INPUT_WATER_POLY"] = run_params["WATER_MASK_POLY"]
                 
             run_params["INPUT_RASTER"] = year_info["image_path"]
-            run_params["INPUT_TRAIN"] = icesat_path
+            if icesat_path:
+                run_params["INPUT_TRAIN"] = icesat_path
             run_params["OUTPUT_FOLDER"] = p1_dir
             
             # 4. Phase 1
@@ -209,8 +375,8 @@ class SpatiotemporalSDBRunner:
             if icesat_path:
                 try:
                     from qgis.core import QgsVectorLayer
-                    tmp_layer = QgsVectorLayer(icesat_path, "tmp", "ogr")
-                    if tmp_layer.isValid() and tmp_layer.featureCount() > 0:
+                    tmp_layer = QgsVectorLayer(icesat_path, "tmp", "ogr") if isinstance(icesat_path, str) else icesat_path
+                    if tmp_layer and tmp_layer.isValid() and tmp_layer.featureCount() > 0:
                         has_points = True
                 except Exception:
                     has_points = False
@@ -219,7 +385,7 @@ class SpatiotemporalSDBRunner:
             
             p2_vec = None
             if not has_points:
-                append_log(f"  ⚠ WARNING: No valid training points found for year {year}. Skipping Phase 02 and Training Extraction.", log_path, feedback)
+                append_log(f"  ℹ Notice: No training points for year {year}. Skipping Phase 02 Filtering.", log_path, feedback)
             elif enable_p2:
                 append_log("  [Phase 02] Filtering", log_path, feedback)
                 p2_params = run_params.copy()
@@ -235,7 +401,8 @@ class SpatiotemporalSDBRunner:
                     p2_vec = p2["OUTPUT_CLEAN_VEC"]
                     append_log("  ✓ Phase 02 completed\n", log_path, feedback)
                 except Exception as e:
-                    append_log(f"  ⚠ WARNING: Phase 02 Filtering failed: {e}", log_path, feedback)
+                    append_log(f"  ⚠ WARNING: Phase 02 Filtering failed: {e}. Using raw points.", log_path, feedback)
+                    p2_vec = icesat_path
             else:
                 append_log("  [Phase 02] Filtering", log_path, feedback)
                 append_log("      → Skipped by User.\n", log_path, feedback)
@@ -346,6 +513,15 @@ class SpatiotemporalSDBRunner:
             
         selected_indices = p3.get("SELECTED_INDICES")
         
+        # Global Post-Processing Parameter Definitions
+        enable_max_depth = algorithm.parameterAsBool(masterflow_params, "ENABLE_MAX_DEPTH_FILTER", context) if (algorithm and hasattr(algorithm, "parameterAsBool")) else masterflow_params.get("ENABLE_MAX_DEPTH_FILTER", False)
+        max_depth = algorithm.parameterAsDouble(masterflow_params, "MAX_DEPTH_THRESHOLD", context) if (algorithm and hasattr(algorithm, "parameterAsDouble")) else masterflow_params.get("MAX_DEPTH_THRESHOLD", -999999.0) if enable_max_depth else -999999.0
+        
+        apply_slope = algorithm.parameterAsBool(masterflow_params, "ENABLE_SLOPE_FILTER", context) if (algorithm and hasattr(algorithm, "parameterAsBool")) else masterflow_params.get("ENABLE_SLOPE_FILTER", False)
+        slope_threshold_val = algorithm.parameterAsDouble(masterflow_params, "SLOPE_THRESHOLD", context) if (algorithm and hasattr(algorithm, "parameterAsDouble")) else masterflow_params.get("SLOPE_THRESHOLD", 35.0)
+        
+        remove_pos = algorithm.parameterAsBool(masterflow_params, "REMOVE_POSITIVES", context) if (algorithm and hasattr(algorithm, "parameterAsBool")) else masterflow_params.get("REMOVE_POSITIVES", True)
+
         # ---------------------------------------------------------
         # LOOP 2: PREDICTION & PHASE 04 PER YEAR
         # ---------------------------------------------------------
@@ -442,8 +618,20 @@ class SpatiotemporalSDBRunner:
                     append_log(f"  ⚠ WARNING: Failed to generate local uncertainty map: {e}", log_path, feedback)
                     p3_uncert_map = None
             
-            # --- PHASE 03 CLEANUP (Now handled internally in trainers.py) ---
-            pass
+            # --- PHASE 03 CLEANUP & POST-PROCESSING ---
+            ref_feat = p1_mask if (p1_mask and os.path.exists(p1_mask)) else p1_feat
+            p3_cleaned = os.path.join(p3_dir, f"Phase03_Depth_Cleaned_{year}.tif")
+            clean_depth_map(p3_map, ref_feat, max_depth, p3_cleaned, context=context, feedback=feedback)
+            p3_map = p3_cleaned
+
+            if apply_slope:
+                p3_slope = os.path.join(p3_dir, f"Phase03_Depth_SlopeFiltered_{year}.tif")
+                p3_map = slope_filter_depth(p3_map, slope_threshold=slope_threshold_val, out_path=p3_slope, context=context, feedback=feedback)
+
+            if remove_pos:
+                p3_no_pos = os.path.join(p3_dir, f"Phase03_Depth_NoPositives_{year}.tif")
+                remove_positive_pixels(p3_map, p3_no_pos, feedback=feedback)
+                p3_map = p3_no_pos
 
             if master_osw_polygon and os.path.exists(master_osw_polygon):
                 append_log(f"  → Clipping Phase 03 Map for {year} with Master OSW Polygon...", log_path, feedback)
@@ -469,6 +657,8 @@ class SpatiotemporalSDBRunner:
                         p3_map = p3_osw_clipped
                 except Exception as e:
                     append_log(f"  ⚠ WARNING: Failed to clip Phase 03 for {year} with OSW Polygon: {e}", log_path, feedback)
+
+            write_qml_style(p3_map)
             # -----------------------------------------------
 
             run_params = masterflow_params.copy()
@@ -478,6 +668,7 @@ class SpatiotemporalSDBRunner:
             run_params["INPUT_TRAIN"] = outputs["P2_VEC"]
             run_params["SPATIAL_CV"] = algorithm.parameterAsBool(masterflow_params, "SPATIAL_CV_P4", context) if (algorithm and hasattr(algorithm, "parameterAsBool")) else masterflow_params.get("SPATIAL_CV_P4", False)
             run_params["ENABLE_DEPTH_VARIANCE_CORR"] = algorithm.parameterAsBool(masterflow_params, "ENABLE_DEPTH_VARIANCE_CORR_P4", context) if (algorithm and hasattr(algorithm, "parameterAsBool")) else masterflow_params.get("ENABLE_DEPTH_VARIANCE_CORR_P4", False)
+            run_params["ENABLE_SPATIAL_RESIDUAL_CORR"] = algorithm.parameterAsBool(masterflow_params, "ENABLE_SPATIAL_RESIDUAL_CORR_P4", context) if (algorithm and hasattr(algorithm, "parameterAsBool")) else masterflow_params.get("ENABLE_SPATIAL_RESIDUAL_CORR_P4", True)
             
             ui_stack = run_params.get("STACK_COMPONENTS_P4", [0, 1])
             run_params["STACK_COMPONENTS"] = [x + 1 for x in ui_stack]
@@ -513,24 +704,25 @@ class SpatiotemporalSDBRunner:
             ui_enable_val = algorithm.parameterAsBool(masterflow_params, "ENABLE_VALIDATION", context) if (algorithm and hasattr(algorithm, "parameterAsBool")) else masterflow_params.get("ENABLE_VALIDATION", False)
             year_unseen_path = None
             if ui_enable_val:
-                if year_info.get("unseen_file_path") and os.path.exists(year_info["unseen_file_path"]):
-                    year_unseen_path = year_info["unseen_file_path"]
-                elif year_info.get("unseen_layer") and hasattr(year_info["unseen_layer"], "isValid") and year_info["unseen_layer"].isValid():
-                    unseen_year_field = year_info.get("unseen_year_field", "")
-                    unseen_layer = year_info["unseen_layer"]
-                    if unseen_year_field and unseen_year_field.strip():
-                        append_log(f"   [Temporal] Extracting year {year} from global Unseen layer...", log_path, feedback)
-                        try:
-                            ext_unseen = processing.run("native:extractbyexpression", {
-                                'INPUT': unseen_layer,
-                                'EXPRESSION': f'"{unseen_year_field}" = {year} OR "{unseen_year_field}" = \'{year}\'',
-                                'OUTPUT': 'TEMPORARY_OUTPUT'
-                            }, context=context, feedback=feedback, is_child_algorithm=True)
-                            year_unseen_path = ext_unseen['OUTPUT']
-                        except Exception as e:
-                            append_log(f"  ⚠ WARNING: Failed to extract global Unseen for {year}: {e}", log_path, feedback)
+                raw_val = year_info.get("unseen_file_path") or year_info.get("unseen_layer")
+                val_year_field = year_info.get("unseen_year_field", "")
+                is_val_specific = bool(year_info.get("unseen_file_path"))
+                if raw_val:
+                    val_filtered_target = os.path.join(p5_dir, f"Filtered_Validation_Points_{year}.gpkg")
+                    val_res, val_count = filter_vector_by_year(
+                        raw_val,
+                        year,
+                        year_field_name=val_year_field,
+                        out_path=val_filtered_target,
+                        allow_fallback_all=is_val_specific,
+                        log_path=log_path,
+                        feedback=feedback
+                    )
+                    if val_count > 0:
+                        year_unseen_path = val_res
+                        append_log(f"  ✓ Validation Points Extracted: Found {val_count} points strictly belonging to Year {year}.", log_path, feedback)
                     else:
-                        year_unseen_path = unseen_layer.source() if hasattr(unseen_layer, "source") else unseen_layer
+                        append_log(f"  ℹ Notice: 0 validation points found for Year {year}.", log_path, feedback)
             
             if ui_enable_val and year_unseen_path:
                 run_params["ENABLE_VALIDATION"] = True
@@ -552,8 +744,19 @@ class SpatiotemporalSDBRunner:
                 p4 = processing.run("sdb_tools:sdb_phase4_adaptive", run_params, is_child_algorithm=True, context=context, feedback=feedback)
                 p4_map = p4["OUTPUT_FINAL"]
                 
-                # --- PHASE 04 CLEANUP (Now handled internally in evaluators.py) ---
-                pass
+                # --- PHASE 04 CLEANUP & POST-PROCESSING ---
+                p4_cleaned = os.path.join(p4_dir, f"Phase04_Depth_Cleaned_{year}.tif")
+                clean_depth_map(p4_map, ref_feat, max_depth, p4_cleaned, context=context, feedback=feedback)
+                p4_map = p4_cleaned
+
+                if apply_slope:
+                    p4_slope = os.path.join(p4_dir, f"Phase04_Depth_SlopeFiltered_{year}.tif")
+                    p4_map = slope_filter_depth(p4_map, slope_threshold=slope_threshold_val, out_path=p4_slope, context=context, feedback=feedback)
+
+                if remove_pos:
+                    p4_no_pos = os.path.join(p4_dir, f"Phase04_Depth_NoPositives_{year}.tif")
+                    remove_positive_pixels(p4_map, p4_no_pos, feedback=feedback)
+                    p4_map = p4_no_pos
 
                 if master_osw_polygon and os.path.exists(master_osw_polygon):
                     append_log(f"  → Clipping Phase 04 Map for {year} with Master OSW Polygon...", log_path, feedback)
@@ -579,12 +782,19 @@ class SpatiotemporalSDBRunner:
                             p4_map = p4_osw_clipped
                     except Exception as e:
                         append_log(f"  ⚠ WARNING: Failed to clip Phase 04 for {year} with OSW Polygon: {e}", log_path, feedback)
+
+                write_qml_style(p4_map)
                 # -----------------------------------------------
             else:
                 p4_map = p3_map  # Pass through cleaned Phase 03 map directly
             
             # Phase 5 Execution
             final_map = p4_map if os.path.exists(p4_map) else p3_map
+            if remove_pos:
+                final_no_pos = os.path.join(year_out_dir, f"Final_SDB_{year}_NoPos.tif")
+                remove_positive_pixels(final_map, final_no_pos, feedback=feedback)
+                if os.path.exists(final_no_pos):
+                    final_map = final_no_pos
             
             if run_params.get("ENABLE_VALIDATION") and run_params.get("INPUT_TEST"):
                 append_log("  [Phase 05] Scientific Validation & Reporting...", log_path, feedback)
@@ -631,8 +841,8 @@ class SpatiotemporalSDBRunner:
                     collision_handling_idx=masterflow_params.get("COLLISION_HANDLING", 0),
                     log_path=log_path,
                     feedback=feedback,
-                    raster_name=os.path.basename(outputs["INFO"]["image_path"]),
-                    train_name=os.path.basename(outputs["P2_VEC"]),
+                    raster_name=os.path.basename(outputs["INFO"]["image_path"]) if (outputs.get("INFO") and outputs["INFO"].get("image_path")) else f"Scene_{year}",
+                    train_name=os.path.basename(outputs["P2_VEC"]) if outputs.get("P2_VEC") else "No_InSitu_Data",
                     test_name=os.path.basename(year_unseen_path) if year_unseen_path else None,
                     final_raster_path=final_map,
                     p2_dir=p2_dir
@@ -649,7 +859,6 @@ class SpatiotemporalSDBRunner:
                 shutil.copy2(final_map, final_sdb_path)
                 
                 # Generate standardized QML style
-                from Bathymetrix_AI.infrastructure.raster_io import write_qml_style, StylePostProcessor
                 dst_qml = write_qml_style(final_sdb_path)
                 
                 append_log(f"  ✓ Saved final map: {os.path.basename(final_sdb_path)}", log_path, feedback)

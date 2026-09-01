@@ -177,8 +177,11 @@ def filter_by_depth(layer_source, depth_field, max_depth, context=None, feedback
     if not actual_field:
         return vlayer.source() if hasattr(vlayer, "source") else layer_source
 
-    abs_max = abs(float(max_depth)) if max_depth is not None else 30.0
-    expr = f'abs("{actual_field}") <= {abs_max} AND "{actual_field}" != 0'
+    if max_depth is not None and abs(float(max_depth)) < 9000.0:
+        abs_max = abs(float(max_depth))
+        expr = f'abs("{actual_field}") <= {abs_max} AND "{actual_field}" != 0'
+    else:
+        expr = f'"{actual_field}" != 0'
 
     if feedback:
         feedback.pushInfo(f"Filtering points... keeping: {expr} (Field: '{actual_field}')")

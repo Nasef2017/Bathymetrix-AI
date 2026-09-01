@@ -80,6 +80,7 @@ class PostSpatioSpectralAggregator(QgsProcessingAlgorithm):
     MAX_GPR_SAMPLES = "MAX_GPR_SAMPLES"
     SPATIAL_CV_P4 = "SPATIAL_CV_P4"
     ENABLE_DEPTH_VARIANCE_CORR_P4 = "ENABLE_DEPTH_VARIANCE_CORR_P4"
+    ENABLE_SPATIAL_RESIDUAL_CORR_P4 = "ENABLE_SPATIAL_RESIDUAL_CORR_P4"
     INPUT_ADAPTIVE_TRAIN = "INPUT_ADAPTIVE_TRAIN"
     FIELD_ADAPTIVE_DEPTH = "FIELD_ADAPTIVE_DEPTH"
 
@@ -112,6 +113,7 @@ class PostSpatioSpectralAggregator(QgsProcessingAlgorithm):
     ]
 
     # Cleanup & Thresholds
+    ENABLE_MAX_DEPTH_FILTER = "ENABLE_MAX_DEPTH_FILTER"
     MAX_DEPTH_THRESHOLD = "MAX_DEPTH_THRESHOLD"
     REMOVE_POSITIVES = "REMOVE_POSITIVES"
     ENABLE_SLOPE_FILTER = "ENABLE_SLOPE_FILTER"
@@ -145,9 +147,9 @@ class PostSpatioSpectralAggregator(QgsProcessingAlgorithm):
 
 
     def initAlgorithm(self, config=None):
-        # -------------------------------------------------------------------
+        # ===================================================================
         # [0] General Settings (Input Workspace & Aggregation Method)
-        # -------------------------------------------------------------------
+        # ===================================================================
         self.addParameter(
             QgsProcessingParameterFile(
                 self.INPUT_WORKSPACE,
@@ -169,13 +171,13 @@ class PostSpatioSpectralAggregator(QgsProcessingAlgorithm):
             )
         )
 
-        # -------------------------------------------------------------------
+        # ===================================================================
         # [4] Phase 04: Adaptive Refinement (Matching SpatioSpectral Flow)
-        # -------------------------------------------------------------------
+        # ===================================================================
         self.addParameter(
             QgsProcessingParameterBoolean(
                 self.ENABLE_ADAPTIVE,
-                "🎯 [4] Enable Phase 04 Adaptive Refinement",
+                "━━━━━━━━━ 🎯 [4] Phase 04: Adaptive Refinement ━━━━━━━━━",
                 defaultValue=False,
             )
         )
@@ -186,28 +188,6 @@ class PostSpatioSpectralAggregator(QgsProcessingAlgorithm):
                 options=["Phase 03 Depth Map", "Residual Error Grid"],
                 allowMultiple=True,
                 defaultValue=[0, 1],
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterEnum(
-                self.FEATURE_CORR_METHOD_P4,
-                "🤖 [4] Feature Correlation Method",
-                options=[
-                    "Disabled",
-                    "Pearson (Linear)",
-                    "Spearman (Rank)",
-                    "Automatic-RANSAC",
-                    "Automatic-Random Forest",
-                ],
-                defaultValue=3,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterEnum(
-                self.FEATURE_CORR_THRESHOLD_P4,
-                "🤖 [4] Feature Correlation Threshold",
-                options=self.FEATURE_CORR_THRESHOLDS_P4,
-                defaultValue=0,
             )
         )
         self.addParameter(
@@ -223,6 +203,85 @@ class PostSpatioSpectralAggregator(QgsProcessingAlgorithm):
             )
         )
 
+        self.addParameter(
+            QgsProcessingParameterVectorLayer(
+                self.INPUT_ADAPTIVE_TRAIN, "🎯 [4] Adaptive Points", optional=True
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterField(
+                self.FIELD_ADAPTIVE_DEPTH,
+                "🎯 [4] Adaptive Depth Field",
+                defaultValue="ortho_h",
+                parentLayerParameterName=self.INPUT_ADAPTIVE_TRAIN,
+                type=QgsProcessingParameterField.Numeric,
+                optional=True,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.ENABLE_DEPTH_VARIANCE_CORR_P4,
+                "🎛️ [4] Enable Depth Variance Correction (Datum Mean Shift)",
+                defaultValue=False,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.ENABLE_SPATIAL_RESIDUAL_CORR_P4,
+                "📍 [4] Enable Spatial Residual Correction (KNN / Kriging Grid)",
+                defaultValue=True,
+            )
+        )
+
+        # ===================================================================
+        # [5] Phase 05: Validation & Reporting (Matching SpatioSpectral Flow)
+        # ===================================================================
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.ENABLE_VALIDATION,
+                "━━━━━━━━━ 📉 [5] Phase 05: Validation & Reporting ━━━━━━━━━",
+                defaultValue=False,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterVectorLayer(
+                self.INPUT_TEST, "📉 [5] Validation Points", optional=True
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterField(
+                self.FIELD_TEST_DEPTH,
+                "📉 [5] Validation Depth Field",
+                defaultValue="ortho_h",
+                parentLayerParameterName=self.INPUT_TEST,
+                type=QgsProcessingParameterField.Numeric,
+                optional=True,
+            )
+        )
+
+        # ===================================================================
+        # ➕ ADVANCED PARAMETERS (Organized cleanly by phase)
+        # ===================================================================
+
+        # --- [Phase 02 & Filtering Thresholds] ---
+        p_en_max_d = QgsProcessingParameterBoolean(
+            self.ENABLE_MAX_DEPTH_FILTER,
+            "🛑 [Phase 02] Enable Maximum Depth Cutoff Filter",
+            defaultValue=False,
+        )
+        p_en_max_d.setFlags(p_en_max_d.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_en_max_d)
+
+        p_max_d = QgsProcessingParameterNumber(
+            self.MAX_DEPTH_THRESHOLD,
+            "🛑 [Phase 02] Maximum Depth Cutoff Threshold (e.g. -30.0)",
+            type=QgsProcessingParameterNumber.Double,
+            defaultValue=-30.0,
+        )
+        p_max_d.setFlags(p_max_d.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_max_d)
+
+        # --- [Phase 04] ---
         p_knn = QgsProcessingParameterNumber(
             self.KNN_NEIGHBORS,
             "📍 [Phase 04] KNN Nearest Neighbors (K) for Residuals",
@@ -251,32 +310,57 @@ class PostSpatioSpectralAggregator(QgsProcessingAlgorithm):
         p_sp_p4.setFlags(p_sp_p4.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_sp_p4)
 
-        p_var_corr_p4 = QgsProcessingParameterBoolean(
-            self.ENABLE_DEPTH_VARIANCE_CORR_P4,
-            "🎛️ [Phase 04] Enable Depth Variance Correction",
-            defaultValue=False,
+        p_corr_m_p4 = QgsProcessingParameterEnum(
+            self.FEATURE_CORR_METHOD_P4,
+            "🤖 [Phase 04] Feature Correlation Method",
+            options=[
+                "Disabled",
+                "Pearson (Linear)",
+                "Spearman (Rank)",
+                "Automatic-RANSAC",
+                "Automatic-Random Forest",
+            ],
+            defaultValue=3,
         )
-        p_var_corr_p4.setFlags(p_var_corr_p4.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
-        self.addParameter(p_var_corr_p4)
+        p_corr_m_p4.setFlags(p_corr_m_p4.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_corr_m_p4)
 
-
-        self.addParameter(
-            QgsProcessingParameterVectorLayer(
-                self.INPUT_ADAPTIVE_TRAIN, "🎯 [4] Adaptive Points", optional=True
-            )
+        p_corr_th_p4 = QgsProcessingParameterEnum(
+            self.FEATURE_CORR_THRESHOLD_P4,
+            "🤖 [Phase 04] Feature Correlation Threshold",
+            options=self.FEATURE_CORR_THRESHOLDS_P4,
+            defaultValue=0,
         )
-        self.addParameter(
-            QgsProcessingParameterField(
-                self.FIELD_ADAPTIVE_DEPTH,
-                "🎯 [4] Adaptive Depth Field",
-                defaultValue="ortho_h",
-                parentLayerParameterName=self.INPUT_ADAPTIVE_TRAIN,
-                type=QgsProcessingParameterField.Numeric,
-                optional=True,
-            )
-        )
+        p_corr_th_p4.setFlags(p_corr_th_p4.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_corr_th_p4)
 
-        # --- SDB Composite Score & Model Selection Strategy ---
+        # --- [Post-Processing Cleanup & Filtering] ---
+        p_rem_pos = QgsProcessingParameterBoolean(
+            self.REMOVE_POSITIVES,
+            "🧽 [Post-Processing] Remove Positive Depths (>= 0)",
+            defaultValue=True,
+        )
+        p_rem_pos.setFlags(p_rem_pos.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_rem_pos)
+
+        p_slope_f = QgsProcessingParameterBoolean(
+            self.ENABLE_SLOPE_FILTER,
+            "🧽 [Post-Processing] Apply Physical Slope Filter",
+            defaultValue=True,
+        )
+        p_slope_f.setFlags(p_slope_f.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_slope_f)
+
+        p_slope_th = QgsProcessingParameterNumber(
+            self.SLOPE_THRESHOLD,
+            "🧽 [Post-Processing] Slope Filter Threshold (Degrees)",
+            type=QgsProcessingParameterNumber.Double,
+            defaultValue=35.0,
+        )
+        p_slope_th.setFlags(p_slope_th.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
+        self.addParameter(p_slope_th)
+
+        # --- [Auto-ML Ranking & Validation Matrix] ---
         p_strat = QgsProcessingParameterEnum(
             self.SCORE_SELECTION_STRATEGY,
             "🎯 [Auto-ML Ranking] Model Selection Strategy / Criterion",
@@ -291,7 +375,7 @@ class PostSpatioSpectralAggregator(QgsProcessingAlgorithm):
             "⚖️ [Score Equation] Included Evaluation Metrics (Auto-Balanced)",
             options=self.SCORE_METRIC_OPTIONS,
             allowMultiple=True,
-            defaultValue=[0, 1, 2, 3],
+            defaultValue=[0, 1, 2, 3, 4],
         )
         p_metrics.setFlags(p_metrics.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_metrics)
@@ -305,78 +389,18 @@ class PostSpatioSpectralAggregator(QgsProcessingAlgorithm):
         p_custom_cfg.setFlags(p_custom_cfg.flags() | QgsProcessingParameterDefinition.FlagAdvanced)
         self.addParameter(p_custom_cfg)
 
-        # -------------------------------------------------------------------
-        # [5] Phase 05: Validation & Reporting (Matching SpatioSpectral Flow)
-        # -------------------------------------------------------------------
-        self.addParameter(
-            QgsProcessingParameterBoolean(
-                self.ENABLE_VALIDATION,
-                "📉 [5] Enable Phase 05 Validation & Reporting",
-                defaultValue=False,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterVectorLayer(
-                self.INPUT_TEST, "📉 [5] Validation Points", optional=True
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterField(
-                self.FIELD_TEST_DEPTH,
-                "📉 [5] Validation Depth Field",
-                defaultValue="ortho_h",
-                parentLayerParameterName=self.INPUT_TEST,
-                type=QgsProcessingParameterField.Numeric,
-                optional=True,
-            )
-        )
-
-        # -------------------------------------------------------------------
-        # Cleanup & Thresholds (Matching SpatioSpectral Flow)
-        # -------------------------------------------------------------------
-        self.addParameter(
-            QgsProcessingParameterNumber(
-                self.MAX_DEPTH_THRESHOLD,
-                "🛑 Maximum Depth Threshold (e.g. -30)",
-                type=QgsProcessingParameterNumber.Double,
-                defaultValue=-30.0,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterBoolean(
-                self.REMOVE_POSITIVES,
-                "🧽 [Cleanup] Remove Positive Depths (>= 0)",
-                defaultValue=True,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterBoolean(
-                self.ENABLE_SLOPE_FILTER,
-                "🧽 [Cleanup] Apply Slope Filter (Remove sharp jumps)",
-                defaultValue=True,
-            )
-        )
-        self.addParameter(
-            QgsProcessingParameterNumber(
-                self.SLOPE_THRESHOLD,
-                "🧽 [Cleanup] Slope Filter Threshold (Degrees)",
-                type=QgsProcessingParameterNumber.Double,
-                defaultValue=35.0,
-            )
-        )
-
 
     def name(self):
         return "sdb_post_spatiospectral_aggregator"
 
     def displayName(self):
-        return "Post-SpatioSpectral Aggregator"
+        return "4.1 Post-SpatioSpectral Aggregator & Fusion"
 
     def group(self):
-        return "SDB Research Tools"
+        return "4. Post-Processing & Dynamics"
 
     def groupId(self):
-        return "sdb_tools"
+        return "post_dynamics"
 
     def createInstance(self):
         return PostSpatioSpectralAggregator()
@@ -416,6 +440,8 @@ class PostSpatioSpectralAggregator(QgsProcessingAlgorithm):
         start_time = time.time()
 
         workspace = self.parameterAsString(parameters, self.INPUT_WORKSPACE, context)
+        if workspace and os.path.isfile(workspace):
+            workspace = os.path.dirname(workspace)
         agg_method_idx = self.parameterAsInt(
             parameters, self.SPATIOSPECTRAL_AGGREGATION, context
         )
@@ -723,6 +749,7 @@ class PostSpatioSpectralAggregator(QgsProcessingAlgorithm):
                 "MAX_GPR_SAMPLES": self.parameterAsInt(parameters, self.MAX_GPR_SAMPLES, context),
                 "SPATIAL_CV": self.parameterAsBool(parameters, self.SPATIAL_CV_P4, context),
                 "ENABLE_DEPTH_VARIANCE_CORR": self.parameterAsBool(parameters, self.ENABLE_DEPTH_VARIANCE_CORR_P4, context),
+                "ENABLE_SPATIAL_RESIDUAL_CORR": self.parameterAsBool(parameters, self.ENABLE_SPATIAL_RESIDUAL_CORR_P4, context),
                 "OUTPUT_FOLDER": p4_dir,
             }
 

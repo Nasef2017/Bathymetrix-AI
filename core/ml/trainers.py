@@ -831,9 +831,9 @@ def parse_score_config(algorithm, parameters, context=None) -> dict:
     metric_keys = ["R2", "RMSE", "wMAPE", "Bias", "MAE"]
     default_base_weights = {"R2": 35.0, "RMSE": 30.0, "wMAPE": 20.0, "Bias": 15.0, "MAE": 15.0}
     
-    selected_metric_indices = _get_val("SCORE_METRICS", [0, 1, 2, 3])
+    selected_metric_indices = _get_val("SCORE_METRICS", [0, 1, 2, 3, 4])
     if not isinstance(selected_metric_indices, list) or len(selected_metric_indices) == 0:
-        selected_metric_indices = [0, 1, 2, 3]
+        selected_metric_indices = [0, 1, 2, 3, 4]
 
     active_metrics = set()
     for m_idx in selected_metric_indices:

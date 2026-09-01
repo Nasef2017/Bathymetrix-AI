@@ -157,26 +157,26 @@ class SDBPhase1Preprocessing(QgsProcessingAlgorithm):
         )
 
         self.addParameter(
-            QgsProcessingParameterVectorLayer(
-                self.INPUT_WATER_POLY,
-                "1A. Input Water Polygon (Optional - Overrides Auto Mask)",
-                types=[QgsProcessing.TypeVectorPolygon],
-                optional=True,
-            )
-        )
-        self.addParameter(
             QgsProcessingParameterBoolean(
                 self.ENABLE_MASKING,
-                "1B. Enable Auto/Manual Masking (If no Polygon provided)",
+                "1A. Enable Auto/Manual Masking",
                 defaultValue=True,
             )
         )
         self.addParameter(
             QgsProcessingParameterEnum(
                 self.MASKING_METHOD,
-                "Water Masking Method",
+                "1B. Water Masking Method",
                 options=self.MASK_METHODS,
                 defaultValue=0,
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterVectorLayer(
+                self.INPUT_WATER_POLY,
+                "1C. Input Water Polygon [optional]",
+                types=[QgsProcessing.TypeVectorPolygon],
+                optional=True,
             )
         )
         self.addParameter(
@@ -234,14 +234,9 @@ class SDBPhase1Preprocessing(QgsProcessingAlgorithm):
             )
         )
         self.addParameter(
-            QgsProcessingParameterBoolean(
-                self.ENABLE_BAND_CALC, "Enable Custom Band Math", defaultValue=True
-            )
-        )
-        self.addParameter(
             QgsProcessingParameterString(
                 self.BAND_MATH_FORMULA,
-                "Band Math Formula (e.g. (B2-B3)/(B2+B3))",
+                "Custom Band Math Formula (e.g. (B2-B3)/(B2+B3) or Log_B2/Log_B3)",
                 defaultValue="",
                 optional=True,
             )
@@ -350,13 +345,13 @@ class SDBPhase1Preprocessing(QgsProcessingAlgorithm):
         return "sdb_phase1_preprocessing"
 
     def displayName(self):
-        return "1. SDB Module 01: Pre-processing"
+        return "3.1 Phase 01: Pre-processing & Indices"
 
     def group(self):
-        return "SDB Research Tools"
+        return "3. Step-by-Step Modular Pipeline"
 
     def groupId(self):
-        return "sdb_tools"
+        return "modular_pipeline"
 
     def createInstance(self):
         return SDBPhase1Preprocessing()

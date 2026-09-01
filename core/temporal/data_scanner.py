@@ -19,6 +19,21 @@ class TemporalDataScanner:
     """
 
     def __init__(self, root_img_dir: str, start_year: Optional[int] = None, end_year: Optional[int] = None):
+        if root_img_dir:
+            root_img_dir = os.path.normpath(root_img_dir)
+            if os.path.isfile(root_img_dir):
+                root_img_dir = os.path.dirname(root_img_dir)
+            
+            # If the user selected a 4-digit year folder directly (e.g. Dabaa/2019):
+            if os.path.isdir(root_img_dir):
+                base_name = os.path.basename(root_img_dir)
+                if base_name.isdigit() and len(base_name) == 4:
+                    parent_dir = os.path.dirname(root_img_dir)
+                    if os.path.isdir(parent_dir):
+                        sub_items = [d for d in os.listdir(parent_dir) if os.path.isdir(os.path.join(parent_dir, d)) and d.isdigit() and len(d) == 4]
+                        if sub_items:
+                            root_img_dir = parent_dir
+                            
         self.root_img_dir = root_img_dir
         self.start_year = start_year
         self.end_year = end_year
@@ -120,18 +135,24 @@ class TemporalDataScanner:
         """Finds ICESat-2 or training shapefile/geopackage inside the year subfolder."""
         year_subfolder = os.path.join(self.root_img_dir, year_str)
         if os.path.exists(year_subfolder) and os.path.isdir(year_subfolder):
+            candidate_files = []
             for fname in os.listdir(year_subfolder):
                 fname_lower = fname.lower()
-                if fname_lower.endswith((".shp", ".gpkg", ".csv")):
+                if fname_lower.endswith((".shp", ".gpkg", ".geojson", ".csv", ".kml", ".tab")):
                     # Explicitly ignore validation and control files
-                    if any(x in fname_lower for x in ["valid", "test", "unseen", "sonar", "control", "residual", "error"]):
+                    if any(x in fname_lower for x in ["valid", "test", "unseen", "sonar", "control", "residual", "error", "eval"]):
                         continue
-                    
-                    if "icesat" in fname_lower or "atl" in fname_lower or "train" in fname_lower:
+                    candidate_files.append(fname)
+            
+            if candidate_files:
+                # 1st Priority: files containing known training/depth keywords or the year itself
+                for fname in candidate_files:
+                    fname_lower = fname.lower()
+                    if any(k in fname_lower for k in ["icesat", "atl", "train", "bathy", "depth", "point", "survey", "lidar", "data", year_str]):
                         return os.path.join(year_subfolder, fname)
-                        
-            # If nothing specific was found, don't blindly grab any shapefile, return None 
-            # to allow fallback to the globally provided icesat_layer
+                
+                # 2nd Priority: grab the first valid shapefile / vector in the folder
+                return os.path.join(year_subfolder, candidate_files[0])
         return None
 
     def _find_year_unseen(self, year_str: str, unseen_layer: Optional[QgsVectorLayer]) -> Optional[str]:
@@ -139,7 +160,8 @@ class TemporalDataScanner:
         year_subfolder = os.path.join(self.root_img_dir, year_str)
         if os.path.exists(year_subfolder) and os.path.isdir(year_subfolder):
             for fname in os.listdir(year_subfolder):
-                if fname.lower().endswith((".shp", ".gpkg", ".csv")) and ("unseen" in fname.lower() or "sonar" in fname.lower() or "test" in fname.lower() or "valid" in fname.lower()):
+                fname_lower = fname.lower()
+                if fname_lower.endswith((".shp", ".gpkg", ".geojson", ".csv", ".kml", ".tab")) and any(k in fname_lower for k in ["unseen", "sonar", "test", "valid", "eval", "chk", "ground"]):
                     return os.path.join(year_subfolder, fname)
         return None
 
@@ -148,7 +170,8 @@ class TemporalDataScanner:
         year_subfolder = os.path.join(self.root_img_dir, year_str)
         if os.path.exists(year_subfolder) and os.path.isdir(year_subfolder):
             for fname in os.listdir(year_subfolder):
-                if "control" in fname.lower() or "residual" in fname.lower() or "error" in fname.lower():
-                    if fname.lower().endswith((".shp", ".gpkg", ".csv", ".tif", ".tiff")):
+                fname_lower = fname.lower()
+                if any(k in fname_lower for k in ["control", "ctrl", "residual", "datum", "error"]):
+                    if fname_lower.endswith((".shp", ".gpkg", ".geojson", ".csv", ".tif", ".tiff")):
                         return os.path.join(year_subfolder, fname)
         return None

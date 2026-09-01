@@ -115,13 +115,13 @@ class TidalDatumConverter(QgsProcessingAlgorithm):
         return "tidal_datum_converter"
 
     def displayName(self):
-        return self.tr("Tidal Datum Converter")
+        return self.tr("2.2 Tidal Datum Converter")
 
     def group(self):
-        return ""
+        return self.tr("2. Data Acquisition & Datum")
 
     def groupId(self):
-        return ""
+        return "data_prep"
 
     def shortHelpString(self):
         return """

@@ -1783,11 +1783,17 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
     else:
         p3_thresh = 0.2
         
-    final_water_mask = None
+    enable_max_depth = algorithm.parameterAsBool(
+        parameters, getattr(algorithm, "ENABLE_MAX_DEPTH_FILTER", "ENABLE_MAX_DEPTH_FILTER"), context
+    ) if (algorithm and hasattr(algorithm, "parameterAsBool") and hasattr(algorithm, "ENABLE_MAX_DEPTH_FILTER")) else parameters.get("ENABLE_MAX_DEPTH_FILTER", False)
 
-    max_depth = algorithm.parameterAsDouble(
-        parameters, algorithm.MAX_DEPTH_THRESHOLD, context
-    )
+    if enable_max_depth:
+        max_depth = algorithm.parameterAsDouble(
+            parameters, algorithm.MAX_DEPTH_THRESHOLD, context
+        )
+    else:
+        max_depth = -999999.0
+
     shrink_dist = algorithm.parameterAsDouble(
         parameters, algorithm.SHRINK_EDGE_DIST, context
     )
@@ -1802,10 +1808,14 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
         parameters, algorithm.SLOPE_THRESHOLD, context
     )
 
+    enable_masking = algorithm.parameterAsBool(
+        parameters, algorithm.ENABLE_MASKING, context
+    )
     water_mask_poly = algorithm.parameterAsVectorLayer(
         parameters, algorithm.WATER_MASK_POLY, context
     )
-    if water_mask_poly:
+    final_water_mask = None
+    if enable_masking and water_mask_poly:
         append_log("  [Phase 01] Pre-processing", log_path, feedback)
         append_log("      → Applying Ready-made Water Mask Polygon...", log_path, feedback)
 
@@ -1912,15 +1922,15 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
                 "SWIR_BAND": parameters[algorithm.SWIR_BAND],
                 "APPLY_SUNGLINT": parameters[algorithm.APPLY_SUNGLINT],
                 "SUNGLINT_PERCENTILE": parameters[algorithm.SUNGLINT_PERCENTILE],
-                "INPUT_WATER_POLY": final_water_mask if water_mask_poly else None,
-                "ENABLE_MASKING": parameters[algorithm.ENABLE_MASKING],
+                "INPUT_WATER_POLY": final_water_mask,
+                "ENABLE_MASKING": enable_masking,
                 "MASKING_METHOD": parameters[algorithm.MASKING_METHOD],
                 "MANUAL_THRESHOLD": parameters[algorithm.MANUAL_THRESHOLD],
                 "OTSU_ADJUSTMENT": parameters[algorithm.OTSU_ADJUSTMENT],
                 "MASK_KERNEL_SIZE": parameters[algorithm.MASK_KERNEL_SIZE],
                 "FEATURE_SELECTION": parameters[algorithm.FEATURE_SELECTION],
-                "ENABLE_BAND_CALC": parameters[algorithm.ENABLE_BAND_CALC],
-                "BAND_MATH_FORMULA": parameters[algorithm.BAND_MATH_FORMULA],
+                "ENABLE_BAND_CALC": parameters.get(getattr(algorithm, "ENABLE_BAND_CALC", "ENABLE_BAND_CALC"), True),
+                "BAND_MATH_FORMULA": parameters.get(getattr(algorithm, "BAND_MATH_FORMULA", "BAND_MATH_FORMULA"), ""),
                 "APPLY_DEEPWATER": parameters[algorithm.APPLY_DEEPWATER],
                 "DEEPWATER_METHOD": parameters[algorithm.DEEPWATER_METHOD],
                 "DEEPWATER_ROI": parameters.get(algorithm.DEEPWATER_ROI, None),
@@ -2014,7 +2024,7 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
         "RANDOM_STATE": parameters[algorithm.RANDOM_STATE],
         "NUM_THREADS": parameters[algorithm.NUM_THREADS],
         "SCORE_SELECTION_STRATEGY": parameters.get(getattr(algorithm, "SCORE_SELECTION_STRATEGY", "SCORE_SELECTION_STRATEGY"), 0),
-        "SCORE_METRICS": parameters.get(getattr(algorithm, "SCORE_METRICS", "SCORE_METRICS"), [0, 1, 2, 3]),
+        "SCORE_METRICS": parameters.get(getattr(algorithm, "SCORE_METRICS", "SCORE_METRICS"), [0, 1, 2, 3, 4]),
         "SCORE_CUSTOM_CONFIG": parameters.get(getattr(algorithm, "SCORE_CUSTOM_CONFIG", "SCORE_CUSTOM_CONFIG"), ""),
     }
     if p1.get("OUTPUT_MASK"):
@@ -2242,12 +2252,13 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
             "KNN_NEIGHBORS": parameters.get(algorithm.KNN_NEIGHBORS, 15),
             "SPATIAL_CV": parameters.get(algorithm.SPATIAL_CV_P4, False),
             "ENABLE_DEPTH_VARIANCE_CORR": parameters.get(getattr(algorithm, "ENABLE_DEPTH_VARIANCE_CORR_P4", "ENABLE_DEPTH_VARIANCE_CORR_P4"), parameters.get("ENABLE_DEPTH_VARIANCE_CORR_P4", False)),
+            "ENABLE_SPATIAL_RESIDUAL_CORR": parameters.get(getattr(algorithm, "ENABLE_SPATIAL_RESIDUAL_CORR_P4", "ENABLE_SPATIAL_RESIDUAL_CORR_P4"), parameters.get("ENABLE_SPATIAL_RESIDUAL_CORR_P4", True)),
             "TRAIN_TEST_SPLIT": parameters[algorithm.TRAIN_TEST_SPLIT],
             "RANDOM_STATE": parameters[algorithm.RANDOM_STATE],
             "NUM_THREADS": parameters[algorithm.NUM_THREADS],
             "OUTPUT_FORMAT": parameters[algorithm.OUTPUT_FORMAT],
             "SCORE_SELECTION_STRATEGY": parameters.get(getattr(algorithm, "SCORE_SELECTION_STRATEGY", "SCORE_SELECTION_STRATEGY"), 0),
-            "SCORE_METRICS": parameters.get(getattr(algorithm, "SCORE_METRICS", "SCORE_METRICS"), [0, 1, 2, 3]),
+            "SCORE_METRICS": parameters.get(getattr(algorithm, "SCORE_METRICS", "SCORE_METRICS"), [0, 1, 2, 3, 4]),
             "SCORE_CUSTOM_CONFIG": parameters.get(getattr(algorithm, "SCORE_CUSTOM_CONFIG", "SCORE_CUSTOM_CONFIG"), ""),
             "ENABLE_SLOPE_FILTER": apply_slope_filter,
             "SLOPE_THRESHOLD": slope_threshold_val,
@@ -2821,7 +2832,7 @@ def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt
     </head>
     <body>
         <div class="header">
-            <h1>BATHYMETRIX-AI V7.6: TECHNICAL VALIDATION REPORT</h1>
+            <h1>BATHYMETRIX-AI V7.7: TECHNICAL VALIDATION REPORT</h1>
             <p>SDB MasterFlow | High-Precision Satellite-Derived Bathymetry Calibration & Validation</p>
         </div>
 
@@ -2896,7 +2907,7 @@ def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt
         {f"<h2>🔄 Phase 04: Depth-Dependent Residual Calibration Leaderboard</h2><table border='1' cellspacing='0' cellpadding='6' bordercolor='#cbd5e1' style='width: 100%; border-collapse: collapse; margin-top: 8pt; margin-bottom: 12pt;'><thead><tr bgcolor='#f1f5f9'><th style='white-space: nowrap;'>Algorithm</th><th style='white-space: nowrap;'>Winner Stability</th><th style='white-space: nowrap;'>SDB Score (0-100)</th><th style='white-space: nowrap;'>R² Accuracy</th><th style='white-space: nowrap;'>RMSE (Vertical Error)</th><th style='white-space: nowrap;'>wMAPE (%)</th><th style='white-space: nowrap;'>Bias (m)</th></tr></thead><tbody>{p4_rows_html}</tbody></table>" if has_p4 else ""}
 
         <div class="footer">
-            Report generated automatically by Bathymetrix-AI V7.6. All rights reserved. &copy; Mohamed Aly Nasef (2026).
+            Report generated automatically by Bathymetrix-AI V7.7. All rights reserved. &copy; Mohamed Aly Nasef (2026).
         </div>
         <div style="page-break-before: always;"></div>
 
@@ -2923,11 +2934,11 @@ def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt
             </tbody>
         </table>
 
-        {f'<div class="footer">Report generated automatically by Bathymetrix-AI V7.6. All rights reserved. &copy; Mohamed Aly Nasef (2026).</div>' if plots_section_html else ""}
+        {f'<div class="footer">Report generated automatically by Bathymetrix-AI V7.7. All rights reserved. &copy; Mohamed Aly Nasef (2026).</div>' if plots_section_html else ""}
         {plots_section_html}
 
         <div class="footer">
-            Report generated automatically by Bathymetrix-AI V7.6. All rights reserved. &copy; Mohamed Aly Nasef (2026).
+            Report generated automatically by Bathymetrix-AI V7.7. All rights reserved. &copy; Mohamed Aly Nasef (2026).
         </div>
     </body>
     </html>

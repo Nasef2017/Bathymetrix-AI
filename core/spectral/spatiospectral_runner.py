@@ -60,15 +60,16 @@ class SpatioSpectralSDBRunner:
                     r_geom = QgsGeometry.fromRect(rl.extent())
                     if r_crs != v_crs:
                         try:
-                            transform = QgsCoordinateTransform(r_crs, v_crs, QgsProject.instance())
-                            r_geom.transform(transform)
+                            from qgis.core import QgsCoordinateTransformContext
+                            ctx = QgsProject.instance().transformContext() if (QgsProject and QgsProject.instance()) else QgsCoordinateTransformContext()
+                            transform = QgsCoordinateTransform(r_crs, v_crs, ctx)
+                            if transform.isValid():
+                                r_geom.transform(transform)
                         except Exception:
                             pass
                     if not r_geom.intersects(v_geom):
                         scene_name = os.path.basename(tif_path)
-                        err_msg = f"✗ ERROR: Scene '{scene_name}' failed spatial overlap."
-                        append_log(err_msg, log_path, feedback)
-                        raise QgsProcessingException(err_msg)
+                        append_log(f"  ℹ Notice: Spatial extent overlap check for scene '{scene_name}' was inconclusive or disjoint. Point extraction will verify actual point coordinates.", log_path, feedback)
         append_log("✓ Spatial Overlap verified\n", log_path, feedback)
         # --- End Pre-Scan ---
 
@@ -174,7 +175,8 @@ class SpatioSpectralSDBRunner:
             # CLEANUP: Clamp max depth and remove extreme nodata predictions
             # ---------------------------------------------------------
             if best_depth_path and os.path.exists(best_depth_path):
-                max_depth = masterflow_params.get("MAX_DEPTH_THRESHOLD", -30.0)
+                en_max_d = masterflow_params.get("ENABLE_MAX_DEPTH_FILTER", False)
+                max_depth = masterflow_params.get("MAX_DEPTH_THRESHOLD", -30.0) if en_max_d else -999999.0
                 p3_clamped = os.path.join(p3_dir, "3_Initial_Global_Depth_Cleaned.tif")
                 
                 # We use clean_depth_map which also masks using the feature stack extent
@@ -347,7 +349,8 @@ class SpatioSpectralSDBRunner:
 
         if aggregated_depth_path and os.path.exists(aggregated_depth_path):
             append_log("→ Applying Post-Aggregation Cleanup (Clamping, Slope Filter, Positive Removal)...", log_path, feedback)
-            max_depth = masterflow_params.get("MAX_DEPTH_THRESHOLD", -30.0)
+            en_max_d = masterflow_params.get("ENABLE_MAX_DEPTH_FILTER", False)
+            max_depth = masterflow_params.get("MAX_DEPTH_THRESHOLD", -30.0) if en_max_d else -999999.0
             agg_clamped = os.path.join(aggregated_dir, f"Aggregated_Depth_{safe_agg_method_name}_Cleaned.tif")
             ref_feat = aggregated_mask_path if os.path.exists(aggregated_mask_path) else aggregated_depth_path
             clean_depth_map(aggregated_depth_path, ref_feat, max_depth, agg_clamped, context, feedback)
@@ -449,6 +452,7 @@ class SpatioSpectralSDBRunner:
             if "SPATIAL_CV_P4" in masterflow_params:
                 p4_params["SPATIAL_CV"] = masterflow_params["SPATIAL_CV_P4"]
             p4_params["ENABLE_DEPTH_VARIANCE_CORR"] = masterflow_params.get("ENABLE_DEPTH_VARIANCE_CORR_P4", False)
+            p4_params["ENABLE_SPATIAL_RESIDUAL_CORR"] = masterflow_params.get("ENABLE_SPATIAL_RESIDUAL_CORR_P4", True)
             
             p4 = processing.run("sdb_tools:sdb_phase4_adaptive", p4_params, is_child_algorithm=True, context=context, feedback=feedback)
             

@@ -74,13 +74,13 @@ class SDBModule05(QgsProcessingAlgorithm):
         return "sdb_05_reporting"
 
     def displayName(self):
-        return "5. SDB Module 05: Scientific Validation & Reporting"
+        return "3.5 Phase 05: Scientific Validation & Assessment"
 
     def group(self):
-        return "SDB Research Tools"
+        return "3. Step-by-Step Modular Pipeline"
 
     def groupId(self):
-        return "sdb_tools"
+        return "modular_pipeline"
 
     def createInstance(self):
         return SDBModule05()

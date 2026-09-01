@@ -56,20 +56,25 @@ class SdbProvider(QgsProcessingProvider):
         هنا يتم تسجيل الأدوات يدوياً.
         لو حدث خطأ هنا، سيعطيك بايثون رسالة واضحة بدلاً من إخفاء الأداة.
         """
+        # 1. End-to-End Masterflows
         self.addAlgorithm(SDBMasterOrchestrator())
+        self.addAlgorithm(SDBSpatioSpectralFlow())
+        self.addAlgorithm(SDBSpatiotemporalFlow())
+
+        # 2. Data Acquisition & Datum
+        self.addAlgorithm(SlideRuleFinalTool())
+        self.addAlgorithm(TidalDatumConverter())
+
+        # 3. Step-by-Step Modular Pipeline
         self.addAlgorithm(SDBPhase1Preprocessing())
         self.addAlgorithm(SDBModule02())
         self.addAlgorithm(SDBModule03())
         self.addAlgorithm(SDBPhase4Adaptive())
         self.addAlgorithm(SDBModule05())
 
-        self.addAlgorithm(SlideRuleFinalTool())
-        self.addAlgorithm(TidalDatumConverter())
-
-        self.addAlgorithm(SDBSpatiotemporalFlow())
-        self.addAlgorithm(SDBSpatioSpectralFlow())
-        self.addAlgorithm(SDBCoastalDynamics())
+        # 4. Post-Processing & Dynamics
         self.addAlgorithm(PostSpatioSpectralAggregator())
+        self.addAlgorithm(SDBCoastalDynamics())
 
     def id(self):
         return "sdb_tools"

@@ -423,6 +423,8 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
         
     random_state = algorithm.parameterAsInt(parameters, algorithm.RANDOM_STATE, context)
     n_jobs = algorithm.parameterAsInt(parameters, algorithm.NUM_THREADS, context)
+    if n_jobs == 0:
+        n_jobs = -1
     
     score_config = parse_score_config(algorithm, parameters, context)
     
@@ -498,6 +500,18 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
         except Exception:
             enable_var_corr = parameters.get("ENABLE_DEPTH_VARIANCE_CORR", parameters.get("ENABLE_DEPTH_VARIANCE_CORR_P4", False))
 
+    try:
+        enable_spatial_residual = algorithm.parameterAsBool(parameters, "ENABLE_SPATIAL_RESIDUAL_CORR", context)
+    except Exception:
+        enable_spatial_residual = True
+    if not enable_spatial_residual and isinstance(enable_spatial_residual, bool) is False:
+        try:
+            enable_spatial_residual = algorithm.parameterAsBool(parameters, "ENABLE_SPATIAL_RESIDUAL_CORR_P4", context)
+        except Exception:
+            enable_spatial_residual = parameters.get("ENABLE_SPATIAL_RESIDUAL_CORR", parameters.get("ENABLE_SPATIAL_RESIDUAL_CORR_P4", True))
+    if enable_spatial_residual is None:
+        enable_spatial_residual = True
+
     raw_residuals = z_true.flatten() - z_pred3.flatten()
     mean_bias = float(np.mean(raw_residuals)) if len(raw_residuals) > 0 else 0.0
     if np.isnan(mean_bias) or np.isinf(mean_bias):
@@ -530,34 +544,6 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
     except Exception:
         knn_k = 15
 
-    if interp_idx == 0:
-        interp_name = "KNN Standard"
-        append_log(f"   Fitting Standard Spatial KNN (K={knn_k})...", log_path, feedback)
-        spatial_model = KNeighborsRegressor(n_neighbors=knn_k, weights=smooth_idw_weights, n_jobs=n_jobs)
-        spatial_model.fit(coords_tr, residuals)
-    elif interp_idx == 1:
-        interp_name = "KNN Robust"
-        append_log(f"   Fitting Robust Spatial KNN (Huber weights, K={knn_k})...", log_path, feedback)
-        spatial_model = RobustSpatialKNN(n_neighbors=knn_k)
-        spatial_model.fit(coords_tr, residuals)
-    elif interp_idx == 2:
-        interp_name = "Kriging/GP"
-        append_log("   Fitting Gaussian Process Regression (Kriging)...", log_path, feedback)
-        if len(coords_tr) > max_gpr_samples:
-            np.random.seed(random_state)
-            gpr_idx = np.random.choice(len(coords_tr), size=max_gpr_samples, replace=False)
-            coords_gpr = coords_tr[gpr_idx]
-            residuals_gpr = residuals[gpr_idx]
-        else:
-            coords_gpr = coords_tr
-            residuals_gpr = residuals
-        
-        kernel = C(1.0, (1e-3, 1e3)) * RBF(length_scale=100.0, length_scale_bounds=(10, 10000))
-        spatial_model = GaussianProcessRegressor(kernel=kernel, alpha=0.1, n_restarts_optimizer=2, random_state=random_state)
-        spatial_model.fit(coords_gpr, residuals_gpr)
-
-    append_log(f"   Interpolating Residual Grid ({interp_name})...", log_path, feedback)
-    
     if mask_path and str(mask_path).strip() and mask_path != "None":
         with rasterio.open(mask_path) as m:
             mask_arr = m.read(1)
@@ -583,26 +569,60 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
     water_coords = np.column_stack((water_indices[0], water_indices[1]))
 
     residual_grid = np.zeros((h, w), dtype="float32")
-    model_str = str(spatial_model)
-    if "KNeighbors" in model_str or "GaussianProcess" in model_str or "RobustSpatialKNN" in model_str or "KNN" in model_str:
-        chunk_size = 5000
+    spatial_model = None
+    chunk_size = 5000
+
+    if enable_spatial_residual:
+        if interp_idx == 0:
+            interp_name = "KNN Standard"
+            append_log(f"   Fitting Standard Spatial KNN (K={knn_k})...", log_path, feedback)
+            spatial_model = KNeighborsRegressor(n_neighbors=knn_k, weights=smooth_idw_weights, n_jobs=n_jobs)
+            spatial_model.fit(coords_tr, residuals)
+        elif interp_idx == 1:
+            interp_name = "KNN Robust"
+            append_log(f"   Fitting Robust Spatial KNN (Huber weights, K={knn_k})...", log_path, feedback)
+            spatial_model = RobustSpatialKNN(n_neighbors=knn_k)
+            spatial_model.fit(coords_tr, residuals)
+        elif interp_idx == 2:
+            interp_name = "Kriging/GP"
+            append_log("   Fitting Gaussian Process Regression (Kriging)...", log_path, feedback)
+            if len(coords_tr) > max_gpr_samples:
+                np.random.seed(random_state)
+                gpr_idx = np.random.choice(len(coords_tr), size=max_gpr_samples, replace=False)
+                coords_gpr = coords_tr[gpr_idx]
+                residuals_gpr = residuals[gpr_idx]
+            else:
+                coords_gpr = coords_tr
+                residuals_gpr = residuals
+            
+            kernel = C(1.0, (1e-3, 1e3)) * RBF(length_scale=100.0, length_scale_bounds=(10, 10000))
+            spatial_model = GaussianProcessRegressor(kernel=kernel, alpha=0.1, n_restarts_optimizer=2, random_state=random_state)
+            spatial_model.fit(coords_gpr, residuals_gpr)
+
+        append_log(f"   Interpolating Residual Grid ({interp_name})...", log_path, feedback)
+        
+        model_str = str(spatial_model)
+        if "KNeighbors" in model_str or "GaussianProcess" in model_str or "RobustSpatialKNN" in model_str or "KNN" in model_str:
+            chunk_size = 5000
+        else:
+            chunk_size = 500000
+        for i in range(0, len(water_coords), chunk_size):
+            chunk = water_coords[i:i + chunk_size]
+            if len(chunk) > 0:
+                residual_grid[chunk[:, 0], chunk[:, 1]] = spatial_model.predict(chunk)
+
+        append_log("   Saving Residual Error Map...", log_path, feedback)
+        p_residual = os.path.join(out_dir, "4-Residual_Error_Map.tif")
+        meta_res = meta.copy()
+        meta_res.update(count=1, dtype="float32", nodata=-9999.0)
+
+        res_map_to_save = np.full((h, w), -9999.0, dtype="float32")
+        res_map_to_save[water_indices] = residual_grid[water_indices] + residual_mean_bias
+
+        with rasterio.open(p_residual, "w", **meta_res) as dst:
+            dst.write(res_map_to_save, 1)
     else:
-        chunk_size = 500000
-    for i in range(0, len(water_coords), chunk_size):
-        chunk = water_coords[i:i + chunk_size]
-        if len(chunk) > 0:
-            residual_grid[chunk[:, 0], chunk[:, 1]] = spatial_model.predict(chunk)
-
-    append_log("   Saving Residual Error Map...", log_path, feedback)
-    p_residual = os.path.join(out_dir, "4-Residual_Error_Map.tif")
-    meta_res = meta.copy()
-    meta_res.update(count=1, dtype="float32", nodata=-9999.0)
-
-    res_map_to_save = np.full((h, w), -9999.0, dtype="float32")
-    res_map_to_save[water_indices] = residual_grid[water_indices] + residual_mean_bias
-
-    with rasterio.open(p_residual, "w", **meta_res) as dst:
-        dst.write(res_map_to_save, 1)
+        append_log("   [Phase 04] Spatial Residual Correction is DISABLED. Bypassing spatial error surface fitting.", log_path, feedback)
 
     with rasterio.open(feat_path) as f:
         orig_bands = f.read()
@@ -629,28 +649,34 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
     if 1 in stack_comps:
         stack_layers.append(p3_map[np.newaxis, :, :])
         stack_names.append("Phase03_Global_Depth")
-    if 2 in stack_comps:
+    if 2 in stack_comps and enable_spatial_residual:
         stack_layers.append((residual_grid + residual_mean_bias)[np.newaxis, :, :])
         stack_names.append("Residual_Error_Grid")
 
     if not stack_layers:
-        raise QgsProcessingException("No features selected for Phase 04 retraining! Please select at least one component in Advanced Parameters.")
+        stack_layers.append(p3_map[np.newaxis, :, :])
+        stack_names.append("Phase03_Global_Depth")
 
     if 0 not in stack_comps:
         append_log("\n   [Notice] Feature Stack (Phase 01) is not selected. Bypassing ML Refinement...", log_path, feedback)
-        append_log("   Computing final depth purely using Spatial Addition (Phase 03 Map + Residual Grid).", log_path, feedback)
+        append_log("   Computing final depth purely using Direct Alignment / Spatial Addition.", log_path, feedback)
         
         final_map = np.full((h, w), -9999.0, dtype="float32")
         valid_mask = (p3_map != -9999.0)
         if mask_path and str(mask_path).strip() and mask_path != "None":
             valid_mask = valid_mask & (mask_arr > 0)
         
-        if 1 in stack_comps and 2 in stack_comps:
-            final_map[valid_mask] = p3_map[valid_mask] + residual_grid[valid_mask] + residual_mean_bias
-        elif 1 in stack_comps:
+        if enable_spatial_residual:
+            if 1 in stack_comps and 2 in stack_comps:
+                final_map[valid_mask] = p3_map[valid_mask] + residual_grid[valid_mask] + residual_mean_bias
+            elif 1 in stack_comps:
+                final_map[valid_mask] = p3_map[valid_mask]
+            elif 2 in stack_comps:
+                final_map[valid_mask] = residual_grid[valid_mask] + residual_mean_bias
+            else:
+                final_map[valid_mask] = p3_map[valid_mask]
+        else:
             final_map[valid_mask] = p3_map[valid_mask]
-        elif 2 in stack_comps:
-            final_map[valid_mask] = residual_grid[valid_mask] + residual_mean_bias
             
         if med_size > 0 and scipy_is_available:
             from scipy.ndimage import distance_transform_edt
@@ -677,7 +703,10 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
         p_uncert = os.path.join(out_dir, "4-Refined_Uncertainty.tif")
         try:
             append_log("   Fitting Phase 04 Math Uncertainty spatial model...", log_path, feedback)
-            math_residuals = residuals - spatial_model.predict(coords_tr)
+            if enable_spatial_residual and spatial_model is not None:
+                math_residuals = residuals - spatial_model.predict(coords_tr)
+            else:
+                math_residuals = residuals
             abs_math_residuals = np.abs(math_residuals) * 1.96
             
             if interp_idx == 0:
@@ -685,6 +714,7 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
             elif interp_idx == 1:
                 spatial_uncert_model = RobustSpatialKNN(n_neighbors=knn_k)
             else:
+                kernel = C(1.0, (1e-3, 1e3)) * RBF(length_scale=100.0, length_scale_bounds=(10, 10000))
                 spatial_uncert_model = GaussianProcessRegressor(kernel=kernel, alpha=0.1, n_restarts_optimizer=2, random_state=random_state)
                 
             spatial_uncert_model.fit(coords_tr, abs_math_residuals)
@@ -708,7 +738,7 @@ def run_phase04_spatial_retraining(algorithm, parameters, context, feedback):
         X_val_math, y_val_math, _ = extract_values(
             p_depth, train_lyr, train_fld, col_mode, log_path, feedback
         )
-        y_pred = X_val_math[:, 0].flatten()
+        y_pred = X_val_math[:, 0].flatten() if X_val_math.ndim > 1 else X_val_math.flatten()
         y_true = y_val_math.flatten()
         
         rmse = np.sqrt(mean_squared_error(y_true, y_pred))
