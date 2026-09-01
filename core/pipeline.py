@@ -36,6 +36,7 @@ try:
         get_raster_min_max,
         write_qml_style,
         StylePostProcessor,
+        safe_replace_or_copy,
     )
     from Bathymetrix_AI.infrastructure.vector_io import filter_by_depth, reproject_layer_if_needed
 except (ImportError, ValueError):
@@ -47,6 +48,7 @@ except (ImportError, ValueError):
         get_raster_min_max,
         write_qml_style,
         StylePostProcessor,
+        safe_replace_or_copy,
     )
     from infrastructure.vector_io import filter_by_depth, reproject_layer_if_needed
 
@@ -1420,12 +1422,33 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                         <h2 class="text-lg font-bold text-slate-100 flex items-center gap-2">
                             <span>🔮 Interactive 3D Seabed Explorer</span>
                         </h2>
-                        <!-- Preset Camera Controls -->
-                        <div class="flex items-center gap-1.5 text-xs">
-                            <button onclick="setCameraView('front')" class="px-2.5 py-1 rounded bg-slate-700/70 hover:bg-sky-600 text-slate-200 hover:text-white transition-colors border border-slate-600/50">🌊 Front 3/4</button>
-                            <button onclick="setCameraView('top')" class="px-2.5 py-1 rounded bg-slate-700/70 hover:bg-sky-600 text-slate-200 hover:text-white transition-colors border border-slate-600/50">📐 Top-Down</button>
-                            <button onclick="setCameraView('side')" class="px-2.5 py-1 rounded bg-slate-700/70 hover:bg-sky-600 text-slate-200 hover:text-white transition-colors border border-slate-600/50">🏞️ Side Profile</button>
-                            <button onclick="setCameraView('reset')" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 transition-colors border border-slate-700">🔄 Reset</button>
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <!-- Z-Scale (Vertical Exaggeration) Controls -->
+                            <div class="flex items-center gap-1 bg-slate-900/90 px-2 py-1 rounded-lg border border-slate-700/60 text-xs shadow-inner">
+                                <span class="text-slate-400 font-medium mr-1 flex items-center gap-1 select-none">
+                                    <span>🏔️ Z-Scale:</span>
+                                    <span id="z-scale-display" class="text-sky-400 font-bold min-w-[32px] text-center">1x</span>
+                                </span>
+                                <button type="button" onclick="adjustZScale(-0.25)" title="Decrease Depth Exaggeration" class="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 active:bg-sky-600 text-slate-200 hover:text-white flex items-center justify-center font-bold border border-slate-700 transition-all">−</button>
+                                <button type="button" onclick="adjustZScale(+0.25)" title="Increase Depth Exaggeration" class="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 active:bg-sky-600 text-slate-200 hover:text-white flex items-center justify-center font-bold border border-slate-700 transition-all">+</button>
+                                <div class="h-3.5 w-px bg-slate-700 mx-1"></div>
+                                <button type="button" onclick="setZScale(0.05)" id="z-btn-0-05" class="z-preset-btn px-1.5 py-0.5 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-all">0.05x</button>
+                                <button type="button" onclick="setZScale(0.1)" id="z-btn-0-1" class="z-preset-btn px-1.5 py-0.5 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-all">0.1x</button>
+                                <button type="button" onclick="setZScale(0.25)" id="z-btn-0-25" class="z-preset-btn px-1.5 py-0.5 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-all">0.25x</button>
+                                <button type="button" onclick="setZScale(0.5)" id="z-btn-0-5" class="z-preset-btn px-1.5 py-0.5 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-all">0.5x</button>
+                                <button type="button" onclick="setZScale(1.0)" id="z-btn-1-0" class="z-preset-btn px-1.5 py-0.5 rounded bg-sky-600 text-white font-semibold shadow-sm transition-all">1x</button>
+                                <button type="button" onclick="setZScale(2.0)" id="z-btn-2-0" class="z-preset-btn px-1.5 py-0.5 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-all">2x</button>
+                                <button type="button" onclick="setZScale(3.5)" id="z-btn-3-5" class="z-preset-btn px-1.5 py-0.5 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-all">3.5x</button>
+                                <button type="button" onclick="setZScale(5.0)" id="z-btn-5-0" class="z-preset-btn px-1.5 py-0.5 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-all">5x</button>
+                            </div>
+
+                            <!-- Preset Camera Controls -->
+                            <div class="flex items-center gap-1.5 text-xs">
+                                <button onclick="setCameraView('front')" class="px-2.5 py-1 rounded bg-slate-700/70 hover:bg-sky-600 text-slate-200 hover:text-white transition-colors border border-slate-600/50">🌊 Front 3/4</button>
+                                <button onclick="setCameraView('top')" class="px-2.5 py-1 rounded bg-slate-700/70 hover:bg-sky-600 text-slate-200 hover:text-white transition-colors border border-slate-600/50">📐 Top-Down</button>
+                                <button onclick="setCameraView('side')" class="px-2.5 py-1 rounded bg-slate-700/70 hover:bg-sky-600 text-slate-200 hover:text-white transition-colors border border-slate-600/50">🏞️ Side Profile</button>
+                                <button onclick="setCameraView('reset')" class="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 transition-colors border border-slate-700">🔄 Reset</button>
+                            </div>
                         </div>
                     </div>
                     <p class="text-xs text-slate-400 mb-3">Interactive dynamic 3D surface with bathymetric depth contours. Click and drag to rotate, scroll to zoom, right-click to pan.</p>
@@ -1458,11 +1481,21 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
     <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
     <script>
         var defaultCamera = {plotly_camera_json};
+        var baseAspect = {{ x: 1, y: 1, z: 0.32 }};
+        var currentZMultiplier = 1.0;
+
         try {{
             var zData = {z_data_json};
             var xCoords = {x_coords_json};
             var yCoords = {y_coords_json};
             var aspectRatio = {plotly_aspect_json};
+            if (aspectRatio && aspectRatio.x) {{
+                baseAspect = {{
+                    x: aspectRatio.x,
+                    y: aspectRatio.y,
+                    z: aspectRatio.z || 0.32
+                }};
+            }}
             if (zData && zData.length > 0) {{
                 var data = [{{
                     z: zData,
@@ -1481,12 +1514,10 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                     xaxis: {{ title: '{plotly_x_title}', color: '#94a3b8', gridcolor: '#1e293b', showbackground: false }},
                     yaxis: {{ title: '{plotly_y_title}', color: '#94a3b8', gridcolor: '#1e293b', showbackground: false }},
                     zaxis: {{ title: 'Depth (m)', color: '#94a3b8', gridcolor: '#1e293b', showbackground: false }},
-                    camera: defaultCamera
+                    camera: defaultCamera,
+                    aspectmode: 'manual',
+                    aspectratio: {{ x: baseAspect.x, y: baseAspect.y, z: baseAspect.z * currentZMultiplier }}
                 }};
-                if (aspectRatio && aspectRatio.x) {{
-                    sceneConfig.aspectmode = 'manual';
-                    sceneConfig.aspectratio = {{ x: aspectRatio.x, y: aspectRatio.y, z: aspectRatio.z }};
-                }}
                 var layout = {{
                     margin: {{ l: 0, r: 0, b: 0, t: 0 }},
                     paper_bgcolor: '#020617',
@@ -1502,6 +1533,66 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
             document.getElementById('seabed-3d-viewer').innerHTML = '<div class="flex items-center justify-center h-full text-rose-500 text-sm">Failed to render 3D Viewer</div>';
         }}
 
+        function updateZScaleUI(val) {{
+            var disp = document.getElementById('z-scale-display');
+            if (disp) {{
+                disp.textContent = Number(val.toFixed(2)).toString() + 'x';
+            }}
+            var presets = [
+                {{ id: 'z-btn-0-05', val: 0.05 }},
+                {{ id: 'z-btn-0-1', val: 0.1 }},
+                {{ id: 'z-btn-0-25', val: 0.25 }},
+                {{ id: 'z-btn-0-5', val: 0.5 }},
+                {{ id: 'z-btn-1-0', val: 1.0 }},
+                {{ id: 'z-btn-2-0', val: 2.0 }},
+                {{ id: 'z-btn-3-5', val: 3.5 }},
+                {{ id: 'z-btn-5-0', val: 5.0 }}
+            ];
+            presets.forEach(function(item) {{
+                var btn = document.getElementById(item.id);
+                if (btn) {{
+                    if (Math.abs(item.val - val) < 0.02) {{
+                        btn.className = 'z-preset-btn px-1.5 py-0.5 rounded bg-sky-600 text-white font-semibold shadow-sm transition-all';
+                    }} else {{
+                        btn.className = 'z-preset-btn px-1.5 py-0.5 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-all';
+                    }}
+                }}
+            }});
+        }}
+
+        function setZScale(multiplier) {{
+            currentZMultiplier = Math.max(0.01, Math.min(10.0, Math.round(multiplier * 100) / 100));
+            updateZScaleUI(currentZMultiplier);
+            var newZ = baseAspect.z * currentZMultiplier;
+            Plotly.relayout('seabed-3d-viewer', {{
+                'scene.aspectratio.z': newZ
+            }});
+        }}
+
+        function adjustZScale(delta) {{
+            var newMult;
+            if (delta < 0) {{
+                if (currentZMultiplier <= 0.10) {{
+                    newMult = currentZMultiplier - 0.02;
+                }} else if (currentZMultiplier <= 0.25) {{
+                    newMult = currentZMultiplier - 0.05;
+                }} else {{
+                    newMult = currentZMultiplier - 0.25;
+                }}
+            }} else {{
+                if (currentZMultiplier < 0.10) {{
+                    newMult = currentZMultiplier + 0.02;
+                }} else if (currentZMultiplier < 0.25) {{
+                    newMult = currentZMultiplier + 0.05;
+                }} else {{
+                    newMult = currentZMultiplier + 0.25;
+                }}
+            }}
+            newMult = Math.round(newMult * 100) / 100;
+            newMult = Math.max(0.01, Math.min(10.0, newMult));
+            setZScale(newMult);
+        }}
+
         function setCameraView(viewType) {{
             var eye = {{ x: 1.25, y: -1.25, z: 1.15 }};
             if (viewType === 'front' && defaultCamera && defaultCamera.eye) {{
@@ -1512,6 +1603,7 @@ def generate_html_dashboard(out_dir, p3_dir, p4_dir=None, spatial_cv_p3=True, sp
                 eye = {{ x: 2.1, y: 0.1, z: 0.35 }};
             }} else if (viewType === 'reset') {{
                 eye = defaultCamera && defaultCamera.eye ? defaultCamera.eye : {{ x: 1.25, y: -1.25, z: 1.15 }};
+                setZScale(1.0);
             }}
             Plotly.relayout('seabed-3d-viewer', {{
                 'scene.camera.eye': eye
@@ -2008,11 +2100,7 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
                         is_child_algorithm=True,
                     )
                     if os.path.exists(lr_osw_clipped):
-                        import shutil
-                        shutil.copy2(lr_osw_clipped, raw_lr_map)
-                elif os.path.exists(lr_current):
-                    import shutil
-                    shutil.copy2(lr_current, raw_lr_map)
+                        safe_replace_or_copy(lr_osw_clipped, raw_lr_map)
                 append_log("      → Linear Regression depth map cleaned and OSW clipped.", log_path, feedback)
             except Exception as e:
                 append_log(f"  ⚠ WARNING: Failed to post-process Linear Regression depth map: {e}", log_path, feedback)
@@ -2044,11 +2132,9 @@ def run_master_pipeline(algorithm, parameters, context, feedback):
                         is_child_algorithm=True,
                     )
                     if os.path.exists(lr_u_osw_clipped):
-                        import shutil
-                        shutil.copy2(lr_u_osw_clipped, raw_lr_uncert)
-                elif os.path.exists(lr_u_current):
-                    import shutil
-                    shutil.copy2(lr_u_current, raw_lr_uncert)
+                        safe_replace_or_copy(lr_u_osw_clipped, raw_lr_uncert)
+                elif os.path.exists(lr_u_current) and os.path.abspath(lr_u_current) != os.path.abspath(raw_lr_uncert):
+                    safe_replace_or_copy(lr_u_current, raw_lr_uncert)
                 append_log("   [Analytics] Linear Regression uncertainty map successfully cleaned and OSW clipped.", log_path, feedback)
             except Exception as e:
                 append_log(f"   [Warning] Failed to post-process Linear Regression uncertainty map: {e}", log_path, feedback)
@@ -2735,7 +2821,7 @@ def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt
     </head>
     <body>
         <div class="header">
-            <h1>BATHYMETRIX-AI V7.5: TECHNICAL VALIDATION REPORT</h1>
+            <h1>BATHYMETRIX-AI V7.6: TECHNICAL VALIDATION REPORT</h1>
             <p>SDB MasterFlow | High-Precision Satellite-Derived Bathymetry Calibration & Validation</p>
         </div>
 
@@ -2810,7 +2896,7 @@ def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt
         {f"<h2>🔄 Phase 04: Depth-Dependent Residual Calibration Leaderboard</h2><table border='1' cellspacing='0' cellpadding='6' bordercolor='#cbd5e1' style='width: 100%; border-collapse: collapse; margin-top: 8pt; margin-bottom: 12pt;'><thead><tr bgcolor='#f1f5f9'><th style='white-space: nowrap;'>Algorithm</th><th style='white-space: nowrap;'>Winner Stability</th><th style='white-space: nowrap;'>SDB Score (0-100)</th><th style='white-space: nowrap;'>R² Accuracy</th><th style='white-space: nowrap;'>RMSE (Vertical Error)</th><th style='white-space: nowrap;'>wMAPE (%)</th><th style='white-space: nowrap;'>Bias (m)</th></tr></thead><tbody>{p4_rows_html}</tbody></table>" if has_p4 else ""}
 
         <div class="footer">
-            Report generated automatically by Bathymetrix-AI V7.5. All rights reserved. &copy; Mohamed Aly Nasef (2026).
+            Report generated automatically by Bathymetrix-AI V7.6. All rights reserved. &copy; Mohamed Aly Nasef (2026).
         </div>
         <div style="page-break-before: always;"></div>
 
@@ -2837,11 +2923,11 @@ def generate_pdf_report(out_dir, p3_models, p4_models, has_p4, enable_ransac, pt
             </tbody>
         </table>
 
-        {f'<div class="footer">Report generated automatically by Bathymetrix-AI V7.5. All rights reserved. &copy; Mohamed Aly Nasef (2026).</div>' if plots_section_html else ""}
+        {f'<div class="footer">Report generated automatically by Bathymetrix-AI V7.6. All rights reserved. &copy; Mohamed Aly Nasef (2026).</div>' if plots_section_html else ""}
         {plots_section_html}
 
         <div class="footer">
-            Report generated automatically by Bathymetrix-AI V7.5. All rights reserved. &copy; Mohamed Aly Nasef (2026).
+            Report generated automatically by Bathymetrix-AI V7.6. All rights reserved. &copy; Mohamed Aly Nasef (2026).
         </div>
     </body>
     </html>

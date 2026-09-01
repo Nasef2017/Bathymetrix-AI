@@ -329,3 +329,35 @@ except Exception:
     StylePostProcessor = None
 
 
+def safe_replace_or_copy(src_path, dst_path, max_retries=4, delay=0.2):
+    """
+    Safely copies/overwrites a file on Windows, preventing [WinError 32] file locking issues
+    caused by open GDAL/QGIS raster dataset handles.
+    """
+    import os
+    import gc
+    import time
+    import shutil
+
+    if not src_path or not os.path.exists(src_path):
+        return False
+    if not dst_path:
+        return False
+    if os.path.abspath(src_path) == os.path.abspath(dst_path):
+        return True
+
+    for attempt in range(max_retries):
+        try:
+            gc.collect()
+            shutil.copy2(src_path, dst_path)
+            return True
+        except (PermissionError, OSError):
+            gc.collect()
+            if attempt < max_retries - 1:
+                time.sleep(delay * (attempt + 1))
+            else:
+                return False
+    return False
+
+
+
