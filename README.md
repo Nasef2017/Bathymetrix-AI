@@ -7,16 +7,16 @@
 </td>
 <td>
 
-**Bathymetrix-AI v7.9: Advanced SDB Toolkit & Coastal Dynamics**
+**Bathymetrix-AI v8.0: Advanced SDB Toolkit & Coastal Dynamics**
 
 </td>
 </tr>
 </table>
 
 
-> **Note:** Bathymetrix-AI v7.9 supports any satellite imagery provided that the imagery is atmospherically corrected (Surface Reflectance) and the raster values are stored as Float.
+> **Note:** Bathymetrix-AI v8.0 supports any satellite imagery provided that the imagery is atmospherically corrected (Surface Reflectance) and the raster values are stored as Float.
 
-**Bathymetrix-AI (v7.9)** is a professional QGIS research toolkit for high-precision Satellite-Derived Bathymetry (SDB).
+**Bathymetrix-AI (v8.0)** is a professional QGIS research toolkit for high-precision Satellite-Derived Bathymetry (SDB).
 
 The toolkit integrates multispectral satellite imagery with ICESat-2 (ATL24) LiDAR bathymetry through a modular and adaptive Machine Learning framework. It is designed to automate the main SDB processing steps while maintaining control over data quality, model selection, spatial refinement, uncertainty, and scientific validation.
 
@@ -28,6 +28,15 @@ The toolkit also provides advanced Masterflows and standalone modules for more c
 - **Coastal Dynamics Analysis** — for analyzing bathymetric change, seabed stability, erosion, accretion, and shoreline dynamics.
 - **ICESat-2 Downloader** — for acquiring and preparing ICESat-2 bathymetry data.
 - **Tidal Datum Converter** — for converting bathymetric observations between tidal reference systems.
+
+
+## v8.0 — STAC Satellite Imagery Downloader
+
+The previously introduced Satellite Imagery Downloader is documented for Sentinel-2A Level-2A and Landsat 8/9 Collection 2 Level-2 reflectance acquisition through Element 84 Earth Search. It supports ROI/date/cloud selection, single-scene downloading, temporal median composites, water-only masking, Float32 reflectance, quality rasters and directory-only destinations. See [technical documentation](docs/Sentinel2_Downloader_Technical_Documentation.md) and [v8.0 changelog](CHANGELOG.md).
+
+Sentinel-2A Level-2A has 12 reflectance bands (B10 excluded); Landsat 8/9 Level-2 has seven optical SR bands. Apply source asset scale/offset and protect nodata before conversion. Data and method citations are listed in the technical guide.
+
+Spectral Harbor is a separate standalone downloader project. This documentation update does not replace Bathymetrix algorithms or repair the reported native pyproj/QGIS thread failure in the existing downloader. Its processing implementation is unchanged.
 
 ---
 
@@ -255,8 +264,6 @@ pip install numpy pandas rasterio matplotlib seaborn scikit-learn>=1.5.0 scipy j
 
 **Author:** Mohamed Aly Nasef  
 **Email:** Eng.m.nasef2017@gmail.com, Nasefm.aly@alexu.edu.eg  
-
-Nasef M.Aly. (2026). Nasef2017/Bathymetrix-AI: Bathymetrix_AI V7.9 (Version v7.9) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.22539469
 
 
 🤖 **AI Acknowledgment**  

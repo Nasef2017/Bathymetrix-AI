@@ -57,6 +57,33 @@ class SdbToolsPlugin:
         self.provider = SdbProvider()
         QgsApplication.processingRegistry().addProvider(self.provider)
 
+        # Register Sentinel-2 Downloader Menu & Toolbar Action
+        from qgis.PyQt.QtWidgets import QAction
+        from qgis.PyQt.QtGui import QIcon
+        import os
+
+        self.s2_action = QAction(
+            QIcon(os.path.join(os.path.dirname(__file__), "icon.png")),
+            "Satellite Imagery Downloader (Sentinel-2A & Landsat-8/9)",
+            self.iface.mainWindow() if self.iface else None
+        )
+        self.s2_action.triggered.connect(self.open_sentinel2_downloader)
+        if self.iface:
+            self.iface.addPluginToMenu("Bathymetrix-AI", self.s2_action)
+            self.iface.addToolBarIcon(self.s2_action)
+
+    def open_sentinel2_downloader(self):
+        from .qgis_interface.sentinel2_downloader_dialog import Sentinel2DownloaderDialog
+        if not hasattr(self, "s2_dialog") or self.s2_dialog is None:
+            self.s2_dialog = Sentinel2DownloaderDialog(self.iface, self.iface.mainWindow() if self.iface else None)
+        self.s2_dialog.show()
+        self.s2_dialog.raise_()
+        self.s2_dialog.activateWindow()
+
     def unload(self):
+        if hasattr(self, "s2_action") and self.s2_action and self.iface:
+            self.iface.removePluginMenu("Bathymetrix-AI", self.s2_action)
+            self.iface.removeToolBarIcon(self.s2_action)
         if self.provider and self.dependencies_met:
             QgsApplication.processingRegistry().removeProvider(self.provider)
+

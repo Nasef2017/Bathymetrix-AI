@@ -25,6 +25,9 @@ from .algorithms.SDB_05_Final_Reporting import SDBModule05
 
 # 7. Evaluate Model (Removed)
 
+# 7.5 Sentinel-2 STAC Downloader
+from .algorithms.Sentinel2_Downloader import Sentinel2DownloaderAlgorithm
+
 # 8. ICESAT
 from .algorithms.ICESAT_V25 import SlideRuleFinalTool
 
@@ -62,8 +65,10 @@ class SdbProvider(QgsProcessingProvider):
         self.addAlgorithm(SDBSpatiotemporalFlow())
 
         # 2. Data Acquisition & Datum
+        self.addAlgorithm(Sentinel2DownloaderAlgorithm())
         self.addAlgorithm(SlideRuleFinalTool())
         self.addAlgorithm(TidalDatumConverter())
+
 
         # 3. Step-by-Step Modular Pipeline
         self.addAlgorithm(SDBPhase1Preprocessing())
