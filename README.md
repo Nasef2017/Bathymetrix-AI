@@ -36,8 +36,6 @@ The previously introduced Satellite Imagery Downloader is documented for Sentine
 
 Sentinel-2A Level-2A has 12 reflectance bands (B10 excluded); Landsat 8/9 Level-2 has seven optical SR bands. Apply source asset scale/offset and protect nodata before conversion. Data and method citations are listed in the technical guide.
 
-Spectral Harbor is a separate standalone downloader project. This documentation update does not replace Bathymetrix algorithms or repair the reported native pyproj/QGIS thread failure in the existing downloader. Its processing implementation is unchanged.
-
 ---
 
 ### 🌟 Key Capabilities & Innovations

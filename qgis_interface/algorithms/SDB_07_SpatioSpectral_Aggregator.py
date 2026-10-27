@@ -768,6 +768,11 @@ class PostSpatioSpectralAggregator(QgsProcessingAlgorithm):
             if aggregated_mask_path and os.path.exists(aggregated_mask_path):
                 p4_params["INPUT_MASK"] = aggregated_mask_path
 
+            try:
+                from ...core.ml.evaluators import run_phase04_spatial_retraining
+            except (ImportError, ValueError):
+                from core.ml.evaluators import run_phase04_spatial_retraining
+
             p4 = run_phase04_spatial_retraining(
                 self,
                 p4_params,

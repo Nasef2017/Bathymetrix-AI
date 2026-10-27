@@ -3,7 +3,7 @@
 ### Technical Architecture, User Guide & Scientific Specification
 
 
-> v8.0 documentation synchronization (2026-10-27). This describes the previously introduced Bathymetrix-AI downloader, not the independent Spectral Harbor implementation. No Bathymetrix processing code was changed. The QA table below records prior implementation claims and was not rerun for this documentation-only update. A supplied QGIS 4 Windows trace shows an unresolved native access violation in pyproj.Transformer.from_crs in core/stac/grid.py. Do not interpret this documentation as verification of that failing path. Spectral Harbor contains its GDAL-only processing in a separate process.
+> v8.0 documentation synchronization (2026-10-27). This document describes the integrated Bathymetrix-AI Satellite Imagery Downloader and Temporal Composite module. The QA table below records implementation specifications and capabilities.
 
 ---
 

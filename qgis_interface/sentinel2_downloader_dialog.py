@@ -800,11 +800,11 @@ class Sentinel2DownloaderDialog(QDialog):
             f"<b>Cloud:</b> {scene['cloud_cover']}%<br>"
             f"<b>Assets:</b> {len(scene.get('assets', {}))} bands"
         )
-        if preview_url:
+        if preview_url and str(preview_url).lower().startswith(("http://", "https://")):
             self.preview_img_lbl.setText("Loading preview...")
             try:
                 req = urllib.request.Request(preview_url, headers={"User-Agent": "Bathymetrix-AI"})
-                with urllib.request.urlopen(req, timeout=8) as r:
+                with urllib.request.urlopen(req, timeout=8) as r:  # nosec B310
                     data = r.read()
                     pix = QPixmap()
                     pix.loadFromData(data)

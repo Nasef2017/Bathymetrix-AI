@@ -9,6 +9,5 @@ Documentation synchronized 2026-10-27; metadata already declared version 8.0 at 
 - Synchronize the README release label with metadata and add source/product/method citations.
 - Preserve all processing, machine-learning, bathymetry, menus and existing downloader implementation.
 - Known issue: the supplied QGIS 4 Windows trace reports a native pyproj CRS/PROJ access violation in the original downloader. This documentation-only update does not fix or validate that runtime path.
-- Independent Spectral Harbor project: standalone acquisition UI and isolated GDAL worker, attributed Apache-2.0 water-mask reuse; no runtime dependency or new band-selector implementation was added to Bathymetrix-AI by this update.
 
 Earlier version descriptions remain in metadata.txt.

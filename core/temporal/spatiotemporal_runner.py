@@ -852,7 +852,7 @@ class SpatiotemporalSDBRunner:
             
             # Save final SDB depth map to Phase 5 and load it in QGIS
             import shutil
-            from qgis.core import QgsProcessingContext, QgsProject
+            from qgis.core import QgsProcessingContext
             
             if final_map and os.path.exists(final_map):
                 final_sdb_path = os.path.join(year_out_dir, f"SDB {year}.tif")

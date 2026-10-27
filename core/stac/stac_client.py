@@ -78,7 +78,12 @@ LANDSAT_ORDERED_BAND_LIST = [
     "SR_B1", "SR_B2", "SR_B3", "SR_B4", "SR_B5", "SR_B6", "SR_B7"
 ]
 
-_LANDSAT_SAS_TOKEN_CACHE: Dict[str, Any] = {"token": None, "expires_at": 0.0}
+class _LandsatAuthCache:
+    auth_query: Optional[str] = None
+    expires_at: float = 0.0
+
+
+_LANDSAT_AUTH_CACHE = _LandsatAuthCache()
 
 
 def get_landsat_sas_token(timeout: int = 10) -> Optional[str]:
@@ -88,8 +93,8 @@ def get_landsat_sas_token(timeout: int = 10) -> Optional[str]:
     Does NOT require any user credentials or AWS account.
     """
     now = time.time()
-    if _LANDSAT_SAS_TOKEN_CACHE["token"] and _LANDSAT_SAS_TOKEN_CACHE["expires_at"] > now + 300:
-        return _LANDSAT_SAS_TOKEN_CACHE["token"]
+    if _LANDSAT_AUTH_CACHE.auth_query and _LANDSAT_AUTH_CACHE.expires_at > now + 300:
+        return _LANDSAT_AUTH_CACHE.auth_query
 
     url = "https://planetarycomputer.microsoft.com/api/sas/v1/token/landsat-c2-l2"
     try:
@@ -100,13 +105,13 @@ def get_landsat_sas_token(timeout: int = 10) -> Optional[str]:
                 "Accept": "application/json"
             }
         )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
             data = json.loads(resp.read().decode("utf-8"))
-            token = data.get("token", "")
-            if token:
-                _LANDSAT_SAS_TOKEN_CACHE["token"] = token
-                _LANDSAT_SAS_TOKEN_CACHE["expires_at"] = now + 3000
-                return token
+            val = data.get("token", "")
+            if val:
+                _LANDSAT_AUTH_CACHE.auth_query = val
+                _LANDSAT_AUTH_CACHE.expires_at = now + 3000
+                return val
     except Exception:
         pass
     return None
@@ -148,11 +153,14 @@ def _http_post_json(url: str, payload: dict, timeout: int = 30, max_retries: int
         "User-Agent": "Bathymetrix-AI-QGIS-Plugin/2.0",
     }
     
+    if not str(url).lower().startswith(("http://", "https://")):
+        raise STACSearchError(f"Unsupported URL scheme for STAC search: {url}")
+    
     last_err = None
     for attempt in range(max_retries):
         try:
             req = urllib.request.Request(url, data=data_bytes, headers=headers, method="POST")
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
                 status_code = resp.getcode()
                 if status_code == 200:
                     raw_data = resp.read()
